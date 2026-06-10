@@ -1,4 +1,4 @@
-package com.crm.travelcrm.common.listener;
+package com.crm.travelcrm.tenent.listener;
 
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.entity.BaseTenantEntity;

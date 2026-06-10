@@ -14,10 +14,23 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Entity
-@Table(name = "leads", indexes = {
-        @Index(name = "idx_lead_email", columnList = "email"),
-        @Index(name = "idx_lead_phone", columnList = "phone")
-})
+@Table(
+        name = "leads",
+        indexes = {
+                @Index(name = "idx_lead_email", columnList = "email"),
+                @Index(name = "idx_lead_phone", columnList = "phone")
+        },
+        uniqueConstraints = {
+                @UniqueConstraint(
+                        name = "uk_lead_tenant_email",
+                        columnNames = {"tenant_id", "email"}
+                ),
+                @UniqueConstraint(
+                        name = "uk_lead_tenant_phone",
+                        columnNames = {"tenant_id", "phone"}
+                )
+        }
+)
 @Getter
 @Setter
 @NoArgsConstructor
