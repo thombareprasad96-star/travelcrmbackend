@@ -1,22 +1,30 @@
 package com.crm.travelcrm.lead.service;
 
+import com.crm.travelcrm.auth.entity.User;
+import com.crm.travelcrm.auth.repository.UserRepository;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.lead.dto.CreateLeadRequestDto;
 import com.crm.travelcrm.lead.dto.LeadResponseDto;
 import com.crm.travelcrm.lead.entity.Lead;
 import com.crm.travelcrm.lead.entity.LeadItinerary;
+import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.lead.exception.DuplicateLeadException;
-import com.crm.travelcrm.lead.exception.ResourceNotFoundException;
 import com.crm.travelcrm.lead.mapper.LeadMapper;
 import com.crm.travelcrm.lead.repository.LeadRepository;
+import com.crm.travelcrm.notification.api.NotifyEvent;
+import com.crm.travelcrm.notification.domain.enums.DeliveryChannel;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.*;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -26,6 +34,8 @@ public class LeadServiceImpl implements LeadService {
 
     private final LeadRepository leadRepository;
     private final LeadMapper     leadMapper;
+    private final ApplicationEventPublisher eventPublisher;
+    private final UserRepository userRepository;
 
     // ── Create ────────────────────────────────────────────────────────────────
 
@@ -39,12 +49,14 @@ public class LeadServiceImpl implements LeadService {
         validateNoDuplicates(request, tenantId, null);
 
         Lead lead = leadMapper.toEntity(request);
+        // tenantId is set here so it's available immediately in this transaction;
+        // TenantEntityListener also guards it on @PrePersist as a safety net.
         lead.setTenantId(tenantId);
-        // tenantId auto-set by TenantEntityListener — do NOT set manually
 
         Lead savedLead = leadRepository.save(lead);
         log.info("Lead created | id: {} | tenantId: {}", savedLead.getPublicId(), tenantId);
-        return mapToResponse(savedLead);
+        publishLeadCreatedNotification(savedLead, tenantId);
+        return leadMapper.toResponse(savedLead);
     }
 
     // ── Read ──────────────────────────────────────────────────────────────────
@@ -64,7 +76,7 @@ public class LeadServiceImpl implements LeadService {
         // Scoped to tenant + excludes soft-deleted records
         return leadRepository
                 .findAllByTenantIdAndDeletedAtIsNull(tenantId, pageable)
-                .map(leadMapper::toResponse);   // mapping inside @Transactional — session open ✅
+                .map(leadMapper::toResponse);
     }
 
     @Override
@@ -85,7 +97,7 @@ public class LeadServiceImpl implements LeadService {
                             "Lead not found with phone: " + keyword));
         }
 
-        return mapToResponse(lead);
+        return leadMapper.toResponse(lead);
     }
 
     // ── Update ────────────────────────────────────────────────────────────────
@@ -114,7 +126,7 @@ public class LeadServiceImpl implements LeadService {
         lead.setNotes(request.getNotes());
 
         // Assignment & personal
-        lead.setAssignTo(request.getAssignTo());
+        lead.setAssignedUser(request.getAssignedUser());
         lead.setBirthDate(request.getBirthDate());
 
         // Travel details
@@ -148,7 +160,7 @@ public class LeadServiceImpl implements LeadService {
 
         Lead updated = leadRepository.save(lead);
         log.info("Lead updated | publicId: {} | tenantId: {}", publicId, tenantId);
-        return mapToResponse(updated);
+        return leadMapper.toResponse(updated);
     }
 
     // ── Delete (soft) ─────────────────────────────────────────────────────────
@@ -225,44 +237,40 @@ public class LeadServiceImpl implements LeadService {
         }
     }
 
-    private LeadResponseDto mapToResponse(Lead lead) {
-        return LeadResponseDto.builder()
-                .id(lead.getPublicId())           // ← publicId, never internal Long id
-                .customerName(lead.getCustomerName())
-                .phone(lead.getPhone())
-                .email(lead.getEmail())
-                .leadSource(lead.getLeadSource())
-                .leadType(lead.getLeadType())
-                .leadStage(lead.getLeadStage())
-                .assignTo(lead.getAssignTo())
-                .birthDate(lead.getBirthDate())
-                .travelDate(lead.getTravelDate())
-                .departCountry(lead.getDepartCountry())
-                .departCity(lead.getDepartCity())
-                .rooms(lead.getRooms())
-                .adults(lead.getAdults())
-                .children(lead.getChildren())
-                .infants(lead.getInfants())
-                .extraBeds(lead.getExtraBeds())
-                .services(lead.getServices())
-                .notes(lead.getNotes())
-                .itinerary(
-                        lead.getItinerary() == null ? null :
-                                lead.getItinerary().stream()
-                                .map(this::mapItinerary)
-                                .toList()
-                )
-                .createdAt(lead.getCreatedAt())
-                .build();
+    private void publishLeadCreatedNotification(Lead lead, Long tenantId) {
+        // Notify all TENANT_ADMIN + MANAGER of this tenant
+        List<Long> recipientIds = userRepository
+                .findByTenantIdAndRoleInAndIsActiveTrue(
+                        tenantId,
+                        List.of("TENANT_ADMIN", "MANAGER"))
+                .stream()
+                .map(User::getId)
+                .toList();
+
+        if (recipientIds.isEmpty()) return;
+
+        eventPublisher.publishEvent(
+                NotifyEvent.builder()
+                        .type("LEAD_CREATED")
+                        .tenantId(tenantId)
+                        .recipientUserIds(recipientIds)
+                        .title("New Lead: " + lead.getCustomerName())
+                        .message(lead.getLeadSource() + " lead from " + lead.getDepartCity()
+                                + " assigned to " + lead.getAssignedUser())
+                        .referenceType("LEAD")
+                        .referencePublicId(lead.getPublicId())
+                        .channels(Set.of(DeliveryChannel.IN_APP))
+                        .payload(Map.of(
+                                "leadId",       lead.getPublicId().toString(),
+                                "customerName", lead.getCustomerName(),
+                                "source",       lead.getLeadSource(),
+                                "assignedTo",   lead.getAssignedUser() != null ? lead.getAssignedUser() : ""
+                        ))
+                        .build()
+        );
+
+        log.info("LEAD_CREATED notification published for lead {} to {} recipients",
+                lead.getPublicId(), recipientIds.size());
     }
 
-    private LeadResponseDto.ItineraryItem mapItinerary(LeadItinerary item) {
-        return LeadResponseDto.ItineraryItem.builder()
-                .id(item.getPublicId())           // ← publicId here too
-                .destination(item.getDestination())
-                .city(item.getCity())
-                .nights(item.getNights())
-                .dayNumber(item.getDayNumber())
-                .build();
-    }
 }

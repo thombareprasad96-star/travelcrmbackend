@@ -1,5 +1,6 @@
 package com.crm.travelcrm.lead.entity;
 
+import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.common.entity.BaseEntity;
 import com.crm.travelcrm.common.entity.BaseTenantEntity;
 import com.crm.travelcrm.lead.enums.LeadSource;
@@ -40,10 +41,10 @@ public class Lead extends BaseTenantEntity {
     @Column(name = "customer_name", nullable = false, length = 150)
     private String customerName;
 
-    @Column(name = "phone", nullable = false, unique = true, length = 20)
+    @Column(name = "phone", nullable = false, length = 20)
     private String phone;
 
-    @Column(name = "email", nullable = false, unique = true, length = 150)
+    @Column(name = "email", nullable = false, length = 150)
     private String email;
 
     @Enumerated(EnumType.STRING)
@@ -58,8 +59,13 @@ public class Lead extends BaseTenantEntity {
     @Column(name = "lead_stage", nullable = false, length = 50)
     private LeadStage leadStage;
 
-    @Column(name = "assign_to", length = 100)
-    private String assignTo;
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(
+            name = "assigned_user_id",
+            referencedColumnName = "id",
+            foreignKey = @ForeignKey(name = "fk_lead_assigned_user")
+    )
+    private User assignedUser;
 
     @Column(name = "birth_date")
     private LocalDate birthDate;

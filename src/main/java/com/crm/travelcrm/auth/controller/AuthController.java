@@ -4,6 +4,7 @@ import com.crm.travelcrm.auth.dto.LoginRequestDTO;
 import com.crm.travelcrm.auth.dto.LoginResponseDTO;
 import com.crm.travelcrm.auth.dto.RegisterRequestDTO;
 import com.crm.travelcrm.auth.service.AuthService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,7 +26,7 @@ public class AuthController {
     @PostMapping("/superadmin/signup")
 
     public ResponseEntity<String> registerSuperAdmin(
-            @RequestBody RegisterRequestDTO request,
+            @Valid @RequestBody RegisterRequestDTO request,
             @RequestHeader(value = "X-Signup-Secret", required = false) String secret) {
 
         if (secret == null || !secret.equals(signupSecret)) {

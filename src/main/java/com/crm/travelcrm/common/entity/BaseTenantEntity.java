@@ -1,5 +1,6 @@
 package com.crm.travelcrm.common.entity;
 
+import com.crm.travelcrm.common.listener.TenantEntityListener;
 import jakarta.persistence.*;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
@@ -13,10 +14,7 @@ import org.hibernate.annotations.ParamDef;
 @AllArgsConstructor
 @MappedSuperclass
 @SuperBuilder
-
-// Hibernate filter — when enabled, ALL queries on this entity
-// automatically add WHERE tenant_id = :tenantId
-// This is your safety net against cross-tenant data leaks
+@EntityListeners(TenantEntityListener.class)
 @FilterDef(
         name       = "tenantFilter",
         parameters = @ParamDef(name = "tenantId", type = Long.class)
@@ -24,7 +22,6 @@ import org.hibernate.annotations.ParamDef;
 @Filter(name = "tenantFilter", condition = "tenant_id = :tenantId")
 public abstract class BaseTenantEntity extends BaseEntity {
 
-    // Long to match BaseEntity's ID type — consistent join strategy
     @Column(name = "tenant_id", nullable = false, updatable = false)
     private Long tenantId;
 }

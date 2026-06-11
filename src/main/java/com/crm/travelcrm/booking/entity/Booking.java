@@ -11,7 +11,6 @@ import org.hibernate.envers.NotAudited;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -84,8 +83,7 @@ public class Booking extends BaseTenantEntity {
     private BigDecimal paidAmount = BigDecimal.ZERO;
 
     @Builder.Default
-    @Column(name = "net_profit", nullable = false, precision = 12, scale = 2,
-            insertable = false, updatable = false)
+    @Column(name = "net_profit", nullable = false, precision = 12, scale = 2)
     private BigDecimal netProfit = BigDecimal.ZERO;
 
     // ───────────────── Status ─────────────────
@@ -120,14 +118,11 @@ public class Booking extends BaseTenantEntity {
     @Builder.Default
     private List<String> services = new ArrayList<>();
 
-    // ───────────────── Soft Delete ─────────────────  ✅ ADDED
+    // ───────────────── Soft Delete ─────────────────
 
     @Builder.Default
     @Column(name = "active", nullable = false)
     private Boolean active = Boolean.TRUE;
-
-    @Column(name = "deleted_at")
-    private LocalDateTime deletedAt;
 
     // ───────────────── Derived Fields ─────────────────
 

@@ -10,12 +10,15 @@ import org.springframework.stereotype.Repository;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 @Repository
 public interface BookingRepository extends JpaRepository<Booking, Long>,
         JpaSpecificationExecutor<Booking> {
 
     // ── Lookup ───────────────────────────────────────────────────────────────
+
+    Optional<Booking> findByPublicIdAndActiveTrue(UUID publicId);
 
     Optional<Booking> findByBookingCodeAndActiveTrue(String bookingCode);
 

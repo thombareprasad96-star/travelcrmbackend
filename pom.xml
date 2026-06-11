@@ -98,6 +98,24 @@
 		</dependency>
 
 		<!-- ===================================================== -->
+		<!-- AOP                                                     -->
+		<!-- ===================================================== -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-aop</artifactId>
+			<exclusions>
+				<exclusion>
+					<groupId>org.springframework.boot</groupId>
+					<artifactId>spring-boot-starter-logging</artifactId>
+				</exclusion>
+				<exclusion>
+					<groupId>ch.qos.logback</groupId>
+					<artifactId>logback-classic</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+
+		<!-- ===================================================== -->
 		<!-- VALIDATION                                              -->
 		<!-- ===================================================== -->
 		<dependency>
@@ -216,6 +234,19 @@
 			<groupId>org.postgresql</groupId>
 			<artifactId>postgresql</artifactId>
 			<scope>runtime</scope>
+		</dependency>
+
+		<!-- ===================================================== -->
+		<!-- FLYWAY  — versioned schema migrations                   -->
+		<!-- flyway-database-postgresql is required since Flyway 10  -->
+		<!-- ===================================================== -->
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-core</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-database-postgresql</artifactId>
 		</dependency>
 
 		<!-- ===================================================== -->

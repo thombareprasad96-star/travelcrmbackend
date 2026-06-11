@@ -45,15 +45,19 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
         String email    = jwtUtil.extractEmail(token);
         String role     = jwtUtil.extractRole(token);
-        Long   tenantId = jwtUtil.extractTenantId(token);   // ← NEW
-        System.out.println(">>> JWT tenantId extracted: " + tenantId + " for " + email); // ← ADD
+        Long   tenantId = jwtUtil.extractTenantId(token);
 
         try {
             if (email != null && SecurityContextHolder.getContext().getAuthentication() == null) {
 
-                UserDetails userDetails = "SUPER_ADMIN".equals(role)
-                        ? superAdminDetailsService.loadUserByUsername(email)
-                        : userDetailsService.loadUserByUsername(email);
+                UserDetails userDetails;
+                if ("SUPER_ADMIN".equals(role)) {
+                    userDetails = superAdminDetailsService.loadUserByUsername(email);
+                } else if (tenantId != null) {
+                    userDetails = userDetailsService.loadUserByEmailAndTenantId(email, tenantId);
+                } else {
+                    userDetails = userDetailsService.loadUserByUsername(email);
+                }
 
                 UsernamePasswordAuthenticationToken auth =
                         new UsernamePasswordAuthenticationToken(

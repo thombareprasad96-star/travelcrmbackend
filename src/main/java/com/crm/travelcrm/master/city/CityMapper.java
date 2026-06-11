@@ -33,6 +33,7 @@ public class CityMapper {
                 .name(entity.getCity())
                 .code(entity.getAirportCode())
                 .status(entity.getStatus())
+                .global(entity.getTenantId() == null)
                 .createdAt(entity.getCreatedAt())
                 .build();
     }

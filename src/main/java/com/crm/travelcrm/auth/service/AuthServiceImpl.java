@@ -8,7 +8,6 @@ import com.crm.travelcrm.auth.repository.SuperAdminRepository;
 import com.crm.travelcrm.auth.repository.UserRepository;
 import com.crm.travelcrm.auth.security.JwtUtil;
 import com.crm.travelcrm.common.entity.SuperAdmin;
-import com.crm.travelcrm.common.exception.BadRequestException;
 import com.crm.travelcrm.common.exception.EmailAlreadyExistsException;
 import lombok.RequiredArgsConstructor;
 import org.apache.logging.log4j.LogManager;
@@ -60,26 +59,6 @@ public class AuthServiceImpl implements AuthService {
         return ResponseEntity.ok("SuperAdmin registered successfully");
     }
 
-    @Override
-    public void registerUser(RegisterRequestDTO request) {
-
-        logger.trace("Entered registerUser()");
-        logger.debug("Registration request for email: {}", request.getEmail());
-
-        if (userRepository.existsByEmail(request.getEmail())) {
-            logger.warn("Email already registered: {}", request.getEmail());
-            throw new BadRequestException("Email already registered: " + request.getEmail());
-        }
-
-        User user = User.builder()
-                .name(request.getName())
-                .email(request.getEmail())
-                .password(passwordEncoder.encode(request.getPassword()))
-                .build();
-
-        userRepository.save(user);
-        logger.info("User registered successfully: {}", request.getEmail());
-    }
     // ----------------------------- login---------------------------------
     @Override
     public LoginResponseDTO superAdminLogin(LoginRequestDTO request) {
@@ -106,7 +85,7 @@ public class AuthServiceImpl implements AuthService {
                 "Login successful",
                 token,
                 "Bearer",
-                superAdmin.getId(),
+                superAdmin.getPublicId(),
                 superAdmin.getEmail(),
                 "SUPER_ADMIN"
         );
@@ -137,7 +116,7 @@ public class AuthServiceImpl implements AuthService {
                 "Login successful",
                 token,
                 "Bearer",
-                user.getId(),
+                user.getPublicId(),
                 user.getEmail(),
                 user.getRole().name()
         );

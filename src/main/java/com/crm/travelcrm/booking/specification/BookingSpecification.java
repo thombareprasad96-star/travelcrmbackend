@@ -25,8 +25,8 @@ public class BookingSpecification {
 
             return cb.or(
                     cb.like(cb.lower(root.get("bookingCode")), pattern),
-                    cb.like(cb.lower(root.get("customerName")), pattern),
-                    cb.like(cb.lower(root.get("destination")), pattern)
+                    cb.like(cb.lower(root.get("customerNameSnapshot")), pattern),
+                    cb.like(cb.lower(root.get("destinationSnapshot")), pattern)
             );
         };
     }

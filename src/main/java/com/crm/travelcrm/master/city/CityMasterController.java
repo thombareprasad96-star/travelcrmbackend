@@ -1,14 +1,15 @@
 package com.crm.travelcrm.master.city;
 
+import com.crm.travelcrm.common.dto.ApiResponse;
 import com.crm.travelcrm.common.dto.PagedApiResponse;
 import com.crm.travelcrm.common.dto.PaginationMeta;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
-
-import java.util.List;
 
 @RestController
 @RequestMapping("/api/cities")
@@ -18,14 +19,16 @@ public class CityMasterController {
     private final CityMasterService cityMasterService;
 
     @PostMapping
-    public ResponseEntity<String> saveCity(
-            @RequestBody CityMasterRequestDTO request) {
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    public ResponseEntity<ApiResponse<Void>> saveCity(
+            @Valid @RequestBody CityMasterRequestDTO request) {
         cityMasterService.saveCity(request);
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body("City saved successfully");
+                .body(ApiResponse.success("City saved successfully"));
     }
 
     @GetMapping
+    @PreAuthorize("isAuthenticated()")
     public ResponseEntity<PagedApiResponse<CityMasterResponseDTO>> getAllCities(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "10") int size,
@@ -37,43 +40,36 @@ public class CityMasterController {
 
         return ResponseEntity.ok(
                 PagedApiResponse.of(
-                        "Cities  fetched successfully",
-                        cityPage.getContent(),        // ✅ already List<LeadResponse>
+                        "Cities fetched successfully",
+                        cityPage.getContent(),
                         PaginationMeta.from(cityPage, sortBy, sortDir)));
     }
 
-
-    // Get City By Id
     @GetMapping("/{id}")
-    public ResponseEntity<CityMasterResponseDTO> getCityById(
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<ApiResponse<CityMasterResponseDTO>> getCityById(
             @PathVariable Long id) {
 
-        CityMasterResponseDTO city =
-                cityMasterService.getCityById(id);
-
-        return ResponseEntity.ok(city);
+        CityMasterResponseDTO city = cityMasterService.getCityById(id);
+        return ResponseEntity.ok(ApiResponse.success("City fetched successfully", city));
     }
 
-    // Update City
     @PutMapping("/{id}")
-    public ResponseEntity<String> updateCity(
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    public ResponseEntity<ApiResponse<Void>> updateCity(
             @PathVariable Long id,
-            @RequestBody CityMasterRequestDTO request) {
+            @Valid @RequestBody CityMasterRequestDTO request) {
 
         cityMasterService.updateCity(id, request);
-
-        return ResponseEntity.ok("City updated successfully");
+        return ResponseEntity.ok(ApiResponse.success("City updated successfully"));
     }
 
-    // Delete City
     @DeleteMapping("/{id}")
-    public ResponseEntity<String> deleteCity(
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    public ResponseEntity<ApiResponse<Void>> deleteCity(
             @PathVariable Long id) {
 
         cityMasterService.deleteCity(id);
-
-        return ResponseEntity.ok("City deleted successfully");
+        return ResponseEntity.ok(ApiResponse.success("City deleted successfully"));
     }
 }
-
-

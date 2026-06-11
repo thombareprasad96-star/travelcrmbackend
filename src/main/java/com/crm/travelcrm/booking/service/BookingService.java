@@ -15,25 +15,26 @@ import com.crm.travelcrm.common.dto.PagedApiResponse;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.UUID;
 
 public interface BookingService {
     BookingResponseDTO create(CreateBookingRequestDTO request);
 
     BookingResponseDTO createFromLead(Long leadId);
 
-    BookingResponseDTO getById(Long id);
+    BookingResponseDTO getById(UUID publicId);
 
     BookingResponseDTO getByCode(String code);
 
     PagedApiResponse<BookingResponseDTO> getAll(int page, int size, String sortBy, String sortDir);
 
-    BookingResponseDTO update(Long id, UpdateBookingRequestDTO request);
+    BookingResponseDTO update(UUID publicId, UpdateBookingRequestDTO request);
 
-    BookingResponseDTO updateStatus(Long id, StatusUpdateRequestDTO request);
+    BookingResponseDTO updateStatus(UUID publicId, StatusUpdateRequestDTO request);
 
-    BookingResponseDTO updatePayment(Long id, PaymentUpdateRequestDTO request);
+    BookingResponseDTO updatePayment(UUID publicId, PaymentUpdateRequestDTO request);
 
-    void delete(Long id);
+    void delete(UUID publicId);
 
     List<BookingResponseDTO> getByCustomerId(Long customerId);
 
@@ -55,5 +56,5 @@ public interface BookingService {
 
     BookingPageSummaryResponseDTO getPageSummary(int page, int size, String sortBy, String sortDir);
 
-    void sendVoucher(Long id);
+    void sendVoucher(UUID publicId);
 }

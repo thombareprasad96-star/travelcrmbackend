@@ -1,6 +1,7 @@
 // ─── CreateLeadRequest.java ───────────────────────────────────────────────────
 package com.crm.travelcrm.lead.dto;
 
+import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.lead.enums.LeadSource;
 import com.crm.travelcrm.lead.enums.LeadStage;
 import com.crm.travelcrm.lead.enums.LeadType;
@@ -40,8 +41,7 @@ public class CreateLeadRequestDto {
     @NotNull(message = "Lead stage is required")
     private LeadStage leadStage;
 
-    @Size(max = 100, message = "Assign-to name must not exceed 100 characters")
-    private String assignTo;
+    private User assignedUser;
 
     @JsonFormat(pattern = "yyyy-MM-dd")
     private LocalDate birthDate;

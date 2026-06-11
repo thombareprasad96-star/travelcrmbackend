@@ -17,5 +17,7 @@ public class CityMasterResponseDTO {
     private String name;
     private String code;
     private String status;
+    // true = platform-managed city shared with all tenants (read-only for tenants)
+    private boolean global;
     private LocalDateTime createdAt;
 }

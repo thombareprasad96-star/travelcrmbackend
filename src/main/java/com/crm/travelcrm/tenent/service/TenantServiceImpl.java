@@ -65,7 +65,7 @@ public class TenantServiceImpl implements TenantService {
                 .name(request.getAdminUsername())
                 .email(request.getAdminEmail())
                 .password(passwordEncoder.encode(request.getAdminPassword()))
-                .role(Role.ADMIN)
+                .role(Role.TENANT_ADMIN)
                 .tenantId(savedTenant.getId())
                 .isActive(true)
                 .build();

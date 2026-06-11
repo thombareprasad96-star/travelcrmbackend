@@ -5,18 +5,22 @@ import com.crm.travelcrm.common.entity.BaseEntity;
 import jakarta.persistence.*;
 import lombok.*;
 import org.springframework.security.core.GrantedAuthority;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 
 import java.util.Collection;
-import java.util.List;
 
 @Entity
-@Table(name = "users", indexes = {
-        @Index(name = "idx_user_email",     columnList = "email"),
-        @Index(name = "idx_user_tenant",    columnList = "tenant_id"),
-        @Index(name = "idx_user_role",      columnList = "role")
-})
+@Table(
+    name = "users",
+    uniqueConstraints = @UniqueConstraint(
+            name = "uq_user_email_tenant",
+            columnNames = {"email", "tenant_id"}),
+    indexes = {
+        @Index(name = "idx_user_email",  columnList = "email"),
+        @Index(name = "idx_user_tenant", columnList = "tenant_id"),
+        @Index(name = "idx_user_role",   columnList = "role")
+    }
+)
 @Getter
 @Setter
 @NoArgsConstructor
@@ -32,7 +36,7 @@ public class User extends BaseEntity implements UserDetails {
     @Column(name = "full_name", nullable = false, length = 150)
     private String name;
 
-    @Column(name = "email", nullable = false, unique = true, length = 150)
+    @Column(name = "email", nullable = false, length = 150)
     private String email;
 
     @Column(name = "password", nullable = false)
@@ -41,6 +45,8 @@ public class User extends BaseEntity implements UserDetails {
     @Enumerated(EnumType.STRING)
     @Column(name = "role", nullable = false, length = 30)
     private Role role;
+
+
 
     @Column(name = "phone_number", length = 20)
     private String phoneNumber;
@@ -54,7 +60,7 @@ public class User extends BaseEntity implements UserDetails {
 
     @Override
     public Collection<? extends GrantedAuthority> getAuthorities() {
-        return List.of(new SimpleGrantedAuthority("ROLE_" + role.name()));
+        return role.authorities();
     }
 
     @Override public String getUsername()              { return email; }

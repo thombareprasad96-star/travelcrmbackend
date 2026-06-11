@@ -1,4 +1,4 @@
-package com.crm.travelcrm.common.util;
+package com.crm.travelcrm.booking.util;
 
 import com.crm.travelcrm.booking.repository.BookingRepository;
 import lombok.RequiredArgsConstructor;
@@ -17,10 +17,6 @@ public class BookingCodeGenerator {
 
     private final BookingRepository bookingRepository;
 
-    /**
-     * Generates the next booking code by finding the highest existing sequence number.
-     * Format: BK10001, BK10002, ...
-     */
     public String generate() {
         long nextSeq = bookingRepository.findTopByOrderByIdDesc()
                 .map(booking -> {
@@ -28,7 +24,7 @@ public class BookingCodeGenerator {
                     try {
                         return Long.parseLong(code.substring(PREFIX.length())) + 1;
                     } catch (NumberFormatException e) {
-                        log.warn("Could not parse booking code '{}', falling back to starting sequence", code);
+                        log.warn("Could not parse booking code '{}', using starting sequence", code);
                         return STARTING_SEQ;
                     }
                 })

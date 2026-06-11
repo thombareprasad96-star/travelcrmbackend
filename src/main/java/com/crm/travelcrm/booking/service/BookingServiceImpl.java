@@ -14,14 +14,17 @@ import com.crm.travelcrm.booking.exception.BookingNotFoundException;
 import com.crm.travelcrm.booking.mapper.BookingMapper;
 import com.crm.travelcrm.booking.repository.BookingRepository;
 import com.crm.travelcrm.booking.specification.BookingSpecification;
+import com.crm.travelcrm.booking.util.BookingCodeGenerator;
+import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.dto.PagedApiResponse;
 import com.crm.travelcrm.common.dto.PaginationMeta;
 import com.crm.travelcrm.common.exception.BusinessException;
-import com.crm.travelcrm.common.util.BookingCodeGenerator;
 import lombok.RequiredArgsConstructor;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.data.domain.Page;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
@@ -32,8 +35,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.util.List;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -56,6 +59,7 @@ public class BookingServiceImpl implements BookingService {
         log.info("Creating new booking for customer: {}", request.getCustomerId());
 
         Booking booking = bookingMapper.toEntity(request);
+        booking.setTenantId(requireTenantId());
         booking.setBookingCode(bookingCodeGenerator.generate());
         booking.setStatus(BookingStatus.PENDING);
 
@@ -77,6 +81,7 @@ public class BookingServiceImpl implements BookingService {
 
         // Basic shell booking from lead — extend when Lead entity is wired
         Booking booking = Booking.builder()
+                .tenantId(requireTenantId())
                 .bookingCode(bookingCodeGenerator.generate())
                 .leadId(leadId)
                 .status(BookingStatus.PENDING)
@@ -103,8 +108,8 @@ public class BookingServiceImpl implements BookingService {
 
     @Override
     @Transactional(readOnly = true)
-    public BookingResponseDTO getById(Long id) {
-        return bookingMapper.toResponse(findActiveById(id));
+    public BookingResponseDTO getById(UUID publicId) {
+        return bookingMapper.toResponse(findActiveByPublicId(publicId));
     }
 
     // ── Get by Code ──────────────────────────────────────────────────────────
@@ -146,10 +151,10 @@ public class BookingServiceImpl implements BookingService {
 
     @Override
     @Transactional
-    public BookingResponseDTO update(Long id, UpdateBookingRequestDTO request) {
-        log.info("Updating booking id: {}", id);
+    public BookingResponseDTO update(UUID publicId, UpdateBookingRequestDTO request) {
+        log.info("Updating booking publicId: {}", publicId);
 
-        Booking booking = findActiveById(id);
+        Booking booking = findActiveByPublicId(publicId);
         bookingMapper.updateEntity(request, booking);   // applies non-null DTO fields → entity
 
         // Recalculate only if either financial field was touched
@@ -169,10 +174,10 @@ public class BookingServiceImpl implements BookingService {
 
     @Override
     @Transactional
-    public BookingResponseDTO updateStatus(Long id, StatusUpdateRequestDTO request) {
-        log.info("Updating status for booking id: {} to {}", id, request.getStatus());
+    public BookingResponseDTO updateStatus(UUID publicId, StatusUpdateRequestDTO request) {
+        log.info("Updating status for booking publicId: {} to {}", publicId, request.getStatus());
 
-        Booking booking = findActiveById(id);
+        Booking booking = findActiveByPublicId(publicId);
         booking.setStatus(request.getStatus());
         return bookingMapper.toResponse(bookingRepository.save(booking));
     }
@@ -181,10 +186,10 @@ public class BookingServiceImpl implements BookingService {
 
     @Override
     @Transactional
-    public BookingResponseDTO updatePayment(Long id, PaymentUpdateRequestDTO request) {
-        log.info("Updating payment for booking id: {}", id);
+    public BookingResponseDTO updatePayment(UUID publicId, PaymentUpdateRequestDTO request) {
+        log.info("Updating payment for booking publicId: {}", publicId);
 
-        Booking booking = findActiveById(id);
+        Booking booking = findActiveByPublicId(publicId);
 
         // ✅ Accumulate — this is an incremental payment, not a replacement
         BigDecimal newPaidAmount = booking.getPaidAmount().add(request.getAmount());
@@ -205,12 +210,11 @@ public class BookingServiceImpl implements BookingService {
 
     @Override
     @Transactional
-    public void delete(Long id) {
-        log.info("Soft deleting booking id: {}", id);
+    public void delete(UUID publicId) {
+        log.info("Soft deleting booking publicId: {}", publicId);
 
-        Booking booking = findActiveById(id);
+        Booking booking = findActiveByPublicId(publicId);
 
-        // Optional: guard against deleting confirmed/completed bookings
         if (booking.getStatus() == BookingStatus.CONFIRMED
                 || booking.getStatus() == BookingStatus.COMPLETED) {
             throw new BusinessException(
@@ -218,7 +222,7 @@ public class BookingServiceImpl implements BookingService {
         }
 
         booking.setActive(Boolean.FALSE);
-        booking.setDeletedAt(LocalDateTime.now());   // ✅ stamp the deleted_at column
+        booking.softDelete(currentUserEmail());
 
         bookingRepository.save(booking);
         log.info("Booking soft deleted: {}", booking.getBookingCode());
@@ -343,17 +347,32 @@ public class BookingServiceImpl implements BookingService {
     // ── Send Voucher (stub) ──────────────────────────────────────────────────
 
     @Override
-    public void sendVoucher(Long id) {
-        Booking booking = findActiveById(id);
+    @Transactional(readOnly = true)
+    public void sendVoucher(UUID publicId) {
+        Booking booking = findActiveByPublicId(publicId);
         // Email integration will be wired in future sprint
         log.info("Voucher send requested for booking: {}", booking.getBookingCode());
     }
 
     // ── Private Helpers ──────────────────────────────────────────────────────
 
-    private Booking findActiveById(Long id) {
-        return bookingRepository.findByIdAndActiveTrue(id)
-                .orElseThrow(() -> new BookingNotFoundException(id));
+    private Booking findActiveByPublicId(UUID publicId) {
+        return bookingRepository.findByPublicIdAndActiveTrue(publicId)
+                .orElseThrow(() -> new BookingNotFoundException(publicId));
+    }
+
+    private Long requireTenantId() {
+        Long tenantId = TenantContext.getTenantId();
+        if (tenantId == null) {
+            throw new IllegalStateException(
+                    "TenantContext is empty. Ensure JwtAuthFilter is running.");
+        }
+        return tenantId;
+    }
+
+    private String currentUserEmail() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        return auth != null ? auth.getName() : "system";
     }
 
     private void calculateAndApplyFinancials(Booking booking,

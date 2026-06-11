@@ -1,11 +1,14 @@
 package com.crm.travelcrm.master.destination;
 
+import com.crm.travelcrm.common.dto.ApiResponse;
 import com.crm.travelcrm.common.dto.PagedApiResponse;
 import com.crm.travelcrm.common.dto.PaginationMeta;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -15,18 +18,18 @@ public class DestinationMasterController {
 
     private final DestinationMasterService destinationMasterService;
 
-    // Create
     @PostMapping
-    public ResponseEntity<String> saveDestination(
-            @RequestBody DestinationMasterRequestDTO request) {
+    @PreAuthorize("hasAuthority('PLATFORM_ADMIN')")
+    public ResponseEntity<ApiResponse<Void>> saveDestination(
+            @Valid @RequestBody DestinationMasterRequestDTO request) {
 
         destinationMasterService.saveDestination(request);
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body("Destination saved successfully");
+                .body(ApiResponse.success("Destination saved successfully"));
     }
 
-    // Get All (paginated)
     @GetMapping
+    @PreAuthorize("isAuthenticated()")
     public ResponseEntity<PagedApiResponse<DestinationMasterResponseDTO>> getAllDestinations(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "10") int size,
@@ -43,33 +46,32 @@ public class DestinationMasterController {
                         PaginationMeta.from(destinationPage, sortBy, sortDir)));
     }
 
-    // Get By Id
     @GetMapping("/{id}")
-    public ResponseEntity<DestinationMasterResponseDTO> getDestinationById(
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<ApiResponse<DestinationMasterResponseDTO>> getDestinationById(
             @PathVariable Long id) {
 
         DestinationMasterResponseDTO destination =
                 destinationMasterService.getDestinationById(id);
-
-        return ResponseEntity.ok(destination);
+        return ResponseEntity.ok(ApiResponse.success("Destination fetched successfully", destination));
     }
 
-    // Update
     @PutMapping("/{id}")
-    public ResponseEntity<String> updateDestination(
+    @PreAuthorize("hasAuthority('PLATFORM_ADMIN')")
+    public ResponseEntity<ApiResponse<Void>> updateDestination(
             @PathVariable Long id,
-            @RequestBody DestinationMasterRequestDTO request) {
+            @Valid @RequestBody DestinationMasterRequestDTO request) {
 
         destinationMasterService.updateDestination(id, request);
-        return ResponseEntity.ok("Destination updated successfully");
+        return ResponseEntity.ok(ApiResponse.success("Destination updated successfully"));
     }
 
-    // Delete
     @DeleteMapping("/{id}")
-    public ResponseEntity<String> deleteDestination(
+    @PreAuthorize("hasAuthority('PLATFORM_ADMIN')")
+    public ResponseEntity<ApiResponse<Void>> deleteDestination(
             @PathVariable Long id) {
 
         destinationMasterService.deleteDestination(id);
-        return ResponseEntity.ok("Destination deleted successfully");
+        return ResponseEntity.ok(ApiResponse.success("Destination deleted successfully"));
     }
 }

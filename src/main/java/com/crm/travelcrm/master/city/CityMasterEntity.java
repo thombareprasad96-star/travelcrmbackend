@@ -12,7 +12,8 @@ import java.time.LocalDateTime;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class CityMasterEntity {
+public class
+CityMasterEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -30,6 +31,12 @@ public class CityMasterEntity {
 
     @Column(name = "status", length = 20)
     private String status;
+
+    // null = global city (platform-managed, visible to all tenants);
+    // non-null = owned by that tenant only. Intentionally NOT BaseTenantEntity:
+    // its strict tenantFilter would hide global rows from tenant users.
+    @Column(name = "tenant_id")
+    private Long tenantId;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;

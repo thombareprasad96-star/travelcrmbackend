@@ -28,11 +28,12 @@ import org.springframework.web.bind.annotation.*;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/bookings")
 @RequiredArgsConstructor
-@PreAuthorize("hasRole('SUPER_ADMIN')")
+@PreAuthorize("hasAuthority('CRM_FULL')")
 public class BookingController {
 
     private static final Logger log = LogManager.getLogger(BookingController.class);
@@ -78,11 +79,11 @@ public class BookingController {
 
     // ── Get by ID ────────────────────────────────────────────────────────────
 
-    @GetMapping("/{id}")
-    public ResponseEntity<ApiResponse<BookingResponseDTO>> getById(@PathVariable Long id) {
-        log.info("GET /api/bookings/{}", id);
+    @GetMapping("/{publicId}")
+    public ResponseEntity<ApiResponse<BookingResponseDTO>> getById(@PathVariable UUID publicId) {
+        log.info("GET /api/bookings/{}", publicId);
         return ResponseEntity.ok(ApiResponse.success("Booking fetched successfully",
-                bookingService.getById(id)));
+                bookingService.getById(publicId)));
     }
 
     // ── Get by Code ──────────────────────────────────────────────────────────
@@ -96,43 +97,43 @@ public class BookingController {
 
     // ── Update ───────────────────────────────────────────────────────────────
 
-    @PutMapping("/{id}")
+    @PutMapping("/{publicId}")
     public ResponseEntity<ApiResponse<BookingResponseDTO>> update(
-            @PathVariable Long id,
+            @PathVariable UUID publicId,
             @Valid @RequestBody UpdateBookingRequestDTO request) {
-        log.info("PUT /api/bookings/{}", id);
+        log.info("PUT /api/bookings/{}", publicId);
         return ResponseEntity.ok(ApiResponse.success("Booking updated successfully",
-                bookingService.update(id, request)));
+                bookingService.update(publicId, request)));
     }
 
     // ── Update Status ────────────────────────────────────────────────────────
 
-    @PatchMapping("/{id}/status")
+    @PatchMapping("/{publicId}/status")
     public ResponseEntity<ApiResponse<BookingResponseDTO>> updateStatus(
-            @PathVariable Long id,
+            @PathVariable UUID publicId,
             @Valid @RequestBody StatusUpdateRequestDTO request) {
-        log.info("PATCH /api/bookings/{}/status - status: {}", id, request.getStatus());
+        log.info("PATCH /api/bookings/{}/status - status: {}", publicId, request.getStatus());
         return ResponseEntity.ok(ApiResponse.success("Booking status updated successfully",
-                bookingService.updateStatus(id, request)));
+                bookingService.updateStatus(publicId, request)));
     }
 
     // ── Update Payment ───────────────────────────────────────────────────────
 
-    @PatchMapping("/{id}/payment")
+    @PatchMapping("/{publicId}/payment")
     public ResponseEntity<ApiResponse<BookingResponseDTO>> updatePayment(
-            @PathVariable Long id,
+            @PathVariable UUID publicId,
             @Valid @RequestBody PaymentUpdateRequestDTO request) {
-        log.info("PATCH /api/bookings/{}/payment - paidAmount: {}", id, request.getAmount());
+        log.info("PATCH /api/bookings/{}/payment - paidAmount: {}", publicId, request.getAmount());
         return ResponseEntity.ok(ApiResponse.success("Payment updated successfully",
-                bookingService.updatePayment(id, request)));
+                bookingService.updatePayment(publicId, request)));
     }
 
     // ── Soft Delete ──────────────────────────────────────────────────────────
 
-    @DeleteMapping("/{id}")
-    public ResponseEntity<ApiResponse<Void>> delete(@PathVariable Long id) {
-        log.info("DELETE /api/bookings/{}", id);
-        bookingService.delete(id);
+    @DeleteMapping("/{publicId}")
+    public ResponseEntity<ApiResponse<Void>> delete(@PathVariable UUID publicId) {
+        log.info("DELETE /api/bookings/{}", publicId);
+        bookingService.delete(publicId);
         return ResponseEntity.ok(ApiResponse.success("Booking deleted successfully"));
     }
 
@@ -212,10 +213,10 @@ public class BookingController {
     // ── Send Voucher ─────────────────────────────────────────────────────────
 
 
-    @PostMapping("/{id}/send-voucher")
-    public ResponseEntity<ApiResponse<Void>> sendVoucher(@PathVariable Long id) {
-        log.info("POST /api/bookings/{}/send-voucher", id);
-        bookingService.sendVoucher(id);
+    @PostMapping("/{publicId}/send-voucher")
+    public ResponseEntity<ApiResponse<Void>> sendVoucher(@PathVariable UUID publicId) {
+        log.info("POST /api/bookings/{}/send-voucher", publicId);
+        bookingService.sendVoucher(publicId);
         return ResponseEntity.ok(ApiResponse.success("Voucher sent successfully"));
     }
 }
