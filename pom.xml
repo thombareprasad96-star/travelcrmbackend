@@ -237,19 +237,6 @@
 		</dependency>
 
 		<!-- ===================================================== -->
-		<!-- FLYWAY  — versioned schema migrations                   -->
-		<!-- flyway-database-postgresql is required since Flyway 10  -->
-		<!-- ===================================================== -->
-		<dependency>
-			<groupId>org.flywaydb</groupId>
-			<artifactId>flyway-core</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>org.flywaydb</groupId>
-			<artifactId>flyway-database-postgresql</artifactId>
-		</dependency>
-
-		<!-- ===================================================== -->
 		<!-- JWT                                                     -->
 		<!-- ===================================================== -->
 		<dependency>

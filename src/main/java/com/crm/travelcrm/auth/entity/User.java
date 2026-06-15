@@ -2,6 +2,7 @@ package com.crm.travelcrm.auth.entity;
 
 import com.crm.travelcrm.auth.enums.Role;
 import com.crm.travelcrm.common.entity.BaseEntity;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.*;
 import org.springframework.security.core.GrantedAuthority;
@@ -56,6 +57,11 @@ public class User extends BaseEntity implements UserDetails {
     @Column(name = "is_active", nullable = false)
     private Boolean isActive = true;
 
+    // NOTE: no @OneToMany(mappedBy = "assignedUser") here on purpose.
+    // Lead.assignedUser (the FK side) fully defines the relationship;
+    // lead counts come from aggregate queries in LeadRepository, never
+    // from materializing a user's whole lead list.
+
     // ── UserDetails ──────────────────────────────────────────────────────────
 
     @Override
@@ -64,6 +70,9 @@ public class User extends BaseEntity implements UserDetails {
     }
 
     @Override public String getUsername()              { return email; }
+    // Safety net: entities should never reach JSON responses, but if one does,
+    // the password hash must not be serialized.
+    @JsonIgnore
     @Override public String getPassword()              { return password; }
     @Override public boolean isAccountNonExpired()     { return true; }
     @Override public boolean isAccountNonLocked()      { return true; }

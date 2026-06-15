@@ -1,6 +1,6 @@
 package com.crm.travelcrm.lead.dto;
 
-import com.crm.travelcrm.auth.entity.User;
+import com.crm.travelcrm.auth.dto.UserDto;
 import com.crm.travelcrm.lead.enums.LeadSource;
 import com.crm.travelcrm.lead.enums.LeadStage;
 import com.crm.travelcrm.lead.enums.LeadType;
@@ -23,7 +23,7 @@ public class LeadResponseDto {
     private LeadSource leadSource;
     private LeadType leadType;
     private LeadStage leadStage;
-    private User assignedUser;
+    private UserDto assignedUser;
     private LocalDate birthDate;
     private LocalDate travelDate;
     private String departCountry;

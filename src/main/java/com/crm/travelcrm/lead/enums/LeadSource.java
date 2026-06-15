@@ -4,17 +4,14 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;
 
 public enum LeadSource {
-
-    WHATSAPP("WhatsApp"),
-    FACEBOOK("Facebook"),
-    INSTAGRAM("Instagram"),
     SOCIAL_MEDIA("Social Media"),
     WEBSITE("Website"),
-    REFERRAL("Referral"),
-    WALK_IN("Walk-In"),
-    PHONE_CALL("Phone Call"),
-    EMAIL("Email"),
     GOOGLE_ADS("Google Ads"),
+    FACEBOOK("Facebook"),
+    INSTAGRAM("Instagram"),
+    WHATSAPP("WhatsApp"),
+    REFERRAL("Referral"),
+    DIRECT_CALL("Direct Call"),
     OTHER("Other");
 
     private final String displayName;
@@ -30,9 +27,9 @@ public enum LeadSource {
 
     @JsonCreator
     public static LeadSource fromValue(String value) {
+        if (value == null) return null;
         for (LeadSource source : values()) {
-            if (source.displayName.equalsIgnoreCase(value)
-                    || source.name().equalsIgnoreCase(value)) {
+            if (source.displayName.equalsIgnoreCase(value) || source.name().equalsIgnoreCase(value)) {
                 return source;
             }
         }

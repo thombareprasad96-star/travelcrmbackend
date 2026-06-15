@@ -9,6 +9,7 @@ import com.crm.travelcrm.lead.enums.LeadType;
 import jakarta.persistence.*;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
+import org.hibernate.annotations.BatchSize;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -59,10 +60,11 @@ public class Lead extends BaseTenantEntity {
     @Column(name = "lead_stage", nullable = false, length = 50)
     private LeadStage leadStage;
 
-    @ManyToOne(fetch = FetchType.LAZY)
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(
             name = "assigned_user_id",
             referencedColumnName = "id",
+            nullable = false,
             foreignKey = @ForeignKey(name = "fk_lead_assigned_user")
     )
     private User assignedUser;
@@ -99,6 +101,7 @@ public class Lead extends BaseTenantEntity {
     @ElementCollection(fetch = FetchType.EAGER)
     @CollectionTable(name = "lead_services", joinColumns = @JoinColumn(name = "lead_id"))
     @Column(name = "service")
+    @BatchSize(size = 50)
     @Builder.Default
     private List<String> services = new ArrayList<>();
 
@@ -106,6 +109,7 @@ public class Lead extends BaseTenantEntity {
     private String notes;
 
     @OneToMany(mappedBy = "lead", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    @BatchSize(size = 50)
     @Builder.Default
     private List<LeadItinerary> itinerary = new ArrayList<>();
 

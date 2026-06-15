@@ -5,6 +5,8 @@ import com.crm.travelcrm.common.dto.PagedApiResponse;
 import com.crm.travelcrm.common.dto.PaginationMeta;
 import com.crm.travelcrm.lead.dto.CreateLeadRequestDto;
 import com.crm.travelcrm.lead.dto.LeadResponseDto;
+import com.crm.travelcrm.lead.dto.UserLeadStageCountDto;
+import com.crm.travelcrm.lead.dto.UserWorkloadDto;
 import com.crm.travelcrm.lead.service.LeadService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -15,6 +17,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.UUID;
 
 @Slf4j
@@ -78,5 +81,31 @@ public class LeadController {
         log.info("Received delete lead request for publicId: {}", publicId);
         leadService.deleteLead(publicId);
         return ResponseEntity.ok(ApiResponse.success("Lead deleted successfully"));
+    }
+
+    // ── Statistics ────────────────────────────────────────────────────────────
+
+    /** Total live leads assigned to one user. */
+    @GetMapping("/stats/users/{userPublicId}/count")
+    public ResponseEntity<ApiResponse<Long>> getLeadCountForUser(
+            @PathVariable UUID userPublicId) {
+
+        long count = leadService.getLeadCountForUser(userPublicId);
+        return ResponseEntity.ok(ApiResponse.success("Lead count fetched", count));
+    }
+
+    /** Workload dashboard: every active tenant user with their lead total. */
+    @GetMapping("/stats/workload")
+    public ResponseEntity<ApiResponse<List<UserWorkloadDto>>> getUserWorkload() {
+        return ResponseEntity.ok(
+                ApiResponse.success("User workload fetched", leadService.getUserWorkload()));
+    }
+
+    /** Lead count per (user, stage) pair. */
+    @GetMapping("/stats/by-stage")
+    public ResponseEntity<ApiResponse<List<UserLeadStageCountDto>>> getLeadsByStagePerUser() {
+        return ResponseEntity.ok(
+                ApiResponse.success("Stage breakdown fetched",
+                        leadService.getLeadStageBreakdownPerUser()));
     }
 }

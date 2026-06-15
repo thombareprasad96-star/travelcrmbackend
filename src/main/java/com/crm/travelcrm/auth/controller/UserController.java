@@ -10,7 +10,6 @@ import com.crm.travelcrm.common.dto.ApiResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -58,24 +57,13 @@ public class UserController {
     }
 
 
+    // Active tenant users eligible for lead assignment.
+    // Errors propagate to GlobalExceptionHandler — no local try/catch,
+    // otherwise auth failures surface as misleading 500s.
     @GetMapping("/available")
     @PreAuthorize("hasAuthority('CRM_FULL')")
     public ResponseEntity<ApiResponse<List<UserDto>>> getAvailableUsers() {
-        log.info("Fetching available users for assignment");
-        try {
-            // Fetch all active users for current tenant (excluding SuperAdmin)
-            List<UserDto> users = userService.getAvailableUsers();
-            log.info("Successfully retrieved {} users for assignment", users.size());
-            // Return success response with list of users
-            return ResponseEntity
-                    .status(HttpStatus.OK)
-                    .body(ApiResponse.success("Users retrieved successfully", users));
-        } catch (Exception e) {
-            log.error("Error fetching available users", e);
-            // Return error response if something goes wrong
-            return ResponseEntity
-                    .status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.failure("Failed to retrieve users", null));
-        }
+        List<UserDto> users = userService.getAvailableUsers();
+        return ResponseEntity.ok(ApiResponse.success("Users retrieved successfully", users));
     }
 }

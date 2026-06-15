@@ -49,25 +49,32 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
         try {
             if (email != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+                try {
+                    UserDetails userDetails;
+                    if ("SUPER_ADMIN".equals(role)) {
+                        userDetails = superAdminDetailsService.loadUserByUsername(email);
+                    } else if (tenantId != null) {
+                        userDetails = userDetailsService.loadUserByEmailAndTenantId(email, tenantId);
+                    } else {
+                        userDetails = userDetailsService.loadUserByUsername(email);
+                    }
 
-                UserDetails userDetails;
-                if ("SUPER_ADMIN".equals(role)) {
-                    userDetails = superAdminDetailsService.loadUserByUsername(email);
-                } else if (tenantId != null) {
-                    userDetails = userDetailsService.loadUserByEmailAndTenantId(email, tenantId);
-                } else {
-                    userDetails = userDetailsService.loadUserByUsername(email);
-                }
+                    UsernamePasswordAuthenticationToken auth =
+                            new UsernamePasswordAuthenticationToken(
+                                    userDetails, null, userDetails.getAuthorities());
+                    auth.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                    SecurityContextHolder.getContext().setAuthentication(auth);
 
-                UsernamePasswordAuthenticationToken auth =
-                        new UsernamePasswordAuthenticationToken(
-                                userDetails, null, userDetails.getAuthorities());
-                auth.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-                SecurityContextHolder.getContext().setAuthentication(auth);
-
-                // Set tenant context for this request thread
-                if (tenantId != null) {
-                    TenantContext.setTenantId(tenantId);     // ← NEW
+                    // Set tenant context for this request thread
+                    if (tenantId != null) {
+                        TenantContext.setTenantId(tenantId);
+                    }
+                } catch (Exception ex) {
+                    // Token is valid but the principal no longer exists (deleted /
+                    // deactivated user). Continue unauthenticated so protected
+                    // endpoints return 401 instead of a 500 from inside the filter.
+                    logger.warn("JWT principal could not be loaded: " + ex.getMessage());
+                    SecurityContextHolder.clearContext();
                 }
             }
 

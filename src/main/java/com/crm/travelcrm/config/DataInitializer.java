@@ -13,9 +13,9 @@ import org.springframework.stereotype.Component;
 /**
  * Bootstraps the platform SuperAdmin on first startup.
  *
- * <p>Runs after Flyway migrations (ApplicationRunner executes once the context
- * is fully started). If the super_admins table already has a row, this is a
- * no-op — so the plaintext credential banner below can only ever appear on
+ * <p>Runs after Hibernate schema creation (ApplicationRunner executes once the
+ * context is fully started). If the super_admins table already has a row, this
+ * is a no-op — so the plaintext credential banner below can only ever appear on
  * the very first run against an empty database.
  *
  * <p>The password comes from the SUPER_ADMIN_PASSWORD environment variable.
@@ -29,7 +29,7 @@ public class DataInitializer implements ApplicationRunner {
     private static final String SUPER_ADMIN_EMAIL = "superadmin@travelcrm.com";
     private static final String SUPER_ADMIN_NAME  = "Platform Super Admin";
     private static final String PASSWORD_ENV_VAR  = "SUPER_ADMIN_PASSWORD";
-    private static final String FALLBACK_PASSWORD = "SuperAdmin@123";
+    private static final String FALLBACK_PASSWORD = "Test@123";
 
     private final SuperAdminRepository superAdminRepository;
     private final PasswordEncoder passwordEncoder;

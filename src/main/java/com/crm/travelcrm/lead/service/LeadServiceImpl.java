@@ -5,8 +5,11 @@ import com.crm.travelcrm.auth.repository.UserRepository;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.lead.dto.CreateLeadRequestDto;
 import com.crm.travelcrm.lead.dto.LeadResponseDto;
+import com.crm.travelcrm.lead.dto.UserLeadStageCountDto;
+import com.crm.travelcrm.lead.dto.UserWorkloadDto;
 import com.crm.travelcrm.lead.entity.Lead;
 import com.crm.travelcrm.lead.entity.LeadItinerary;
+import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.lead.exception.DuplicateLeadException;
 import com.crm.travelcrm.lead.mapper.LeadMapper;
@@ -17,6 +20,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.*;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
@@ -52,6 +56,7 @@ public class LeadServiceImpl implements LeadService {
         // tenantId is set here so it's available immediately in this transaction;
         // TenantEntityListener also guards it on @PrePersist as a safety net.
         lead.setTenantId(tenantId);
+        lead.setAssignedUser(resolveAssignedUser(request.getAssignedUserId(), tenantId));
 
         Lead savedLead = leadRepository.save(lead);
         log.info("Lead created | id: {} | tenantId: {}", savedLead.getPublicId(), tenantId);
@@ -87,7 +92,7 @@ public class LeadServiceImpl implements LeadService {
 
         if (keyword.contains("@")) {
             lead = leadRepository
-                    .findByEmailAndTenantIdAndDeletedAtIsNull(keyword, tenantId)
+                    .findByEmailAndTenantIdAndDeletedAtIsNull(keyword.toLowerCase(), tenantId)
                     .orElseThrow(() -> new ResourceNotFoundException(
                             "Lead not found with email: " + keyword));
         } else {
@@ -118,7 +123,9 @@ public class LeadServiceImpl implements LeadService {
 
         // Basic details
         lead.setCustomerName(request.getCustomerName());
-        lead.setEmail(request.getEmail());
+        // Lowercase to match create + duplicate checks — otherwise an updated
+        // email can dodge the tenant-scoped uniqueness validation
+        lead.setEmail(request.getEmail().toLowerCase());
         lead.setPhone(request.getPhone());
         lead.setLeadType(request.getLeadType());
         lead.setLeadSource(request.getLeadSource());
@@ -126,7 +133,7 @@ public class LeadServiceImpl implements LeadService {
         lead.setNotes(request.getNotes());
 
         // Assignment & personal
-        lead.setAssignedUser(request.getAssignedUser());
+        lead.setAssignedUser(resolveAssignedUser(request.getAssignedUserId(), tenantId));
         lead.setBirthDate(request.getBirthDate());
 
         // Travel details
@@ -141,8 +148,11 @@ public class LeadServiceImpl implements LeadService {
         lead.setInfants(request.getInfants());
         lead.setExtraBeds(request.getExtraBeds());
 
-        // Services
-        lead.setServices(request.getServices());
+        // Services — mutate the Hibernate-managed collection, never replace it
+        lead.getServices().clear();
+        if (request.getServices() != null) {
+            lead.getServices().addAll(request.getServices());
+        }
 
         // Itinerary — clear and rebuild
         if (request.getItinerary() != null) {
@@ -182,6 +192,39 @@ public class LeadServiceImpl implements LeadService {
         log.info("Lead soft-deleted | publicId: {} | tenantId: {}", publicId, tenantId);
     }
 
+    // ── Statistics ────────────────────────────────────────────────────────────
+
+    @Override
+    @Transactional(readOnly = true)
+    public long getLeadCountForUser(UUID userPublicId) {
+        Long tenantId = currentTenantId();
+        // Validates the user exists in this tenant — a foreign/unknown id
+        // returns 404, not a silently wrong 0
+        resolveAssignedUserForStats(userPublicId, tenantId);
+        return leadRepository
+                .countByAssignedUserPublicIdAndTenantIdAndDeletedAtIsNull(userPublicId, tenantId);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<UserWorkloadDto> getUserWorkload() {
+        return leadRepository.findUserWorkload(currentTenantId());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<UserLeadStageCountDto> getLeadStageBreakdownPerUser() {
+        return leadRepository.countLeadsByStagePerUser(currentTenantId());
+    }
+
+    /** Existence check only — unlike assignment, inactive users are fine here. */
+    private void resolveAssignedUserForStats(UUID userPublicId, Long tenantId) {
+        userRepository
+                .findByPublicIdAndTenantIdAndDeletedAtIsNull(userPublicId, tenantId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "User not found: " + userPublicId));
+    }
+
     // ── Private helpers ───────────────────────────────────────────────────────
 
     /**
@@ -196,6 +239,30 @@ public class LeadServiceImpl implements LeadService {
                             "and the JWT contains a tenantId claim.");
         }
         return tenantId;
+    }
+
+    /**
+     * Resolve the assigned user's publicId to a User, scoped to the current
+     * tenant so a lead can never be assigned to another tenant's user.
+     * Every lead must have an owner, and that owner must be active.
+     */
+    private User resolveAssignedUser(UUID assignedUserId, Long tenantId) {
+        if (assignedUserId == null) {
+            // @NotNull on the DTO catches this first; kept as defense in depth
+            throw new BusinessException(
+                    "Assigned user is required", HttpStatus.BAD_REQUEST);
+        }
+        User user = userRepository
+                .findByPublicIdAndTenantIdAndDeletedAtIsNull(assignedUserId, tenantId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Assigned user not found: " + assignedUserId));
+
+        if (!Boolean.TRUE.equals(user.getIsActive())) {
+            throw new BusinessException(
+                    "Cannot assign lead to inactive user: " + user.getName(),
+                    HttpStatus.BAD_REQUEST);
+        }
+        return user;
     }
 
     /**
@@ -249,6 +316,10 @@ public class LeadServiceImpl implements LeadService {
 
         if (recipientIds.isEmpty()) return;
 
+        String assignedTo = lead.getAssignedUser() != null
+                ? lead.getAssignedUser().getName()
+                : "Unassigned";
+
         eventPublisher.publishEvent(
                 NotifyEvent.builder()
                         .type("LEAD_CREATED")
@@ -256,7 +327,7 @@ public class LeadServiceImpl implements LeadService {
                         .recipientUserIds(recipientIds)
                         .title("New Lead: " + lead.getCustomerName())
                         .message(lead.getLeadSource() + " lead from " + lead.getDepartCity()
-                                + " assigned to " + lead.getAssignedUser())
+                                + " assigned to " + assignedTo)
                         .referenceType("LEAD")
                         .referencePublicId(lead.getPublicId())
                         .channels(Set.of(DeliveryChannel.IN_APP))
@@ -264,7 +335,7 @@ public class LeadServiceImpl implements LeadService {
                                 "leadId",       lead.getPublicId().toString(),
                                 "customerName", lead.getCustomerName(),
                                 "source",       lead.getLeadSource(),
-                                "assignedTo",   lead.getAssignedUser() != null ? lead.getAssignedUser() : ""
+                                "assignedTo",   assignedTo
                         ))
                         .build()
         );

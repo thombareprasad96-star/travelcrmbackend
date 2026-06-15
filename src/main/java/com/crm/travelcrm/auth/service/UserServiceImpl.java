@@ -19,11 +19,9 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -119,18 +117,21 @@ public class UserServiceImpl implements UserService {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<UserDto> getAvailableUsers() {
 
-        log.debug("=== FETCHING AVAILABLE USERS ===");
-
         Long tenantId = TenantContext.getTenantId();
-        log.debug("Current Tenant ID: {}", tenantId);
+        if (tenantId == null) {
+            // Fail fast with a meaningful error instead of an NPE inside JPA.
+            // Means the request was not authenticated with a tenant-scoped JWT.
+            throw new BusinessException(
+                    "No tenant context. Authenticate with a tenant user token.",
+                    HttpStatus.UNAUTHORIZED);
+        }
 
-        List<User> users = userRepository.findByTenantIdAndIsActiveTrue(tenantId);
-
-        log.debug("Database returned {} active users", users.size());
-
-        List<UserDto> availableUsers = users.stream()
+        List<UserDto> availableUsers = userRepository
+                .findByTenantIdAndIsActiveTrueAndDeletedAtIsNullOrderByNameAsc(tenantId)
+                .stream()
                 .filter(user -> user.getRole() != Role.SUPERADMIN)
                 .map(user -> new UserDto(
                         user.getPublicId(),
@@ -138,13 +139,9 @@ public class UserServiceImpl implements UserService {
                         user.getRole().name(),
                         user.getEmail()
                 ))
-                .sorted(Comparator.comparing(
-                        UserDto::getFullName,
-                        String.CASE_INSENSITIVE_ORDER
-                ))
-                .collect(Collectors.toList());
+                .toList();
 
-        log.info("Successfully retrieved {} available users for tenant: {}",
+        log.info("Retrieved {} available users for tenant: {}",
                 availableUsers.size(), tenantId);
 
         return availableUsers;

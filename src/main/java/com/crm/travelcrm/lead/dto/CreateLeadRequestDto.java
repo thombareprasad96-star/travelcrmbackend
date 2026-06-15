@@ -1,7 +1,6 @@
 // ─── CreateLeadRequest.java ───────────────────────────────────────────────────
 package com.crm.travelcrm.lead.dto;
 
-import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.lead.enums.LeadSource;
 import com.crm.travelcrm.lead.enums.LeadStage;
 import com.crm.travelcrm.lead.enums.LeadType;
@@ -12,6 +11,7 @@ import lombok.Data;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.UUID;
 
 @Data
 public class CreateLeadRequestDto {
@@ -41,7 +41,10 @@ public class CreateLeadRequestDto {
     @NotNull(message = "Lead stage is required")
     private LeadStage leadStage;
 
-    private User assignedUser;
+    // publicId of the tenant user this lead is assigned to — every lead
+    // must have an owner (assigned_user_id is NOT NULL in the database)
+    @NotNull(message = "Assigned user is required")
+    private UUID assignedUserId;
 
     @JsonFormat(pattern = "yyyy-MM-dd")
     private LocalDate birthDate;

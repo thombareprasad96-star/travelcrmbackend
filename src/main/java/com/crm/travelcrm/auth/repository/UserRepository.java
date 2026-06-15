@@ -19,5 +19,5 @@ public interface UserRepository extends JpaRepository<User, Long> {
     List<User> findAllByTenantIdAndDeletedAtIsNull(Long tenantId);
     Optional<User> findByPublicIdAndTenantIdAndDeletedAtIsNull(UUID publicId, Long tenantId);
     void deleteByTenantId(Long tenantId);
-    List<User> findByTenantIdAndIsActiveTrue(long tenantId);
+    List<User> findByTenantIdAndIsActiveTrueAndDeletedAtIsNullOrderByNameAsc(Long tenantId);
 }
