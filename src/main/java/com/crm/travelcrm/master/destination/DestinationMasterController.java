@@ -18,8 +18,14 @@ public class DestinationMasterController {
 
     private final DestinationMasterService destinationMasterService;
 
+    // Only SUPERADMIN and TENANT_ADMIN may write destinations.
+    //  - ROLE_SUPER_ADMIN → the SuperAdmin principal (creates GLOBAL destinations)
+    //  - PLATFORM_ADMIN   → a User row with role SUPERADMIN, if one ever exists
+    //  - USER_CREATE      → held only by TENANT_ADMIN (NOT by MANAGER/AGENT),
+    //                       so it cleanly distinguishes the tenant admin from staff.
+    // The previous gate (PLATFORM_ADMIN only) never matched the real SuperAdmin principal.
     @PostMapping
-    @PreAuthorize("hasAuthority('PLATFORM_ADMIN')")
+    @PreAuthorize("hasAnyAuthority('ROLE_SUPER_ADMIN', 'PLATFORM_ADMIN', 'USER_CREATE')")
     public ResponseEntity<ApiResponse<Void>> saveDestination(
             @Valid @RequestBody DestinationMasterRequestDTO request) {
 
@@ -57,7 +63,7 @@ public class DestinationMasterController {
     }
 
     @PutMapping("/{id}")
-    @PreAuthorize("hasAuthority('PLATFORM_ADMIN')")
+    @PreAuthorize("hasAnyAuthority('ROLE_SUPER_ADMIN', 'PLATFORM_ADMIN', 'USER_CREATE')")
     public ResponseEntity<ApiResponse<Void>> updateDestination(
             @PathVariable Long id,
             @Valid @RequestBody DestinationMasterRequestDTO request) {
@@ -67,7 +73,7 @@ public class DestinationMasterController {
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAuthority('PLATFORM_ADMIN')")
+    @PreAuthorize("hasAnyAuthority('ROLE_SUPER_ADMIN', 'PLATFORM_ADMIN', 'USER_CREATE')")
     public ResponseEntity<ApiResponse<Void>> deleteDestination(
             @PathVariable Long id) {
 

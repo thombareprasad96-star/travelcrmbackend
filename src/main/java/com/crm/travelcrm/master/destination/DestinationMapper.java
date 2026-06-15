@@ -45,6 +45,7 @@ public class DestinationMapper {
                 .cancellationPolicies(entity.getCancellationPolicies())
                 .bookingTerms(entity.getBookingTerms())
                 .status(entity.getStatus())
+                .global(entity.getTenantId() == null)
                 .createdAt(entity.getCreatedAt())
                 .build();
     }

@@ -49,6 +49,13 @@ public class DestinationMasterEntity {
     @Column(name = "status", length = 20)
     private String status;
 
+    // null = global destination (platform-managed, visible to every tenant);
+    // non-null = owned by that tenant only. Intentionally NOT a BaseTenantEntity:
+    // its strict tenantFilter would hide global rows from tenant users, and its
+    // listener forbids persisting without a TenantContext (which SuperAdmin lacks).
+    @Column(name = "tenant_id")
+    private Long tenantId;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

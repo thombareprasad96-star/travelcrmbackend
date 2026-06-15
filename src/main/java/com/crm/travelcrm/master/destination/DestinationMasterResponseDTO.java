@@ -24,5 +24,7 @@ public class DestinationMasterResponseDTO {
     private String cancellationPolicies;
     private String bookingTerms;
     private String status;
+    // true = platform-managed destination shared with all tenants (read-only for tenants)
+    private boolean global;
     private LocalDateTime createdAt;
 }

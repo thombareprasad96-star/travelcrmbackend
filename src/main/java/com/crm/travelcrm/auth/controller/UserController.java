@@ -10,6 +10,7 @@ import com.crm.travelcrm.common.dto.ApiResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -25,6 +26,22 @@ import java.util.UUID;
 public class UserController {
 
     private final UserService userService;
+
+    // Creates a MANAGER or AGENT inside the caller's own tenant.
+    // USER_CREATE is granted to TENANT_ADMIN only (see Role.authorities()).
+    // The tenant is taken from the authenticated principal — never the request body —
+    // so a tenant admin can never provision a user into a foreign tenant. Role is
+    // validated server-side in UserServiceImpl (SUPERADMIN / TENANT_ADMIN are rejected).
+    @PostMapping
+    @PreAuthorize("hasAuthority('USER_CREATE')")
+    public ResponseEntity<ApiResponse<UserResponseDTO>> createUser(
+            @Valid @RequestBody CreateUserRequest request,
+            @AuthenticationPrincipal User currentUser) {
+
+        UserResponseDTO created = userService.createUser(request, currentUser.getTenantId());
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiResponse.success("User created successfully", created));
+    }
 
     @GetMapping
     @PreAuthorize("hasAuthority('USER_READ')")
