@@ -21,7 +21,7 @@ import java.util.UUID;
  * applicationEventPublisher.publishEvent(
  *     NotifyEvent.builder()
  *         .type("LEAD_ASSIGNED")
- *         .tenantId(tenantId)
+ *         .tenantId(tecrenantId)
  *         .recipientUserIds(List.of(userId))
  *         .title("Lead assigned to you")
  *         .message("Lead ABC was assigned to you")
