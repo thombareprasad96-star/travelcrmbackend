@@ -1,5 +1,6 @@
 package com.crm.travelcrm.vendor.service;
 
+import com.crm.travelcrm.common.dto.PagedApiResponse;
 import com.crm.travelcrm.vendor.dto.request.*;
 import com.crm.travelcrm.vendor.dto.response.VendorResponseDTO;
 import com.crm.travelcrm.vendor.dto.response.VendorStatsDTO;
@@ -9,7 +10,7 @@ import java.util.Map;
 
 public interface VendorService {
 
-    List<VendorResponseDTO> getAll();
+    PagedApiResponse<VendorResponseDTO> getAll(int page, int size, String sortBy, String sortDir);
 
     VendorResponseDTO getById(Long id);
 

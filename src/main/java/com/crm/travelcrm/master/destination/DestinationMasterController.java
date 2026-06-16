@@ -3,6 +3,7 @@ package com.crm.travelcrm.master.destination;
 import com.crm.travelcrm.common.dto.ApiResponse;
 import com.crm.travelcrm.common.dto.PagedApiResponse;
 import com.crm.travelcrm.common.dto.PaginationMeta;
+import com.crm.travelcrm.master.destination.dto.DestinationDropdownDTO;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -10,6 +11,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/destinations")
@@ -51,12 +54,23 @@ public class DestinationMasterController {
                         destinationPage.getContent(),
                         PaginationMeta.from(destinationPage, sortBy, sortDir)));
     }
-
+    @GetMapping("/dropdown")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<ApiResponse<List<DestinationDropdownDTO>>> getDestinationsForDropdown() {
+        List<DestinationDropdownDTO> destinations =
+                destinationMasterService.getDestinationsForDropdown();
+        return ResponseEntity.ok(
+                ApiResponse.success(
+                        "Destinations fetched successfully",
+                        destinations
+                )
+        );
+    }
     @GetMapping("/{id}")
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<ApiResponse<DestinationMasterResponseDTO>> getDestinationById(
             @PathVariable Long id) {
-
+        System.out.println("test1");
         DestinationMasterResponseDTO destination =
                 destinationMasterService.getDestinationById(id);
         return ResponseEntity.ok(ApiResponse.success("Destination fetched successfully", destination));

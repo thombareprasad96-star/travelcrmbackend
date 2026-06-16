@@ -3,10 +3,13 @@ package com.crm.travelcrm.master.destination;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
+import com.crm.travelcrm.master.destination.dto.DestinationDropdownDTO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+
+import java.util.List;
 
 @Service
 @RequiredArgsConstructor
@@ -54,6 +57,12 @@ public class DestinationMasterService {
 
         DestinationMapper.updateEntity(entity, request);
         destinationMasterRepository.save(entity);
+    }
+    public List<DestinationDropdownDTO> getDestinationsForDropdown() {
+        return destinationMasterRepository.findAll()
+                .stream()
+                .map(destinationMapper::toDropdownDTO)
+                .toList();
     }
 
     public void deleteDestination(Long id) {

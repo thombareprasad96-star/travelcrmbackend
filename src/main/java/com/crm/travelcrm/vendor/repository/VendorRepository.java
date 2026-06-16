@@ -1,6 +1,7 @@
 package com.crm.travelcrm.vendor.repository;
 
-import com.crm.travelcrm.vendor.entity.VendorEntity;
+import com.crm.travelcrm.vendor.entity.Vendor;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
@@ -12,40 +13,61 @@ import java.util.List;
 import java.util.Optional;
 
 @Repository
-public interface VendorRepository extends JpaRepository<VendorEntity, Long>, JpaSpecificationExecutor<VendorEntity> {
+public interface VendorRepository extends JpaRepository<Vendor, Long>, JpaSpecificationExecutor<Vendor> {
 
-    Optional<VendorEntity> findTopByOrderByIdDesc();
+    // ── FIND OPERATIONS ──────────────────────────────────────────────────────
 
-    Optional<VendorEntity> findByVendorCodeAndTenantId(String vendorCode, Long tenantId);
+    Optional<Vendor> findTopByOrderByIdDesc();
 
-    List<VendorEntity> findByTenantIdAndVendorType(Long tenantId, String vendorType);
+    Optional<Vendor> findByVendorCodeAndTenantId(String vendorCode, Long tenantId);
 
-    List<VendorEntity> findByTenantIdAndStatus(Long tenantId, String status);
+    Optional<Vendor> findByVendorCodeAndTenantIdAndDeletedAtIsNull(String vendorCode, Long tenantId);
+
+    List<Vendor> findByTenantIdAndVendorType(Long tenantId, String vendorType);
+
+    List<Vendor> findByTenantIdAndVendorTypeAndDeletedAtIsNull(Long tenantId, String vendorType);
+
+    List<Vendor> findByTenantIdAndStatus(Long tenantId, String status);
+
+    @EntityGraph(attributePaths = {"services"})
+    List<Vendor> findAllByTenantIdAndDeletedAtIsNull(Long tenantId);
+
+    // ── COUNT OPERATIONS ─────────────────────────────────────────────────────
 
     long countByTenantId(Long tenantId);
 
+    long countByTenantIdAndDeletedAtIsNull(Long tenantId);
+
     long countByTenantIdAndStatus(Long tenantId, String status);
+
+    long countByTenantIdAndStatusAndDeletedAtIsNull(Long tenantId, String status);
 
     long countByTenantIdAndVendorType(Long tenantId, String vendorType);
 
-    @Query("SELECT COALESCE(SUM(v.totalBusiness), 0) FROM VendorEntity v WHERE v.tenantId = :tenantId AND v.deletedAt IS NULL")
-    BigDecimal sumTotalBusinessByTenantId(@Param("tenantId") Long tenantId);
+    long countByTenantIdAndVendorTypeAndDeletedAtIsNull(Long tenantId, String vendorType);
 
-    @Query("SELECT COALESCE(SUM(v.totalPaid), 0) FROM VendorEntity v WHERE v.tenantId = :tenantId AND v.deletedAt IS NULL")
-    BigDecimal sumTotalPaidByTenantId(@Param("tenantId") Long tenantId);
+    // ── SUM OPERATIONS ───────────────────────────────────────────────────────
 
-    @Query("SELECT COALESCE(AVG(v.rating), 0.0) FROM VendorEntity v WHERE v.tenantId = :tenantId AND v.rating IS NOT NULL AND v.deletedAt IS NULL")
-    Double avgRatingByTenantId(@Param("tenantId") Long tenantId);
+    @Query("SELECT COALESCE(SUM(v.totalBusiness), 0) FROM Vendor v WHERE v.tenantId = :tenantId AND v.deletedAt IS NULL")
+    BigDecimal sumTotalBusinessByTenantIdAndDeletedAtIsNull(@Param("tenantId") Long tenantId);
 
-    List<VendorEntity> findAllByTenantIdAndDeletedAtIsNull(Long tenantId);
+    @Query("SELECT COALESCE(SUM(v.totalPaid), 0) FROM Vendor v WHERE v.tenantId = :tenantId AND v.deletedAt IS NULL")
+    BigDecimal sumTotalPaidByTenantIdAndDeletedAtIsNull(@Param("tenantId") Long tenantId);
+
+    // ── AVG OPERATIONS ───────────────────────────────────────────────────────
+
+    @Query("SELECT COALESCE(AVG(v.rating), 0.0) FROM Vendor v WHERE v.tenantId = :tenantId AND v.rating IS NOT NULL AND v.deletedAt IS NULL")
+    Double avgRatingByTenantIdAndDeletedAtIsNull(@Param("tenantId") Long tenantId);
+
+    // ── SEARCH OPERATIONS ────────────────────────────────────────────────────
 
     @Query("""
-            SELECT v FROM VendorEntity v WHERE v.tenantId = :tenantId AND v.deletedAt IS NULL
+            SELECT v FROM Vendor v WHERE v.tenantId = :tenantId AND v.deletedAt IS NULL
             AND (LOWER(v.vendorName) LIKE LOWER(CONCAT('%', :q, '%'))
               OR LOWER(v.vendorCode) LIKE LOWER(CONCAT('%', :q, '%'))
               OR LOWER(v.city)       LIKE LOWER(CONCAT('%', :q, '%'))
               OR LOWER(v.email)      LIKE LOWER(CONCAT('%', :q, '%'))
               OR LOWER(v.phone)      LIKE LOWER(CONCAT('%', :q, '%')))
             """)
-    List<VendorEntity> search(@Param("tenantId") Long tenantId, @Param("q") String q);
+    List<Vendor> search(@Param("tenantId") Long tenantId, @Param("q") String q);
 }

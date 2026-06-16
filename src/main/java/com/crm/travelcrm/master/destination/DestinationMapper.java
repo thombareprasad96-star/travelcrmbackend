@@ -1,5 +1,6 @@
 package com.crm.travelcrm.master.destination;
 
+import com.crm.travelcrm.master.destination.dto.DestinationDropdownDTO;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -65,5 +66,14 @@ public class DestinationMapper {
         entity.setCancellationPolicies(dto.getCancellationPolicies());
         entity.setBookingTerms(dto.getBookingTerms());
         entity.setStatus(dto.getStatus());
+    }
+
+    DestinationDropdownDTO toDropdownDTO(DestinationMasterEntity destination) {
+        return DestinationDropdownDTO.builder()
+                .id(destination.getId())
+                .name(destination.getName())
+                .country(destination.getCountry())
+                .type(destination.getType())
+                .build();
     }
 }

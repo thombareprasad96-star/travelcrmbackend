@@ -1,11 +1,20 @@
 package com.crm.travelcrm.vendor.controller;
 
+import com.crm.travelcrm.booking.controller.BookingController;
+import com.crm.travelcrm.common.dto.PagedApiResponse;
+import com.crm.travelcrm.common.dto.PaginationMeta;
 import com.crm.travelcrm.vendor.dto.request.*;
 import com.crm.travelcrm.vendor.dto.response.VendorResponseDTO;
 import com.crm.travelcrm.vendor.dto.response.VendorStatsDTO;
 import com.crm.travelcrm.vendor.service.VendorService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -21,16 +30,34 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class VendorController {
 
+    private static final Logger log = LogManager.getLogger(VendorController.class);
     private final VendorService vendorService;
 
     // 1. GET ALL
+//    @GetMapping
+//    @PreAuthorize("isAuthenticated()")
+//    public ResponseEntity<List<VendorResponseDTO>> getAll() {
+//        return ResponseEntity.ok(vendorService.getAll());
+//
+
     @GetMapping
     @PreAuthorize("isAuthenticated()")
-    public ResponseEntity<List<VendorResponseDTO>> getAll() {
-        return ResponseEntity.ok(vendorService.getAll());
+    public ResponseEntity<PagedApiResponse<VendorResponseDTO>> getAll(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(defaultValue = "vendorCode") String sortBy,
+            @RequestParam(defaultValue = "desc") String sortDir) {
+
+        log.info("Fetching vendors: page={}, size={}, sortBy={}, sortDir={}",
+                page, size, sortBy, sortDir);
+
+        PagedApiResponse<VendorResponseDTO> response = vendorService.getAll(page, size, sortBy, sortDir);
+        return ResponseEntity.ok(response);
     }
 
-    // 2. GET BY ID
+
+
+// 2. GET BY ID
     @GetMapping("/{id}")
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<VendorResponseDTO> getById(@PathVariable Long id) {
