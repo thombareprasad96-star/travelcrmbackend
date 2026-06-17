@@ -1,0 +1,31 @@
+package com.crm.travelcrm.master.geography.mapper;
+
+import com.crm.travelcrm.master.geography.dto.request.CreateCityRequest;
+import com.crm.travelcrm.master.geography.dto.request.UpdateCityRequest;
+import com.crm.travelcrm.master.geography.dto.response.CityDto;
+import com.crm.travelcrm.master.geography.entity.City;
+import org.mapstruct.*;
+
+/**
+ * MapStruct mapper for {@link City}. The {@code destination} association is set by
+ * the service. The country reference on the DTO is derived by walking
+ * {@code City → Destination → Country} (safe while the JPA session is open).
+ */
+@Mapper(
+        componentModel = "spring",
+        unmappedTargetPolicy = ReportingPolicy.IGNORE,
+        nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.IGNORE
+)
+public interface CityMapper {
+
+    @Mapping(target = "cityId",          source = "id")
+    @Mapping(target = "destinationId",   source = "destination.id")
+    @Mapping(target = "destinationName", source = "destination.name")
+    @Mapping(target = "countryId",       source = "destination.country.id")
+    @Mapping(target = "countryName",     source = "destination.country.name")
+    CityDto toDto(City city);
+
+    City toEntity(CreateCityRequest request);
+
+    void updateEntity(UpdateCityRequest request, @MappingTarget City city);
+}

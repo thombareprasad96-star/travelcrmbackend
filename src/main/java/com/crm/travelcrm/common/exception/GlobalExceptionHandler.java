@@ -1,6 +1,8 @@
 package com.crm.travelcrm.common.exception;
 
 import com.crm.travelcrm.booking.exception.BookingNotFoundException;
+import com.crm.travelcrm.customer.exception.CustomerNotFoundException;
+import com.crm.travelcrm.customer.exception.DuplicateCustomerException;
 import com.crm.travelcrm.lead.exception.DuplicateLeadException;
 import com.crm.travelcrm.lead.exception.LeadNotFoundException;
 import com.crm.travelcrm.tenent.exception.DuplicateTenantException;
@@ -87,6 +89,18 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handleBookingNotFound(BookingNotFoundException ex) {
         log.warn("Booking not found: {}", ex.getMessage());
         return build(HttpStatus.NOT_FOUND, "NOT_FOUND", ex.getMessage());
+    }
+
+    @ExceptionHandler(CustomerNotFoundException.class)
+    public ResponseEntity<ErrorResponse> handleCustomerNotFound(CustomerNotFoundException ex) {
+        log.warn("Customer not found: {}", ex.getMessage());
+        return build(HttpStatus.NOT_FOUND, "NOT_FOUND", ex.getMessage());
+    }
+
+    @ExceptionHandler(DuplicateCustomerException.class)
+    public ResponseEntity<ErrorResponse> handleDuplicateCustomer(DuplicateCustomerException ex) {
+        log.warn("Duplicate customer: {}", ex.getMessage());
+        return build(HttpStatus.CONFLICT, "CONFLICT", ex.getMessage());
     }
 
     @ExceptionHandler(BusinessException.class)
