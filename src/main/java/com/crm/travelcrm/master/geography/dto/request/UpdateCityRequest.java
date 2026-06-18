@@ -13,6 +13,12 @@ public class UpdateCityRequest {
     @Size(max = 120, message = "Name must not exceed 120 characters")
     private String name;
 
+    @Size(max = 100)
+    private String country;
+
+    @Size(max = 10)
+    private String code;
+
     @Size(max = 120, message = "State must not exceed 120 characters")
     private String state;
 

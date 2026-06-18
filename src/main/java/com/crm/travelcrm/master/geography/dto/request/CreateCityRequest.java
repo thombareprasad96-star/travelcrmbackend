@@ -18,6 +18,14 @@ public class CreateCityRequest {
     @Size(max = 120, message = "Name must not exceed 120 characters")
     private String name;
 
+    /** Country name — used when creating city via the flat /api/cities endpoint. */
+    @Size(max = 100)
+    private String country;
+
+    /** Airport/city code (e.g. BOM). */
+    @Size(max = 10)
+    private String code;
+
     @Size(max = 120, message = "State must not exceed 120 characters")
     private String state;
 

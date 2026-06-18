@@ -40,6 +40,7 @@ public interface DestinationMapper {
      * service after this call — countryId in the request is intentionally ignored
      * here (IGNORE policy covers it).
      */
+    @Mapping(target = "country", ignore = true)
     Destination toEntity(CreateDestinationRequest request);
 
     /** Partial update — null fields in request are skipped (IGNORE policy). */

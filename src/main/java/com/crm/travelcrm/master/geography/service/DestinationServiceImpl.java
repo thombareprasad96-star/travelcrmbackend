@@ -97,11 +97,17 @@ public class DestinationServiceImpl implements DestinationService {
     @Override
     @Transactional
     public DestinationDto create(CreateDestinationRequest request) {
-        if (request.getCountryId() == null) {
-            throw new BusinessException("countryId is required", HttpStatus.BAD_REQUEST);
-        }
         Long tenantId = GeographySupport.currentTenantId();
-        Country country = resolveCountry(request.getCountryId(), tenantId);
+        Country country;
+        if (request.getCountryId() != null) {
+            country = resolveCountry(request.getCountryId(), tenantId);
+        } else if (StringUtils.hasText(request.getCountry())) {
+            country = countryRepository.findByTenantIdAndName(tenantId, request.getCountry().trim())
+                    .orElseThrow(() -> new ResourceNotFoundException(
+                            "Country not found: " + request.getCountry()));
+        } else {
+            throw new BusinessException("Either countryId or country name is required", HttpStatus.BAD_REQUEST);
+        }
         return doCreate(request, country, tenantId);
     }
 

@@ -1,5 +1,6 @@
 package com.crm.travelcrm.master.vehicle;
 
+import com.crm.travelcrm.master.geography.entity.City;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -38,6 +39,12 @@ public class VehicleEntity {
     // non-null = owned by that tenant only.
     @Column(name = "tenant_id")
     private Long tenantId;
+
+    // Optional city association for hierarchy: Country → Destination → City → Vehicle
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "city_id",
+            foreignKey = @ForeignKey(name = "fk_vehicle_city"))
+    private City city;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;

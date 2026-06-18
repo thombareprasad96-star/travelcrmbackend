@@ -20,13 +20,57 @@ import org.springframework.web.bind.annotation.*;
  */
 @Slf4j
 @RestController
-@RequestMapping("/api/v1")
 @RequiredArgsConstructor
 public class CityController {
 
     private final CityService cityService;
 
-    @GetMapping("/destinations/{destinationId}/cities")
+    // ── Flat endpoints (/api/cities) — used by the frontend City master page ──
+
+    @GetMapping("/api/cities")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<PagedApiResponse<CityDto>> getAll(
+            @RequestParam(defaultValue = "0")         int page,
+            @RequestParam(defaultValue = "100")       int size,
+            @RequestParam(defaultValue = "createdAt") String sortBy,
+            @RequestParam(defaultValue = "desc")      String sortDir) {
+        return ResponseEntity.ok(cityService.getAll(page, size, sortBy, sortDir));
+    }
+
+    @PostMapping("/api/cities")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    public ResponseEntity<ApiResponse<CityDto>> createFlat(
+            @Valid @RequestBody CreateCityRequest request) {
+        CityDto created = cityService.createFlat(request);
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiResponse.success("City created successfully", created, 201));
+    }
+
+    @PutMapping("/api/cities/{cityId}")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    public ResponseEntity<ApiResponse<CityDto>> updateFlat(
+            @PathVariable Long cityId,
+            @Valid @RequestBody UpdateCityRequest request) {
+        return ResponseEntity.ok(
+                ApiResponse.success("City updated successfully", cityService.update(cityId, request)));
+    }
+
+    @DeleteMapping("/api/cities/{cityId}")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    public ResponseEntity<Void> deleteFlat(@PathVariable Long cityId) {
+        cityService.delete(cityId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @GetMapping("/api/cities/{cityId}")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<ApiResponse<CityDto>> getByIdFlat(@PathVariable Long cityId) {
+        return ResponseEntity.ok(ApiResponse.success("City fetched", cityService.getById(cityId)));
+    }
+
+    // ── Nested endpoints (/api/v1/destinations/{id}/cities) — hierarchy-aware ──
+
+    @GetMapping("/api/v1/destinations/{destinationId}/cities")
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<PagedApiResponse<CityDto>> getByDestination(
             @PathVariable Long destinationId,
@@ -38,7 +82,7 @@ public class CityController {
                 cityService.getByDestination(destinationId, page, size, sortBy, sortDir));
     }
 
-    @PostMapping("/destinations/{destinationId}/cities")
+    @PostMapping("/api/v1/destinations/{destinationId}/cities")
     @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
     public ResponseEntity<ApiResponse<CityDto>> create(
             @PathVariable Long destinationId,
@@ -48,13 +92,13 @@ public class CityController {
                 .body(ApiResponse.success("City created successfully", created, 201));
     }
 
-    @GetMapping("/cities/{cityId}")
+    @GetMapping("/api/v1/cities/{cityId}")
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<ApiResponse<CityDto>> getById(@PathVariable Long cityId) {
         return ResponseEntity.ok(ApiResponse.success("City fetched", cityService.getById(cityId)));
     }
 
-    @PutMapping("/cities/{cityId}")
+    @PutMapping("/api/v1/cities/{cityId}")
     @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
     public ResponseEntity<ApiResponse<CityDto>> update(
             @PathVariable Long cityId,
@@ -63,7 +107,7 @@ public class CityController {
                 ApiResponse.success("City updated successfully", cityService.update(cityId, request)));
     }
 
-    @DeleteMapping("/cities/{cityId}")
+    @DeleteMapping("/api/v1/cities/{cityId}")
     @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
     public ResponseEntity<Void> delete(@PathVariable Long cityId) {
         cityService.delete(cityId);

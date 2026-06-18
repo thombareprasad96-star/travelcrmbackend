@@ -35,16 +35,25 @@ import lombok.experimental.SuperBuilder;
 @SuperBuilder
 public class City extends BaseTenantEntity {
 
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    // nullable — cities created via the flat /api/cities endpoint (frontend) may not have a destination yet
+    @ManyToOne(fetch = FetchType.LAZY, optional = true)
     @JoinColumn(
             name = "destination_id",
-            nullable = false,
+            nullable = true,
             foreignKey = @ForeignKey(name = "fk_city_destination")
     )
     private Destination destination;
 
     @Column(name = "name", nullable = false, length = 120)
     private String name;
+
+    /** Country name string — populated when city is created via flat endpoint (no destination FK). */
+    @Column(name = "country", length = 100)
+    private String country;
+
+    /** Airport/city code (e.g. BOM, DEL). */
+    @Column(name = "code", length = 10)
+    private String code;
 
     @Column(name = "state", length = 120)
     private String state;

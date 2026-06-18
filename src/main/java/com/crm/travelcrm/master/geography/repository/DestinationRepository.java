@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.Optional;
 
 /** Tenant-scoped data access for {@link Destination}. */
@@ -28,6 +29,34 @@ public interface DestinationRepository extends JpaRepository<Destination, Long> 
 
     @Query("SELECT d FROM Destination d WHERE d.global = true OR d.tenantId = :tenantId")
     Page<Destination> findAllVisibleTo(@Param("tenantId") Long tenantId, Pageable pageable);
+
+    /**
+     * Dropdown: destinations under a given country visible to this tenant.
+     * Includes platform-managed global destinations (d.global = true) AND the
+     * tenant's own destinations. Filters to status = 'Active' when set;
+     * a null/blank status is treated as active so seed data is included.
+     * Results are alphabetically ordered for UI rendering.
+     */
+    @Query("""
+            SELECT d FROM Destination d
+            WHERE (d.global = true OR d.tenantId = :tenantId)
+              AND d.country.id = :countryId
+              AND (d.status IS NULL OR LOWER(d.status) = 'active')
+            ORDER BY d.name ASC
+            """)
+    List<Destination> findActiveByCountryIdVisibleTo(
+            @Param("tenantId") Long tenantId,
+            @Param("countryId") Long countryId);
+
+    /** Used to validate that a destination is visible to the requesting tenant. */
+    @Query("""
+            SELECT d FROM Destination d
+            WHERE d.id = :id
+              AND (d.global = true OR d.tenantId = :tenantId)
+            """)
+    Optional<Destination> findByIdVisibleTo(
+            @Param("id") Long id,
+            @Param("tenantId") Long tenantId);
 
     // ── Duplicate guard (name unique per tenant) ──────────────────────────────
 

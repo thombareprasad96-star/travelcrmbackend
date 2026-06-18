@@ -22,4 +22,7 @@ public interface VehicleRepository extends JpaRepository<VehicleEntity, Long> {
     List<VehicleEntity> findByTypeVisible(@Param("tenantId") Long tenantId, @Param("type") String type);
 
     boolean existsByNameAndTenantId(String name, Long tenantId);
+
+    @Query("SELECT v FROM VehicleEntity v WHERE (v.tenantId IS NULL OR v.tenantId = :tenantId) ORDER BY v.name ASC")
+    List<VehicleEntity> findAllVisibleToOrderByNameAsc(@Param("tenantId") Long tenantId);
 }

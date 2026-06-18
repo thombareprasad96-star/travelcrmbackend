@@ -6,6 +6,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.Optional;
 
 /** Tenant-scoped data access for {@link Country}. */
@@ -19,6 +20,9 @@ public interface CountryRepository extends JpaRepository<Country, Long> {
     Optional<Country> findByTenantIdAndName(Long tenantId, String name);
 
     Page<Country> findAllByTenantId(Long tenantId, Pageable pageable);
+
+    /** Flat list for dropdowns — ordered alphabetically. */
+    List<Country> findAllByTenantIdOrderByNameAsc(Long tenantId);
 
     // ── Duplicate guards (unique per tenant) ───────────────────────────────────
     boolean existsByTenantIdAndName(Long tenantId, String name);

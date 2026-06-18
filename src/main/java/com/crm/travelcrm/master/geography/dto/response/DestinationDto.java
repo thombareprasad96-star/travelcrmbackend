@@ -38,3 +38,5 @@ public class DestinationDto {
     LocalDateTime createdAt;
     LocalDateTime updatedAt;
 }
+
+

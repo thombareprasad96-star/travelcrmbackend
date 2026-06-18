@@ -21,6 +21,11 @@ public class CityDto {
     Long countryId;
     String countryName;
 
+    /** Flat country name — populated from destination.country.name or City.country field. */
+    String country;
+    /** Airport/city code (e.g. BOM, DEL). */
+    String code;
+
     String name;
     String state;
     Double latitude;

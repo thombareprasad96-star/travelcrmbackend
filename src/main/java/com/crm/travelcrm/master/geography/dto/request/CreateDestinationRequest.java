@@ -21,8 +21,11 @@ import java.math.BigDecimal;
 @Data
 public class CreateDestinationRequest {
 
-    /** Required only when using POST /api/destinations (flat endpoint). */
+    /** Required only when using POST /api/destinations (flat endpoint) — provide either countryId OR country name. */
     private Long countryId;
+
+    /** Country name (string) — alternative to countryId; the service will look up the country by name. */
+    private String country;
 
     @NotBlank(message = "Destination name is required")
     @Size(max = 150, message = "Name must not exceed 150 characters")

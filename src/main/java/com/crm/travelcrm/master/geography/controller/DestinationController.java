@@ -5,9 +5,13 @@ import com.crm.travelcrm.common.dto.PagedApiResponse;
 import com.crm.travelcrm.common.dto.PaginationMeta;
 import com.crm.travelcrm.master.geography.dto.request.CreateDestinationRequest;
 import com.crm.travelcrm.master.geography.dto.request.UpdateDestinationRequest;
+import com.crm.travelcrm.master.geography.dto.response.CityDto;
 import com.crm.travelcrm.master.geography.dto.response.DestinationDto;
 import com.crm.travelcrm.master.geography.dto.response.DestinationListResponseDTO;
+import com.crm.travelcrm.master.geography.mapper.CityMapper;
+import com.crm.travelcrm.master.geography.repository.CityRepository;
 import com.crm.travelcrm.master.geography.service.DestinationService;
+import com.crm.travelcrm.master.geography.support.GeographySupport;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -17,6 +21,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+import java.util.stream.Collectors;
+
 @Slf4j
 @RestController
 @RequestMapping("/api")
@@ -24,6 +31,8 @@ import org.springframework.web.bind.annotation.*;
 public class DestinationController {
 
     private final DestinationService destinationService;
+    private final CityRepository cityRepository;
+    private final CityMapper cityMapper;
 
     // ── GET paginated list ────────────────────────────────────────────────────
 
@@ -109,6 +118,19 @@ public class DestinationController {
         return ResponseEntity.ok(
                 ApiResponse.success("Destination updated successfully",
                         destinationService.update(destinationId, request)));
+    }
+
+    // ── GET cities by destination name — used by SightseeingService dropdown ──
+
+    @GetMapping("/destinations/cities")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<ApiResponse<List<CityDto>>> getCitiesByDestinationName(
+            @RequestParam String destination) {
+        Long tenantId = GeographySupport.currentTenantId();
+        List<CityDto> cities = cityRepository
+                .findByTenantIdAndDestination_NameIgnoreCase(tenantId, destination.trim())
+                .stream().map(cityMapper::toDto).collect(Collectors.toList());
+        return ResponseEntity.ok(ApiResponse.success("Cities fetched", cities));
     }
 
     // ── DELETE ────────────────────────────────────────────────────────────────

@@ -34,6 +34,18 @@ public class CityServiceImpl implements CityService {
 
     @Override
     @Transactional(readOnly = true)
+    public PagedApiResponse<CityDto> getAll(int page, int size, String sortBy, String sortDir) {
+        Long tenantId = GeographySupport.currentTenantId();
+        Pageable pageable = PageRequest.of(page, size, GeographySupport.buildSort(sortBy, sortDir));
+        Page<City> result = cityRepository.findAllByTenantId(tenantId, pageable);
+        return PagedApiResponse.of(
+                "Cities fetched successfully",
+                result.map(cityMapper::toDto).getContent(),
+                PaginationMeta.from(result, sortBy, sortDir));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public PagedApiResponse<CityDto> getByDestination(
             Long destinationId, int page, int size, String sortBy, String sortDir) {
 
@@ -57,6 +69,29 @@ public class CityServiceImpl implements CityService {
 
     @Override
     @Transactional
+    public CityDto createFlat(CreateCityRequest request) {
+        Long tenantId = GeographySupport.currentTenantId();
+        String name = request.getName().trim();
+
+        City city = cityMapper.toEntity(request);
+        city.setName(name);
+        city.setTenantId(tenantId);
+        // destination is null (flat create — not linked to a destination)
+        // country name is stored directly on the entity
+        if (StringUtils.hasText(request.getCountry())) {
+            city.setCountry(request.getCountry().trim());
+        }
+        if (StringUtils.hasText(request.getCode())) {
+            city.setCode(request.getCode().toUpperCase().trim());
+        }
+
+        City saved = cityRepository.save(city);
+        log.info("City created (flat) | id: {} | country: {} | tenantId: {}", saved.getId(), saved.getCountry(), tenantId);
+        return cityMapper.toDto(saved);
+    }
+
+    @Override
+    @Transactional
     public CityDto create(Long destinationId, CreateCityRequest request) {
         Long tenantId = GeographySupport.currentTenantId();
         Destination destination = resolveDestination(destinationId, tenantId);
@@ -71,6 +106,13 @@ public class CityServiceImpl implements CityService {
         city.setName(name);
         city.setDestination(destination);
         city.setTenantId(tenantId);
+        if (StringUtils.hasText(request.getCode())) {
+            city.setCode(request.getCode().toUpperCase().trim());
+        }
+        // cache country name for convenience
+        if (destination.getCountry() != null) {
+            city.setCountry(destination.getCountry().getName());
+        }
 
         City saved = cityRepository.save(city);
         log.info("City created | id: {} | destinationId: {} | tenantId: {}", saved.getId(), destinationId, tenantId);
@@ -85,12 +127,21 @@ public class CityServiceImpl implements CityService {
 
         if (StringUtils.hasText(request.getName())) {
             String name = request.getName().trim();
-            Long destinationId = city.getDestination().getId();
-            if (cityRepository.existsByTenantIdAndNameAndDestinationIdAndIdNot(
-                    tenantId, name, destinationId, cityId)) {
-                throw new BusinessException(
-                        "A city named '" + name + "' already exists for this destination", HttpStatus.CONFLICT);
+            if (city.getDestination() != null) {
+                Long destinationId = city.getDestination().getId();
+                if (cityRepository.existsByTenantIdAndNameAndDestinationIdAndIdNot(
+                        tenantId, name, destinationId, cityId)) {
+                    throw new BusinessException(
+                            "A city named '" + name + "' already exists for this destination", HttpStatus.CONFLICT);
+                }
             }
+            city.setName(name);
+        }
+        if (StringUtils.hasText(request.getCountry())) {
+            city.setCountry(request.getCountry().trim());
+        }
+        if (StringUtils.hasText(request.getCode())) {
+            city.setCode(request.getCode().toUpperCase().trim());
         }
 
         cityMapper.updateEntity(request, city);

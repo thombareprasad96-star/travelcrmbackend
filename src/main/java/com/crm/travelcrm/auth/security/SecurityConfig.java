@@ -70,6 +70,9 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers("/api/auth/**").permitAll()
+                        // SSE stream: EventSource cannot set Authorization headers,
+                        // so the JWT is passed as ?token= and validated in the controller
+                        .requestMatchers(HttpMethod.GET, "/api/notifications/stream").permitAll()
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(rateLimitFilter, UsernamePasswordAuthenticationFilter.class)
