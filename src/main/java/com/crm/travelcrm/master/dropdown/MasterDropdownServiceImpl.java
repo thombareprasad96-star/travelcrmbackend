@@ -56,10 +56,17 @@ public class MasterDropdownServiceImpl implements MasterDropdownService {
     @Transactional(readOnly = true)
     public List<DropdownDto> getDestinations(Long countryId) {
         Long tenantId = GeographySupport.currentTenantId();
-        countryRepository.findByIdAndTenantId(countryId, tenantId)
-                .orElseThrow(() -> new ResourceNotFoundException("Country not found: " + countryId));
-        return destinationRepository.findActiveByCountryIdVisibleTo(tenantId, countryId)
-                .stream()
+        // No country filter → every destination the tenant can see (the tenant
+        // works with a fixed set of destinations; no country pre-selection).
+        List<com.crm.travelcrm.master.geography.entity.Destination> destinations;
+        if (countryId != null) {
+            countryRepository.findByIdAndTenantId(countryId, tenantId)
+                    .orElseThrow(() -> new ResourceNotFoundException("Country not found: " + countryId));
+            destinations = destinationRepository.findActiveByCountryIdVisibleTo(tenantId, countryId);
+        } else {
+            destinations = destinationRepository.findAllActiveVisibleTo(tenantId);
+        }
+        return destinations.stream()
                 .map(d -> DropdownDto.builder().value(d.getId()).label(d.getName()).build())
                 .toList();
     }
@@ -71,6 +78,18 @@ public class MasterDropdownServiceImpl implements MasterDropdownService {
         destinationRepository.findByIdVisibleTo(destinationId, tenantId)
                 .orElseThrow(() -> new ResourceNotFoundException("Destination not found: " + destinationId));
         return cityRepository.findByTenantIdAndDestinationIdOrderByNameAsc(tenantId, destinationId)
+                .stream()
+                .map(c -> DropdownDto.builder().value(c.getId()).label(c.getName()).build())
+                .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<DropdownDto> getCitiesByCountry(Long countryId) {
+        Long tenantId = GeographySupport.currentTenantId();
+        countryRepository.findByIdAndTenantId(countryId, tenantId)
+                .orElseThrow(() -> new ResourceNotFoundException("Country not found: " + countryId));
+        return cityRepository.findByTenantIdAndCountryIdOrderByNameAsc(tenantId, countryId)
                 .stream()
                 .map(c -> DropdownDto.builder().value(c.getId()).label(c.getName()).build())
                 .toList();

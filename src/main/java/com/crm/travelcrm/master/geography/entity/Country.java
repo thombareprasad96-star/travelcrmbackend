@@ -10,7 +10,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Top of the geography hierarchy: {@code Country → Destination → City}.
+ * Top of the geography hierarchy.
+ *
+ * <p>A country is the parent of both destinations and cities:</p>
+ * <pre>
+ * Country ─┬─&gt; Destination ──&gt; City   (city optionally linked to a destination)
+ *          └─&gt; City                    (city directly under the country)
+ * </pre>
  *
  * <p>Extends {@link BaseTenantEntity}, so the primary key is the inherited
  * {@code id} (the spec's "countryId") and {@code publicId} is what APIs expose.
@@ -58,4 +64,13 @@ public class Country extends BaseTenantEntity {
     @BatchSize(size = 50)
     @Builder.Default
     private List<Destination> destinations = new ArrayList<>();
+
+    /**
+     * Cities that belong directly to this country (regardless of whether they are
+     * also linked to a destination). Deleting a country hard-deletes its cities.
+     */
+    @OneToMany(mappedBy = "country", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    @BatchSize(size = 50)
+    @Builder.Default
+    private List<City> cities = new ArrayList<>();
 }

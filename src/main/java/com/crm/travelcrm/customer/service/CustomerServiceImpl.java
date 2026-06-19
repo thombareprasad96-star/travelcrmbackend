@@ -23,8 +23,13 @@ import com.crm.travelcrm.customer.mapper.CustomerMapper;
 import com.crm.travelcrm.customer.repository.CustomerRepository;
 import com.crm.travelcrm.customer.specification.CustomerSpecification;
 import com.crm.travelcrm.customer.util.CustomerCodeGenerator;
+import com.crm.travelcrm.auth.entity.User;
+import com.crm.travelcrm.notification.api.NotifyEvent;
+import com.crm.travelcrm.notification.domain.enums.DeliveryChannel;
+import com.crm.travelcrm.notification.domain.enums.NotificationType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -45,6 +50,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -75,6 +81,7 @@ public class CustomerServiceImpl implements CustomerService {
     private final BookingRepository bookingRepository;
     private final CustomerMapper customerMapper;
     private final CustomerCodeGenerator customerCodeGenerator;
+    private final ApplicationEventPublisher eventPublisher;
 
     // ── Create ───────────────────────────────────────────────────────────────────
 
@@ -100,6 +107,17 @@ public class CustomerServiceImpl implements CustomerService {
 
         Customer saved = customerRepository.save(customer);
         log.info("Customer created | code: {} | publicId: {}", saved.getCustomerCode(), saved.getPublicId());
+
+        eventPublisher.publishEvent(NotifyEvent.builder()
+                .type(NotificationType.CUSTOMER_CREATED.name())
+                .tenantId(tenantId)
+                .actorUserId(currentUserId())
+                .title("New Customer: " + saved.getName())
+                .message("Customer " + saved.getName() + " (" + saved.getCustomerCode() + ") was added")
+                .referenceType("CUSTOMER")
+                .referencePublicId(saved.getPublicId())
+                .channels(Set.of(DeliveryChannel.IN_APP))
+                .build());
 
         // A brand-new customer has no bookings yet — skip the metrics query.
         return enrichWithMetrics(saved, Map.of());
@@ -386,6 +404,12 @@ public class CustomerServiceImpl implements CustomerService {
     private String currentUserEmail() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         return auth != null ? auth.getName() : "system";
+    }
+
+    /** Current tenant user's internal id, or null (e.g. SuperAdmin) — the notification actor. */
+    private Long currentUserId() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        return (auth != null && auth.getPrincipal() instanceof User u) ? u.getId() : null;
     }
 
     private String normalizePhone(String phone) {

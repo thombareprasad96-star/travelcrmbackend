@@ -68,7 +68,32 @@ public class CityController {
         return ResponseEntity.ok(ApiResponse.success("City fetched", cityService.getById(cityId)));
     }
 
-    // ── Nested endpoints (/api/v1/destinations/{id}/cities) — hierarchy-aware ──
+    // ── Nested endpoints by country (/api/v1/countries/{id}/cities) ───────────
+
+    @GetMapping("/api/v1/countries/{countryId}/cities")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<PagedApiResponse<CityDto>> getByCountry(
+            @PathVariable Long countryId,
+            @RequestParam(defaultValue = "0")         int page,
+            @RequestParam(defaultValue = "20")        int size,
+            @RequestParam(defaultValue = "createdAt") String sortBy,
+            @RequestParam(defaultValue = "desc")      String sortDir) {
+        return ResponseEntity.ok(
+                cityService.getByCountry(countryId, page, size, sortBy, sortDir));
+    }
+
+    @PostMapping("/api/v1/countries/{countryId}/cities")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    public ResponseEntity<ApiResponse<CityDto>> createUnderCountry(
+            @PathVariable Long countryId,
+            @Valid @RequestBody CreateCityRequest request) {
+        request.setCountryId(countryId);   // path wins over body
+        CityDto created = cityService.createFlat(request);
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiResponse.success("City created successfully", created, 201));
+    }
+
+    // ── Nested endpoints by destination (/api/v1/destinations/{id}/cities) ────
 
     @GetMapping("/api/v1/destinations/{destinationId}/cities")
     @PreAuthorize("isAuthenticated()")

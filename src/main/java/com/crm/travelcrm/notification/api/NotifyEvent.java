@@ -43,7 +43,10 @@ public class NotifyEvent {
     /** Internal user IDs (Long, not publicId). One Notification row created per entry. */
     private final List<Long> recipientUserIds;
 
-    /** Who triggered the event (optional). */
+    /**
+     * Who triggered the event (optional). Excluded from delivery so a user is never
+     * notified about their own action (ACTOR RULE).
+     */
     private final Long actorUserId;
 
     private final String title;

@@ -37,6 +37,7 @@ public class VehicleEntity {
 
     // null = global vehicle (platform-managed, visible to all tenants);
     // non-null = owned by that tenant only.
+    // No DB-level FK — cross-aggregate reference to tenants.id, enforced at the application layer.
     @Column(name = "tenant_id")
     private Long tenantId;
 

@@ -11,6 +11,7 @@ import com.crm.travelcrm.master.geography.dto.response.DestinationListResponseDT
 import com.crm.travelcrm.master.geography.entity.Country;
 import com.crm.travelcrm.master.geography.entity.Destination;
 import com.crm.travelcrm.master.geography.mapper.DestinationMapper;
+import com.crm.travelcrm.master.geography.repository.CityRepository;
 import com.crm.travelcrm.master.geography.repository.CountryRepository;
 import com.crm.travelcrm.master.geography.repository.DestinationRepository;
 import com.crm.travelcrm.master.geography.support.GeographySupport;
@@ -31,6 +32,7 @@ public class DestinationServiceImpl implements DestinationService {
 
     private final DestinationRepository destinationRepository;
     private final CountryRepository     countryRepository;
+    private final CityRepository        cityRepository;      // to detach cities on destination delete
     private final DestinationMapper     destinationMapper;   // injected Spring bean — NOT static
 
     // ── List ─────────────────────────────────────────────────────────────────
@@ -163,8 +165,12 @@ public class DestinationServiceImpl implements DestinationService {
     @Transactional
     public void delete(Long destinationId) {
         Destination destination = findOrThrow(destinationId);
-        destinationRepository.delete(destination);   // cascades to cities + their children
-        log.info("Destination deleted | id={} | tenantId={}", destinationId, destination.getTenantId());
+        // Cities are owned by the country, not the destination — detach (set
+        // destination_id = null) rather than delete them, then remove the destination.
+        int detached = cityRepository.detachFromDestination(destination.getTenantId(), destinationId);
+        destinationRepository.delete(destination);
+        log.info("Destination deleted | id={} | tenantId={} | citiesDetached={}",
+                destinationId, destination.getTenantId(), detached);
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────

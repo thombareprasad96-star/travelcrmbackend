@@ -20,7 +20,15 @@ import java.util.UUID;
  * business module are stored without modifying this entity.
  */
 @Entity
-@Table(name = "notifications")
+@Table(
+        name = "notifications",
+        indexes = {
+                // Feed/badge queries filter on recipient + status + soft-delete, newest first.
+                @Index(name = "idx_notification_recipient",
+                        columnList = "recipient_user_id, status, deleted_at"),
+                @Index(name = "idx_notification_created", columnList = "created_at")
+        }
+)
 @Getter
 @Setter
 @NoArgsConstructor
@@ -28,7 +36,8 @@ import java.util.UUID;
 @SuperBuilder
 public class Notification extends BaseTenantEntity {
 
-    /** Internal FK to users.id — never exposed in API responses. */
+    /** Internal reference to users.id — never exposed in API responses. */
+    // No DB-level FK — cross-aggregate reference to users.id, enforced at the application layer.
     @Column(name = "recipient_user_id", nullable = false, updatable = false)
     private Long recipientUserId;
 

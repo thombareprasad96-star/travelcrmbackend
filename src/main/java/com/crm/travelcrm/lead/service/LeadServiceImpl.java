@@ -86,6 +86,20 @@ public class LeadServiceImpl implements LeadService {
 
     @Override
     @Transactional(readOnly = true)
+    public LeadResponseDto getLeadById(UUID publicId) {
+        Long tenantId = currentTenantId();
+
+        // Tenant-scoped fetch by publicId — never expose the internal Long id
+        Lead lead = leadRepository
+                .findByPublicIdAndTenantIdAndDeletedAtIsNull(publicId, tenantId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Lead not found: " + publicId));
+
+        return leadMapper.toResponse(lead);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public LeadResponseDto searchLead(String keyword) {
         Long tenantId = currentTenantId();
         Lead lead;
@@ -170,6 +184,16 @@ public class LeadServiceImpl implements LeadService {
 
         Lead updated = leadRepository.save(lead);
         log.info("Lead updated | publicId: {} | tenantId: {}", publicId, tenantId);
+        eventPublisher.publishEvent(NotifyEvent.builder()
+                .type("LEAD_UPDATED")
+                .tenantId(tenantId)
+                .actorUserId(currentUserId())
+                .title("Lead Updated: " + updated.getCustomerName())
+                .message("Lead " + updated.getCustomerName() + " was updated")
+                .referenceType("LEAD")
+                .referencePublicId(updated.getPublicId())
+                .channels(Set.of(DeliveryChannel.IN_APP))
+                .build());
         return leadMapper.toResponse(updated);
     }
 
@@ -273,6 +297,12 @@ public class LeadServiceImpl implements LeadService {
         return auth != null ? auth.getName() : "system";
     }
 
+    /** Current tenant user's internal id, or null (e.g. SuperAdmin) — the notification actor. */
+    private Long currentUserId() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        return (auth != null && auth.getPrincipal() instanceof User u) ? u.getId() : null;
+    }
+
     /**
      * @param excludePublicId pass null on create, pass lead's publicId on update
      *                        so a lead doesn't conflict with itself
@@ -324,6 +354,7 @@ public class LeadServiceImpl implements LeadService {
                 NotifyEvent.builder()
                         .type("LEAD_CREATED")
                         .tenantId(tenantId)
+                        .actorUserId(currentUserId())
                         .recipientUserIds(recipientIds)
                         .title("New Lead: " + lead.getCustomerName())
                         .message(lead.getLeadSource() + " lead from " + lead.getDepartCity()

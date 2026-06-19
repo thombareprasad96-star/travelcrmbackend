@@ -12,6 +12,7 @@ import java.util.UUID;
 public interface LeadService {
     LeadResponseDto createLead(CreateLeadRequestDto request);
     Page<LeadResponseDto> getAllLeads(int page, int size, String sortBy, String sortDir);
+    LeadResponseDto getLeadById(UUID publicId);                                // ← UUID
     LeadResponseDto searchLead(String keyword);
     LeadResponseDto updateLead(UUID publicId, CreateLeadRequestDto request);  // ← UUID
     void deleteLead(UUID publicId);                                            // ← UUID

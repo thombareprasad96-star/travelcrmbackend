@@ -26,6 +26,10 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
     Optional<Notification> findByPublicIdAndRecipientUserIdAndDeletedAtIsNull(
             UUID publicId, Long recipientUserId);
 
+    /** Ownership-guarded fetch by numeric id — prevents cross-user reads. */
+    Optional<Notification> findByIdAndRecipientUserIdAndDeletedAtIsNull(
+            Long id, Long recipientUserId);
+
     long countByRecipientUserIdAndStatusAndDeletedAtIsNull(
             Long recipientUserId, NotificationStatus status);
 

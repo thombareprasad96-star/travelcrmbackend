@@ -48,6 +48,15 @@ public class LeadController {
         return ResponseEntity.ok(ApiResponse.success("Lead found", response));
     }
 
+    /** Fetch a single lead by its publicId (UUID). */
+    @GetMapping("/{publicId}")
+    public ResponseEntity<ApiResponse<LeadResponseDto>> getLeadById(
+            @PathVariable UUID publicId) {
+
+        LeadResponseDto response = leadService.getLeadById(publicId);
+        return ResponseEntity.ok(ApiResponse.success("Lead fetched successfully", response));
+    }
+
     @GetMapping
     public ResponseEntity<PagedApiResponse<LeadResponseDto>> getAllLeads(
             @RequestParam(defaultValue = "0")         int page,

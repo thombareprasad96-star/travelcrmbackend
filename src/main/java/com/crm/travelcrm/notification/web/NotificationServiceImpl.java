@@ -54,18 +54,34 @@ public class NotificationServiceImpl implements NotificationService {
 
     @Override
     @Transactional
-    public NotificationResponseDTO markRead(UUID publicId) {
+    public NotificationResponseDTO markRead(Long id) {
         Long userId = currentUserId();
         Notification n = notificationRepository
-                .findByPublicIdAndRecipientUserIdAndDeletedAtIsNull(publicId, userId)
+                .findByIdAndRecipientUserIdAndDeletedAtIsNull(id, userId)
                 .orElseThrow(() -> new ResourceNotFoundException(
-                        "Notification not found: " + publicId));
+                        "Notification not found: " + id));
         if (n.getStatus() == NotificationStatus.UNREAD) {
             n.markRead();
             notificationRepository.save(n);
-            log.debug("Notification {} marked READ for user {}", publicId, userId);
+            log.debug("Notification {} marked READ for user {}", id, userId);
         }
         return NotificationResponseDTO.from(n);
+    }
+
+    // ── Soft delete ───────────────────────────────────────────────────────────
+
+    @Override
+    @Transactional
+    public void delete(Long id) {
+        Long userId = currentUserId();
+        Notification n = notificationRepository
+                .findByIdAndRecipientUserIdAndDeletedAtIsNull(id, userId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Notification not found: " + id));
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        n.softDelete(auth != null ? auth.getName() : "system");
+        notificationRepository.save(n);
+        log.debug("Notification {} soft-deleted for user {}", id, userId);
     }
 
     // ── Mark all read ─────────────────────────────────────────────────────────

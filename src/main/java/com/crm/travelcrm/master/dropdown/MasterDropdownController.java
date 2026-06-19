@@ -54,16 +54,38 @@ public class MasterDropdownController {
         return ok("Countries", masterDropdownService.getCountries());
     }
 
+    /**
+     * Destinations for a dropdown.
+     * <ul>
+     *   <li>{@code ?countryId=} → active destinations under that country</li>
+     *   <li>no param           → ALL active destinations visible to the tenant
+     *       (used by the lead itinerary, which needs no country pre-filter)</li>
+     * </ul>
+     */
     @GetMapping("/destinations")
     public ResponseEntity<ApiResponse<List<DropdownDto>>> getDestinations(
-            @RequestParam Long countryId) {
+            @RequestParam(required = false) Long countryId) {
         return ok("Destinations", masterDropdownService.getDestinations(countryId));
     }
 
+    /**
+     * Cities for a dropdown. Supply exactly one filter:
+     * <ul>
+     *   <li>{@code ?destinationId=} → cities linked to that destination</li>
+     *   <li>{@code ?countryId=}     → cities belonging directly to that country</li>
+     * </ul>
+     */
     @GetMapping("/cities")
     public ResponseEntity<ApiResponse<List<DropdownDto>>> getCities(
-            @RequestParam Long destinationId) {
-        return ok("Cities", masterDropdownService.getCities(destinationId));
+            @RequestParam(required = false) Long destinationId,
+            @RequestParam(required = false) Long countryId) {
+        if (destinationId != null) {
+            return ok("Cities", masterDropdownService.getCities(destinationId));
+        }
+        if (countryId != null) {
+            return ok("Cities", masterDropdownService.getCitiesByCountry(countryId));
+        }
+        throw new IllegalArgumentException("Provide either destinationId or countryId");
     }
 
     // ── Hotel hierarchy ───────────────────────────────────────────────────────

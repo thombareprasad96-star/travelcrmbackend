@@ -15,13 +15,18 @@ import com.crm.travelcrm.booking.mapper.BookingMapper;
 import com.crm.travelcrm.booking.repository.BookingRepository;
 import com.crm.travelcrm.booking.specification.BookingSpecification;
 import com.crm.travelcrm.booking.util.BookingCodeGenerator;
+import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.dto.PagedApiResponse;
 import com.crm.travelcrm.common.dto.PaginationMeta;
 import com.crm.travelcrm.common.exception.BusinessException;
+import com.crm.travelcrm.notification.api.NotifyEvent;
+import com.crm.travelcrm.notification.domain.enums.DeliveryChannel;
+import com.crm.travelcrm.notification.domain.enums.NotificationType;
 import lombok.RequiredArgsConstructor;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -36,6 +41,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -50,6 +56,7 @@ public class BookingServiceImpl implements BookingService {
     private final BookingRepository    bookingRepository;
     private final BookingMapper        bookingMapper;
     private final BookingCodeGenerator bookingCodeGenerator;
+    private final ApplicationEventPublisher eventPublisher;
 
     // ── Create ───────────────────────────────────────────────────────────────
 
@@ -69,6 +76,9 @@ public class BookingServiceImpl implements BookingService {
 
         Booking saved = bookingRepository.save(booking);
         log.info("Booking created successfully with code: {}", saved.getBookingCode());
+        publishBookingEvent(NotificationType.BOOKING_CREATED, saved,
+                "New Booking: " + saved.getBookingCode(),
+                "A new booking " + saved.getBookingCode() + " was created");
         return bookingMapper.toResponse(saved);
     }
 
@@ -179,7 +189,11 @@ public class BookingServiceImpl implements BookingService {
 
         Booking booking = findActiveByPublicId(publicId);
         booking.setStatus(request.getStatus());
-        return bookingMapper.toResponse(bookingRepository.save(booking));
+        Booking saved = bookingRepository.save(booking);
+        publishBookingEvent(statusEventType(saved.getStatus()), saved,
+                "Booking " + saved.getStatus() + ": " + saved.getBookingCode(),
+                "Booking " + saved.getBookingCode() + " status changed to " + saved.getStatus());
+        return bookingMapper.toResponse(saved);
     }
 
     // ── Update Payment ───────────────────────────────────────────────────────
@@ -204,7 +218,12 @@ public class BookingServiceImpl implements BookingService {
         // ✅ REMOVED: setPendingAmount() — @Transient computed via entity getter
         booking.setPaymentStatus(derivePaymentStatus(newPaidAmount, booking.getTotalPayable()));
 
-        return bookingMapper.toResponse(bookingRepository.save(booking));
+        Booking saved = bookingRepository.save(booking);
+        publishBookingEvent(NotificationType.BOOKING_PAYMENT_UPDATED, saved,
+                "Payment updated: " + saved.getBookingCode(),
+                "₹" + request.getAmount() + " received for booking " + saved.getBookingCode()
+                        + " (" + saved.getPaymentStatus() + ")");
+        return bookingMapper.toResponse(saved);
     }
     // ── Soft Delete ──────────────────────────────────────────────────────────
 
@@ -373,6 +392,34 @@ public class BookingServiceImpl implements BookingService {
     private String currentUserEmail() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         return auth != null ? auth.getName() : "system";
+    }
+
+    /** Current tenant user's internal id, or null (e.g. SuperAdmin) — used as the notification actor. */
+    private Long currentUserId() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        return (auth != null && auth.getPrincipal() instanceof User u) ? u.getId() : null;
+    }
+
+    private static NotificationType statusEventType(BookingStatus status) {
+        return switch (status) {
+            case CONFIRMED -> NotificationType.BOOKING_CONFIRMED;
+            case CANCELLED -> NotificationType.BOOKING_CANCELLED;
+            default        -> NotificationType.BOOKING_STATUS_CHANGED;
+        };
+    }
+
+    /** Fan-out to tenant admins (recipients resolved in the notification module), actor excluded. */
+    private void publishBookingEvent(NotificationType type, Booking booking, String title, String message) {
+        eventPublisher.publishEvent(NotifyEvent.builder()
+                .type(type.name())
+                .tenantId(booking.getTenantId())
+                .actorUserId(currentUserId())
+                .title(title)
+                .message(message)
+                .referenceType("BOOKING")
+                .referencePublicId(booking.getPublicId())
+                .channels(Set.of(DeliveryChannel.IN_APP))
+                .build());
     }
 
     private void calculateAndApplyFinancials(Booking booking,

@@ -41,18 +41,21 @@ public class Booking extends BaseTenantEntity {
 
     // ───────────────── Relationships ─────────────────
 
+    // No DB-level FK — cross-aggregate reference to customers.id, enforced at the application layer.
     @Column(name = "customer_id", nullable = false)
     private Long customerId;
 
     @Column(name = "customer_name_snapshot", nullable = false, length = 255)
     private String customerNameSnapshot;
 
+    // No DB-level FK — cross-aggregate reference to destination_master.destination_id, enforced at the application layer.
     @Column(name = "destination_id")
     private Long destinationId;
 
     @Column(name = "destination_snapshot", nullable = false, length = 255)
     private String destinationSnapshot;
 
+    // No DB-level FK — cross-aggregate reference to leads.id, enforced at the application layer.
     @Column(name = "lead_id")
     private Long leadId;
 

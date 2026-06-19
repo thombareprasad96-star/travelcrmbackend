@@ -4,6 +4,7 @@ import com.crm.travelcrm.notification.api.NotificationChannel;
 import com.crm.travelcrm.notification.api.NotifyEvent;
 import com.crm.travelcrm.notification.domain.entity.Notification;
 import com.crm.travelcrm.notification.domain.enums.DeliveryChannel;
+import com.crm.travelcrm.notification.infrastructure.TenantAdminResolver;
 import com.crm.travelcrm.notification.infrastructure.repository.NotificationRepository;
 import com.crm.travelcrm.notification.infrastructure.sse.SseEmitterRegistry;
 import com.crm.travelcrm.notification.web.dto.NotificationResponseDTO;
@@ -12,6 +13,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
 
 /**
  * Persists the notification to the DB (in-app feed) and immediately pushes
@@ -31,6 +34,7 @@ public class InAppNotificationChannel implements NotificationChannel {
 
     private final NotificationRepository notificationRepository;
     private final SseEmitterRegistry sseEmitterRegistry;
+    private final TenantAdminResolver tenantAdminResolver;
 
     @Override
     public DeliveryChannel channelType() {
@@ -40,7 +44,16 @@ public class InAppNotificationChannel implements NotificationChannel {
     @Override
     @Transactional(propagation = Propagation.REQUIRED)
     public void send(NotifyEvent event, Notification ignored) {
-        for (Long recipientId : event.getRecipientUserIds()) {
+        // Explicit recipients win; otherwise fan out to the tenant's admins (ACTOR excluded below).
+        List<Long> recipients = (event.getRecipientUserIds() != null && !event.getRecipientUserIds().isEmpty())
+                ? event.getRecipientUserIds()
+                : tenantAdminResolver.resolveAdmins(event.getTenantId(), event.getActorUserId());
+
+        for (Long recipientId : recipients) {
+            // ACTOR RULE — never notify a user about their own action.
+            if (event.getActorUserId() != null && event.getActorUserId().equals(recipientId)) {
+                continue;
+            }
             Notification notification = Notification.builder()
                     .recipientUserId(recipientId)
                     .type(event.getType())

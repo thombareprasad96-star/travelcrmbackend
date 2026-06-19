@@ -8,8 +8,17 @@ import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 /**
- * Body for {@code POST /api/v1/destinations/{destinationId}/cities}.
- * The parent destination comes from the path, not the body.
+ * Body for creating a city.
+ *
+ * <p>Parent resolution:</p>
+ * <ul>
+ *   <li><b>Country (required)</b> — supply {@link #countryId} (preferred) or
+ *       {@link #country} (name). On the nested route
+ *       {@code POST /api/v1/destinations/{destinationId}/cities} the country is
+ *       derived from the destination instead.</li>
+ *   <li><b>Destination (optional)</b> — supply {@link #destinationId} to link the
+ *       city to a destination. Its country must match the resolved country.</li>
+ * </ul>
  */
 @Data
 public class CreateCityRequest {
@@ -18,9 +27,15 @@ public class CreateCityRequest {
     @Size(max = 120, message = "Name must not exceed 120 characters")
     private String name;
 
-    /** Country name — used when creating city via the flat /api/cities endpoint. */
-    @Size(max = 100)
+    /** Country id — preferred way to set the city's required parent country. */
+    private Long countryId;
+
+    /** Country name — alternative to {@link #countryId} (resolved by name). */
+    @Size(max = 120)
     private String country;
+
+    /** Optional destination link. Its country must equal the resolved country. */
+    private Long destinationId;
 
     /** Airport/city code (e.g. BOM). */
     @Size(max = 10)

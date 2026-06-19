@@ -22,6 +22,8 @@ import org.hibernate.annotations.ParamDef;
 @Filter(name = "tenantFilter", condition = "tenant_id = :tenantId")
 public abstract class BaseTenantEntity extends BaseEntity {
 
+    // No DB-level FK to tenants.id — tenant isolation is enforced at the application layer
+    // (TenantEntityListener auto-stamp + Hibernate @Filter("tenantFilter")), not by a constraint.
     @Column(name = "tenant_id", nullable = false, updatable = false)
     private Long tenantId;
 }

@@ -131,6 +131,26 @@ Cruise      (flat, tenant-scoped)
 Addon       (flat, tenant-scoped, has active boolean)
 ```
 
+### Vendor entity — split across secondary tables
+
+`Vendor` (table `vendors`, tenant-scoped) maps one entity across **three** tables via
+`@SecondaryTable`, keyed 1:1 on the vendor PK (`id`). The Java API is flat — every getter
+(`vendor.getBankName()`, `vendor.getTotalBusiness()`, the `@Transient getOutstanding()`)
+reads through transparently, so mappers/services/DTO/CSV treat it as one object:
+
+| Table | Columns |
+|-------|---------|
+| `vendors` (primary) | core profile, contact, address, status, ratings, commission, notes |
+| `vendor_bank_details` (`vendor_id` FK → `vendors.id`) | `bank_name`, `account_name`, `account_number`, `ifsc_code`, `upi_id`, `gst_number`, `pan_number` |
+| `vendor_financials` (`vendor_id` FK → `vendors.id`) | `credit_limit`, `opening_balance`, `total_business`, `total_paid` |
+
+Notes:
+- Loading a `Vendor` joins both secondary tables (Hibernate fetches the whole entity). For
+  large vendor **list** views that only need core fields, use a projection/DTO query instead
+  of loading the full entity.
+- To add a bank/financial column, put it on the `Vendor` field with
+  `@Column(name = "...", table = "vendor_bank_details")` (or `vendor_financials`).
+
 ### Key field name decisions (match frontend exactly)
 
 | Entity | Field stored as | Why |

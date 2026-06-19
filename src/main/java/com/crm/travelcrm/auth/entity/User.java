@@ -31,6 +31,7 @@ public class User extends BaseEntity implements UserDetails {
 
     // NULL tenant_id = SUPERADMIN (platform-level user, belongs to no tenant)
     // Non-null tenant_id = tenant user (ADMIN, MANAGER, AGENT)
+    // No DB-level FK — cross-aggregate reference to tenants.id, enforced at the application layer.
     @Column(name = "tenant_id")
     private Long tenantId;
 

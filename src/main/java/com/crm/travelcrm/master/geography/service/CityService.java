@@ -10,6 +10,10 @@ public interface CityService {
     /** Flat list — all cities for the current tenant. */
     PagedApiResponse<CityDto> getAll(int page, int size, String sortBy, String sortDir);
 
+    /** Cities belonging to a country (the city's required parent). */
+    PagedApiResponse<CityDto> getByCountry(
+            Long countryId, int page, int size, String sortBy, String sortDir);
+
     PagedApiResponse<CityDto> getByDestination(
             Long destinationId, int page, int size, String sortBy, String sortDir);
 

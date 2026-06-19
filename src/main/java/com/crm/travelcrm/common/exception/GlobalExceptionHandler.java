@@ -18,7 +18,9 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 
+import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
@@ -113,6 +115,20 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handleIllegalArgument(IllegalArgumentException ex) {
         log.warn("Illegal argument: {}", ex.getMessage());
         return build(HttpStatus.BAD_REQUEST, "BAD_REQUEST", ex.getMessage());
+    }
+
+    /**
+     * Client / SSE connection dropped mid-write (e.g. a browser tab with an open
+     * {@code GET /api/notifications/stream} was closed). The response is already
+     * committed — often as {@code text/event-stream} — so we can neither write an
+     * error body nor recover. Swallow it with a debug log instead of letting it
+     * fall through to {@link #handleGenericException} (which would try to serialize
+     * an {@link ErrorResponse} into the committed stream and raise a secondary
+     * {@code HttpMessageNotWritableException}).
+     */
+    @ExceptionHandler({ IOException.class, AsyncRequestNotUsableException.class })
+    public void handleClientDisconnect(Exception ex) {
+        log.debug("Client connection aborted: {}", ex.getMessage());
     }
 
     @ExceptionHandler(Exception.class)

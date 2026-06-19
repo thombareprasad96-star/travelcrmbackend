@@ -19,6 +19,19 @@ import java.util.List;
                 @Index(name = "idx_vendor_type",    columnList = "tenant_id,vendor_type"),
         }
 )
+// Wide-table split: rarely-queried bank + financial columns live in secondary tables,
+// keyed 1:1 on the vendor PK. The Java API is unchanged (getters read through transparently),
+// so no service/mapper/DTO/CSV code changes. Primary `vendors` table drops from ~45 to ~34 cols.
+@SecondaryTables({
+        @SecondaryTable(
+                name = "vendor_bank_details",
+                pkJoinColumns = @PrimaryKeyJoinColumn(name = "vendor_id", referencedColumnName = "id"),
+                foreignKey = @ForeignKey(name = "fk_vendor_bank_vendor")),
+        @SecondaryTable(
+                name = "vendor_financials",
+                pkJoinColumns = @PrimaryKeyJoinColumn(name = "vendor_id", referencedColumnName = "id"),
+                foreignKey = @ForeignKey(name = "fk_vendor_financials_vendor"))
+})
 @Getter @Setter @NoArgsConstructor @AllArgsConstructor @SuperBuilder
 public class Vendor extends BaseTenantEntity {
 
@@ -28,7 +41,15 @@ public class Vendor extends BaseTenantEntity {
     @Column(name = "vendor_name", nullable = false, length = 200)
     private String vendorName;
 
-    @Column(name = "vendor_type", length = 50)
+
+
+
+
+
+
+
+
+
     private String vendorType;
 
     @Column(name = "contact_person", length = 150)
@@ -99,41 +120,41 @@ public class Vendor extends BaseTenantEntity {
     @Column(name = "credit_period", length = 20)
     private String creditPeriod;
 
-    @Column(name = "credit_limit", precision = 14, scale = 2)
+    @Column(name = "credit_limit", precision = 14, scale = 2, table = "vendor_financials")
     @Builder.Default
     private BigDecimal creditLimit = BigDecimal.ZERO;
 
-    @Column(name = "opening_balance", precision = 14, scale = 2)
+    @Column(name = "opening_balance", precision = 14, scale = 2, table = "vendor_financials")
     @Builder.Default
     private BigDecimal openingBalance = BigDecimal.ZERO;
 
-    @Column(name = "total_business", precision = 14, scale = 2)
+    @Column(name = "total_business", precision = 14, scale = 2, table = "vendor_financials")
     @Builder.Default
     private BigDecimal totalBusiness = BigDecimal.ZERO;
 
-    @Column(name = "total_paid", precision = 14, scale = 2)
+    @Column(name = "total_paid", precision = 14, scale = 2, table = "vendor_financials")
     @Builder.Default
     private BigDecimal totalPaid = BigDecimal.ZERO;
 
-    @Column(name = "bank_name", length = 100)
+    @Column(name = "bank_name", length = 100, table = "vendor_bank_details")
     private String bankName;
 
-    @Column(name = "account_name", length = 150)
+    @Column(name = "account_name", length = 150, table = "vendor_bank_details")
     private String accountName;
 
-    @Column(name = "account_number", length = 50)
+    @Column(name = "account_number", length = 50, table = "vendor_bank_details")
     private String accountNumber;
 
-    @Column(name = "ifsc_code", length = 20)
+    @Column(name = "ifsc_code", length = 20, table = "vendor_bank_details")
     private String ifscCode;
 
-    @Column(name = "upi_id", length = 100)
+    @Column(name = "upi_id", length = 100, table = "vendor_bank_details")
     private String upiId;
 
-    @Column(name = "gst_number", length = 20)
+    @Column(name = "gst_number", length = 20, table = "vendor_bank_details")
     private String gstNumber;
 
-    @Column(name = "pan_number", length = 12)
+    @Column(name = "pan_number", length = 12, table = "vendor_bank_details")
     private String panNumber;
 
     @Column(name = "rating")

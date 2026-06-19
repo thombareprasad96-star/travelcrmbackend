@@ -29,12 +29,11 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 @SuperBuilder
+// PK is the single inherited BaseEntity.id (@Id @GeneratedValue IDENTITY); the override
+// only renames its column to the existing "destination_id" so the schema is unchanged.
+// (Removed the duplicate local @Id field that shadowed the inherited identifier.)
+@AttributeOverride(name = "id", column = @Column(name = "destination_id"))
 public class Destination extends BaseTenantEntity {
-
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    @Column(name = "destination_id")
-    private long id;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(
@@ -85,12 +84,14 @@ public class Destination extends BaseTenantEntity {
     @Builder.Default
     private boolean global = false;
 
-    @OneToMany(
-            mappedBy = "destination",
-            cascade = CascadeType.ALL,
-            orphanRemoval = true,
-            fetch = FetchType.LAZY
-    )
+    /**
+     * Cities optionally linked to this destination. Cities are owned by the
+     * {@link Country}, not the destination — so this association is a plain inverse
+     * with no cascade/orphan-removal. Deleting a destination <b>detaches</b> its
+     * cities (sets {@code destination_id = null}); it never deletes them
+     * (see {@code DestinationServiceImpl#delete}).
+     */
+    @OneToMany(mappedBy = "destination", fetch = FetchType.LAZY)
     @BatchSize(size = 50)
     @Builder.Default
     private List<City> cities = new ArrayList<>();

@@ -1,6 +1,7 @@
 package com.crm.travelcrm.notification.infrastructure.sse;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -68,5 +69,22 @@ public class SseEmitterRegistry {
 
     public int activeConnections() {
         return registry.values().stream().mapToInt(Set::size).sum();
+    }
+
+    /**
+     * Sends an SSE comment ({@code :keep-alive}) to every emitter every 25 seconds so proxies
+     * and load balancers don't drop idle connections. Dead emitters are pruned on failure.
+     */
+    @Scheduled(fixedRate = 25_000)
+    public void heartbeat() {
+        registry.forEach((userId, emitters) -> {
+            for (SseEmitter emitter : emitters) {
+                try {
+                    emitter.send(SseEmitter.event().comment("keep-alive"));
+                } catch (Exception e) {
+                    deregister(userId, emitter);
+                }
+            }
+        });
     }
 }

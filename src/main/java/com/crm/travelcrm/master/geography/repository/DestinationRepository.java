@@ -48,6 +48,21 @@ public interface DestinationRepository extends JpaRepository<Destination, Long> 
             @Param("tenantId") Long tenantId,
             @Param("countryId") Long countryId);
 
+    /**
+     * Dropdown: ALL active destinations visible to this tenant, across every
+     * country. Used by flows where a tenant works with a fixed handful of
+     * destinations and there is no country pre-filter (e.g. the lead itinerary
+     * builder). Includes platform-managed global destinations and the tenant's
+     * own; a null/blank status is treated as active. Alphabetically ordered.
+     */
+    @Query("""
+            SELECT d FROM Destination d
+            WHERE (d.global = true OR d.tenantId = :tenantId)
+              AND (d.status IS NULL OR LOWER(d.status) = 'active')
+            ORDER BY d.name ASC
+            """)
+    List<Destination> findAllActiveVisibleTo(@Param("tenantId") Long tenantId);
+
     /** Used to validate that a destination is visible to the requesting tenant. */
     @Query("""
             SELECT d FROM Destination d

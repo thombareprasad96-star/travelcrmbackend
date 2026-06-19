@@ -40,6 +40,9 @@ public interface MasterDropdownService {
     /** Cities under the given destination. */
     List<DropdownDto> getCities(Long destinationId);
 
+    /** Cities belonging directly to the given country. */
+    List<DropdownDto> getCitiesByCountry(Long countryId);
+
     // ── Hotel hierarchy ───────────────────────────────────────────────────────
 
     /**

@@ -13,8 +13,15 @@ public class UpdateCityRequest {
     @Size(max = 120, message = "Name must not exceed 120 characters")
     private String name;
 
-    @Size(max = 100)
+    /** Re-assign the city to a different country (optional). */
+    private Long countryId;
+
+    /** Country name — alternative to {@link #countryId}. */
+    @Size(max = 120)
     private String country;
+
+    /** Re-link / link the city to a destination (optional). Must match the country. */
+    private Long destinationId;
 
     @Size(max = 10)
     private String code;

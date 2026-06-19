@@ -4,6 +4,10 @@ import com.crm.travelcrm.common.dto.PagedApiResponse;
 import com.crm.travelcrm.common.dto.PaginationMeta;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.common.context.TenantContext;
+import com.crm.travelcrm.auth.entity.User;
+import com.crm.travelcrm.notification.api.NotifyEvent;
+import com.crm.travelcrm.notification.domain.enums.DeliveryChannel;
+import com.crm.travelcrm.notification.domain.enums.NotificationType;
 import com.crm.travelcrm.vendor.dto.request.*;
 import com.crm.travelcrm.vendor.dto.response.VendorResponseDTO;
 import com.crm.travelcrm.vendor.dto.response.VendorStatsDTO;
@@ -15,11 +19,14 @@ import com.crm.travelcrm.vendor.util.VendorCodeGenerator;
 import lombok.RequiredArgsConstructor;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,6 +36,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -45,6 +53,7 @@ public class VendorServiceImpl implements VendorService {
     private final VendorRepository vendorRepository;
     private final VendorCodeGenerator vendorCodeGenerator;
     private final VendorMapper vendorMapper;
+    private final ApplicationEventPublisher eventPublisher;
 
     // ── GET ALL ───────────────────────────────────────────────────────────────
 
@@ -116,6 +125,17 @@ public class VendorServiceImpl implements VendorService {
 
         Vendor saved = vendorRepository.save(vendor);
         log.info("Vendor created with code: {} for tenantId: {}", saved.getVendorCode(), tenantId);
+
+        eventPublisher.publishEvent(NotifyEvent.builder()
+                .type(NotificationType.VENDOR_ADDED.name())
+                .tenantId(tenantId)
+                .actorUserId(currentUserId())
+                .title("New Vendor: " + saved.getVendorName())
+                .message("Vendor " + saved.getVendorName() + " (" + saved.getVendorCode() + ") was added")
+                .referenceType("VENDOR")
+                .referencePublicId(saved.getPublicId())
+                .channels(Set.of(DeliveryChannel.IN_APP))
+                .build());
 
         return vendorMapper.toResponse(saved);
     }
@@ -350,6 +370,12 @@ public class VendorServiceImpl implements VendorService {
         return vendorRepository.findById(id)
                 .filter(v -> v.getTenantId().equals(tenantId) && v.getDeletedAt() == null)
                 .orElseThrow(() -> new ResourceNotFoundException("Vendor not found: " + id));
+    }
+
+    /** Current tenant user's internal id, or null (e.g. SuperAdmin) — the notification actor. */
+    private Long currentUserId() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        return (auth != null && auth.getPrincipal() instanceof User u) ? u.getId() : null;
     }
 
     private String escape(String val) {

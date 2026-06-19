@@ -14,6 +14,7 @@ import java.util.UUID;
 @Builder
 public class NotificationResponseDTO {
 
+    private Long id;
     private UUID publicId;
     private String type;
     private String title;
@@ -26,6 +27,7 @@ public class NotificationResponseDTO {
 
     public static NotificationResponseDTO from(Notification n) {
         return NotificationResponseDTO.builder()
+                .id(n.getId())
                 .publicId(n.getPublicId())
                 .type(n.getType())
                 .title(n.getTitle())

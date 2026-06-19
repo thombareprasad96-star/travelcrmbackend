@@ -20,7 +20,8 @@ import java.util.List;
         name = "leads",
         indexes = {
                 @Index(name = "idx_lead_email", columnList = "email"),
-                @Index(name = "idx_lead_phone", columnList = "phone")
+                @Index(name = "idx_lead_phone", columnList = "phone"),
+                @Index(name = "idx_leads_assigned_user_id", columnList = "assigned_user_id")
         },
         uniqueConstraints = {
                 @UniqueConstraint(
