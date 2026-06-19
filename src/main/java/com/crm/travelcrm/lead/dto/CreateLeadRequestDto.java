@@ -9,6 +9,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 import lombok.Data;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
@@ -50,6 +51,11 @@ public class CreateLeadRequestDto {
     private LocalDate birthDate;
     @JsonFormat(pattern = "yyyy-MM-dd")
     private LocalDate travelDate;
+
+    // Estimated deal value in INR. Frontend Kanban sends this as `value`.
+    @DecimalMin(value = "0.0", message = "Estimated value cannot be negative")
+    @Digits(integer = 13, fraction = 2, message = "Estimated value is invalid")
+    private BigDecimal estimatedValue;
 
     @Size(max = 100)
     private String departCountry;

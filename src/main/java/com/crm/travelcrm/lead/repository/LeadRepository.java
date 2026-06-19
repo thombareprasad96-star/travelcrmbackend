@@ -23,6 +23,13 @@ public interface LeadRepository extends JpaRepository<Lead, Long> {
     Page<Lead> findAllByTenantIdAndDeletedAtIsNull(
             Long tenantId, Pageable pageable);
 
+    /**
+     * Full unpaged fetch for the Kanban board — every live lead of the tenant,
+     * newest first, with the assignee eagerly joined to avoid N+1.
+     */
+    @EntityGraph(attributePaths = "assignedUser")
+    List<Lead> findAllByTenantIdAndDeletedAtIsNullOrderByCreatedAtDesc(Long tenantId);
+
     // ── Single fetch ─────────────────────────────────────────────────────────
     @EntityGraph(attributePaths = "assignedUser")
     Optional<Lead> findByPublicIdAndTenantIdAndDeletedAtIsNull(

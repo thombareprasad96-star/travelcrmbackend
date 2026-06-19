@@ -11,6 +11,7 @@ import lombok.*;
 import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.BatchSize;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -75,6 +76,11 @@ public class Lead extends BaseTenantEntity {
 
     @Column(name = "travel_date")
     private LocalDate travelDate;
+
+    // Estimated deal value (₹) — drives the Kanban column totals and the
+    // active-pipeline figure. Nullable: not every fresh lead has a value yet.
+    @Column(name = "estimated_value", precision = 15, scale = 2)
+    private BigDecimal estimatedValue;
 
     @Column(name = "depart_country", length = 100)
     private String departCountry;

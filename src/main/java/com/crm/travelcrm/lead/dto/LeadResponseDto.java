@@ -7,6 +7,7 @@ import com.crm.travelcrm.lead.enums.LeadType;
 import lombok.Builder;
 import lombok.Data;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -26,6 +27,7 @@ public class LeadResponseDto {
     private UserDto assignedUser;
     private LocalDate birthDate;
     private LocalDate travelDate;
+    private BigDecimal estimatedValue;
     private String departCountry;
     private String departCity;
     private Integer rooms;

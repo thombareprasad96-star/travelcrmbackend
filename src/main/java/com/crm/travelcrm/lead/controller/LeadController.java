@@ -4,7 +4,9 @@ import com.crm.travelcrm.common.dto.ApiResponse;
 import com.crm.travelcrm.common.dto.PagedApiResponse;
 import com.crm.travelcrm.common.dto.PaginationMeta;
 import com.crm.travelcrm.lead.dto.CreateLeadRequestDto;
+import com.crm.travelcrm.lead.dto.LeadBoardColumnDto;
 import com.crm.travelcrm.lead.dto.LeadResponseDto;
+import com.crm.travelcrm.lead.dto.UpdateLeadStageRequestDto;
 import com.crm.travelcrm.lead.dto.UserLeadStageCountDto;
 import com.crm.travelcrm.lead.dto.UserWorkloadDto;
 import com.crm.travelcrm.lead.service.LeadService;
@@ -49,6 +51,7 @@ public class LeadController {
     }
 
     /** Fetch a single lead by its publicId (UUID). */
+
     @GetMapping("/{publicId}")
     public ResponseEntity<ApiResponse<LeadResponseDto>> getLeadById(
             @PathVariable UUID publicId) {
@@ -72,6 +75,27 @@ public class LeadController {
                         "Leads fetched successfully",
                         leadPage.getContent(),
                         PaginationMeta.from(leadPage, sortBy, sortDir)));
+    }
+
+    // ── Kanban board ────────────────────────────────────────────────────────────
+
+    /** All leads grouped into the seven pipeline columns — powers LeadKanban.jsx. */
+    @GetMapping("/board")
+    public ResponseEntity<ApiResponse<List<LeadBoardColumnDto>>> getLeadBoard() {
+        List<LeadBoardColumnDto> board = leadService.getLeadBoard();
+        return ResponseEntity.ok(ApiResponse.success("Lead board fetched successfully", board));
+    }
+
+    /** Drag-and-drop: move a lead to a new stage without sending the full lead payload. */
+    @PatchMapping("/{publicId}/stage")
+    public ResponseEntity<ApiResponse<LeadResponseDto>> updateLeadStage(
+            @PathVariable UUID publicId,
+            @Valid @RequestBody UpdateLeadStageRequestDto request) {
+
+        log.info("Received stage-change request for publicId: {} -> {}",
+                publicId, request.getLeadStage());
+        LeadResponseDto response = leadService.updateLeadStage(publicId, request.getLeadStage());
+        return ResponseEntity.ok(ApiResponse.success("Lead stage updated successfully", response));
     }
 
     @PutMapping("/{publicId}")

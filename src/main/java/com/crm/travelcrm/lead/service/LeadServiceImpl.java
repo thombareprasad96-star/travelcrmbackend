@@ -4,11 +4,13 @@ import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.auth.repository.UserRepository;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.lead.dto.CreateLeadRequestDto;
+import com.crm.travelcrm.lead.dto.LeadBoardColumnDto;
 import com.crm.travelcrm.lead.dto.LeadResponseDto;
 import com.crm.travelcrm.lead.dto.UserLeadStageCountDto;
 import com.crm.travelcrm.lead.dto.UserWorkloadDto;
 import com.crm.travelcrm.lead.entity.Lead;
 import com.crm.travelcrm.lead.entity.LeadItinerary;
+import com.crm.travelcrm.lead.enums.LeadStage;
 import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.lead.exception.DuplicateLeadException;
@@ -26,10 +28,14 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 @Slf4j
@@ -152,6 +158,7 @@ public class LeadServiceImpl implements LeadService {
 
         // Travel details
         lead.setTravelDate(request.getTravelDate());
+        lead.setEstimatedValue(request.getEstimatedValue());
         lead.setDepartCountry(request.getDepartCountry());
         lead.setDepartCity(request.getDepartCity());
 
@@ -214,6 +221,75 @@ public class LeadServiceImpl implements LeadService {
 
         leadRepository.save(lead);
         log.info("Lead soft-deleted | publicId: {} | tenantId: {}", publicId, tenantId);
+    }
+
+    // ── Kanban board ────────────────────────────────────────────────────────────
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<LeadBoardColumnDto> getLeadBoard() {
+        Long tenantId = currentTenantId();
+
+        // One query, assignee eagerly joined; grouped in memory by stage.
+        Map<LeadStage, List<Lead>> byStage = leadRepository
+                .findAllByTenantIdAndDeletedAtIsNullOrderByCreatedAtDesc(tenantId)
+                .stream()
+                .collect(Collectors.groupingBy(Lead::getLeadStage));
+
+        // Emit every stage in pipeline order, including empty columns, so the
+        // board always renders all seven lanes.
+        return Arrays.stream(LeadStage.values())
+                .map(stage -> {
+                    List<Lead> stageLeads = byStage.getOrDefault(stage, List.of());
+                    BigDecimal total = stageLeads.stream()
+                            .map(Lead::getEstimatedValue)
+                            .filter(Objects::nonNull)
+                            .reduce(BigDecimal.ZERO, BigDecimal::add);
+                    return LeadBoardColumnDto.builder()
+                            .stage(stage)
+                            .count(stageLeads.size())
+                            .totalValue(total)
+                            .leads(stageLeads.stream().map(leadMapper::toResponse).toList())
+                            .build();
+                })
+                .toList();
+    }
+
+    @Override
+    @Transactional
+    public LeadResponseDto updateLeadStage(UUID publicId, LeadStage newStage) {
+        Long tenantId = currentTenantId();
+
+        Lead lead = leadRepository
+                .findByPublicIdAndTenantIdAndDeletedAtIsNull(publicId, tenantId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Lead not found: " + publicId));
+
+        LeadStage oldStage = lead.getLeadStage();
+        if (oldStage == newStage) {
+            // No-op move (dropped back into the same column) — skip the write
+            // and the notification entirely.
+            return leadMapper.toResponse(lead);
+        }
+
+        lead.setLeadStage(newStage);
+        Lead updated = leadRepository.save(lead);
+        log.info("Lead stage changed | publicId: {} | {} -> {} | tenantId: {}",
+                publicId, oldStage, newStage, tenantId);
+
+        eventPublisher.publishEvent(NotifyEvent.builder()
+                .type("LEAD_STAGE_CHANGED")
+                .tenantId(tenantId)
+                .actorUserId(currentUserId())
+                .title("Lead moved: " + updated.getCustomerName())
+                .message(updated.getCustomerName() + " moved from "
+                        + oldStage.getDisplayName() + " to " + newStage.getDisplayName())
+                .referenceType("LEAD")
+                .referencePublicId(updated.getPublicId())
+                .channels(Set.of(DeliveryChannel.IN_APP))
+                .build());
+
+        return leadMapper.toResponse(updated);
     }
 
     // ── Statistics ────────────────────────────────────────────────────────────
