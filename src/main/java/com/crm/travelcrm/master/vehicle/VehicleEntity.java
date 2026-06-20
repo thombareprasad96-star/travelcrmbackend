@@ -1,24 +1,29 @@
 package com.crm.travelcrm.master.vehicle;
 
+import com.crm.travelcrm.common.entity.BaseTenantEntity;
 import com.crm.travelcrm.master.geography.entity.City;
 import jakarta.persistence.*;
 import lombok.*;
-
-import java.time.LocalDateTime;
+import lombok.experimental.SuperBuilder;
 
 @Entity
-@Table(name = "vehicle_master")
+@Table(
+        name = "vehicle_master",
+        indexes = {
+                @Index(name = "idx_vehicles_tenant", columnList = "tenant_id"),
+                @Index(name = "idx_vehicles_city",   columnList = "city_id")
+        }
+)
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
-@Builder
-public class VehicleEntity {
-
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    @Column(name = "vehicle_id")
-    private Long id;
+@SuperBuilder
+// PK is the single inherited BaseEntity.id (@Id @GeneratedValue IDENTITY); the override
+// only renames its column to the existing "vehicle_id" so the schema is unchanged.
+// Tenant isolation, public_id, audit columns and soft-delete all come from BaseTenantEntity.
+@AttributeOverride(name = "id", column = @Column(name = "vehicle_id"))
+public class VehicleEntity extends BaseTenantEntity {
 
     @Column(name = "name", nullable = false, length = 150)
     private String name;
@@ -35,23 +40,16 @@ public class VehicleEntity {
     @Column(name = "image_path", length = 500)
     private String imagePath;
 
-    // null = global vehicle (platform-managed, visible to all tenants);
-    // non-null = owned by that tenant only.
-    // No DB-level FK — cross-aggregate reference to tenants.id, enforced at the application layer.
-    @Column(name = "tenant_id")
-    private Long tenantId;
-
     // Optional city association for hierarchy: Country → Destination → City → Vehicle
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "city_id",
             foreignKey = @ForeignKey(name = "fk_vehicle_city"))
     private City city;
 
-    @Column(name = "created_at", nullable = false, updatable = false)
-    private LocalDateTime createdAt;
-
-    @PrePersist
-    public void prePersist() {
-        this.createdAt = LocalDateTime.now();
+    // Global vehicles (tenant_id IS NULL) are platform-managed and visible to all tenants.
+    // Derived, not persisted — mirrors the Destination "global" convention.
+    @Transient
+    public boolean isGlobal() {
+        return getTenantId() == null;
     }
 }

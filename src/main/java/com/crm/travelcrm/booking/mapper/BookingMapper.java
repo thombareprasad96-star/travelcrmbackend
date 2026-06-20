@@ -44,7 +44,6 @@ public interface BookingMapper {
     @Mapping(target = "updatedAt",              ignore = true)  // set by @UpdateTimestamp
     @Mapping(target = "deletedAt",              ignore = true)
     @Mapping(target = "deletedBy",              ignore = true)
-    @Mapping(target = "active",                 ignore = true)
     Booking toEntity(CreateBookingRequestDTO dto);
 
     // ── UpdateBookingRequestDTO → Booking (partial patch) ─────────────────────
@@ -77,7 +76,6 @@ public interface BookingMapper {
     @Mapping(target = "updatedAt",              ignore = true)
     @Mapping(target = "deletedAt",              ignore = true)
     @Mapping(target = "deletedBy",              ignore = true)
-    @Mapping(target = "active",                 ignore = true)
     void updateEntity(UpdateBookingRequestDTO dto, @MappingTarget Booking booking);
 
     // ── Booking → BookingResponseDTO (full detail) ────────────────────────────

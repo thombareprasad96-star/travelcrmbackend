@@ -53,9 +53,25 @@ public class Reminder extends BaseTenantEntity {
     @Builder.Default
     private ReminderStatus status = ReminderStatus.Active;
 
-    /** Frontend lead reference, e.g. "LD1042". Stored as a plain string (not an FK). */
+    /**
+     * @deprecated Legacy frontend lead reference, e.g. "LD1042". Kept for backward
+     * compatibility only — use {@link #leadRefId} / {@link #leadPublicId} instead.
+     * Remove once the frontend is fully migrated to publicId.
+     */
+    @Deprecated
     @Column(name = "lead_id", length = 50)
     private String leadId;
+
+    /**
+     * Logical FK to {@code Lead.id} (Long). No DB-level FK — cross-aggregate reference
+     * enforced at the application layer, same pattern as {@code Booking}.
+     */
+    @Column(name = "lead_id_ref")
+    private Long leadRefId;
+
+    /** Denormalized snapshot of the referenced lead's publicId — lets the FE pre-select on edit. */
+    @Column(name = "lead_public_id")
+    private java.util.UUID leadPublicId;
 
     @Column(name = "lead_name")
     private String leadName;
@@ -63,9 +79,28 @@ public class Reminder extends BaseTenantEntity {
     @Column(name = "phone", length = 30)
     private String phone;
 
-    /** Frontend user reference, e.g. "U01". Stored as a plain string (not an FK). */
+    /**
+     * @deprecated Legacy frontend user reference, e.g. "U01". Kept for backward
+     * compatibility only — use {@link #assignToUserId} / {@link #assignToPublicId} instead.
+     */
+    @Deprecated
     @Column(name = "assign_to", length = 50)
     private String assignTo;
+
+    /**
+     * Logical FK to {@code User.id} (Long). No DB-level FK — cross-aggregate reference
+     * enforced at the application layer.
+     */
+    @Column(name = "assign_to_user_id")
+    private Long assignToUserId;
+
+    /** Denormalized snapshot of the assignee's publicId — lets the FE pre-select on edit. */
+    @Column(name = "assign_to_public_id")
+    private java.util.UUID assignToPublicId;
+
+    /** Denormalized snapshot of the assignee's display name — avoids N+1 in list views. */
+    @Column(name = "assign_to_name", length = 150)
+    private String assignToName;
 
     /** When the reminder is due — UTC. */
     @Column(name = "due_date", nullable = false)

@@ -20,6 +20,10 @@ import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.dto.PagedApiResponse;
 import com.crm.travelcrm.common.dto.PaginationMeta;
 import com.crm.travelcrm.common.exception.BusinessException;
+import com.crm.travelcrm.common.exception.ResourceNotFoundException;
+import com.crm.travelcrm.customer.entity.Customer;
+import com.crm.travelcrm.customer.repository.CustomerRepository;
+import com.crm.travelcrm.lead.repository.LeadRepository;
 import com.crm.travelcrm.notification.api.NotifyEvent;
 import com.crm.travelcrm.notification.domain.enums.DeliveryChannel;
 import com.crm.travelcrm.notification.domain.enums.NotificationType;
@@ -57,6 +61,8 @@ public class BookingServiceImpl implements BookingService {
     private final BookingMapper        bookingMapper;
     private final BookingCodeGenerator bookingCodeGenerator;
     private final ApplicationEventPublisher eventPublisher;
+    private final CustomerRepository   customerRepository;
+    private final LeadRepository       leadRepository;
 
     // ── Create ───────────────────────────────────────────────────────────────
 
@@ -65,11 +71,30 @@ public class BookingServiceImpl implements BookingService {
     public BookingResponseDTO create(CreateBookingRequestDTO request) {
         log.info("Creating new booking for customer: {}", request.getCustomerId());
 
+        Long tenantId = requireTenantId();
+
         Booking booking = bookingMapper.toEntity(request);
-        booking.setTenantId(requireTenantId());
+        booking.setTenantId(tenantId);
         booking.setBookingCode(bookingCodeGenerator.generate());
         booking.setStatus(BookingStatus.PENDING);
 
+        // Validate cross-aggregate references (no DB FK) and snapshot the resolved values.
+        Customer customer = customerRepository
+                .findByIdAndTenantIdAndDeletedAtIsNull(request.getCustomerId(), tenantId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Customer not found: " + request.getCustomerId()));
+        booking.setCustomerId(customer.getId());
+        booking.setCustomerNameSnapshot(customer.getName());
+
+        // Destination is sent as a free-text name (no id); snapshot it so the NOT NULL holds.
+        booking.setDestinationSnapshot(request.getDestination());
+
+        if (request.getLeadId() != null) {
+            if (!leadRepository.existsByIdAndTenantIdAndDeletedAtIsNull(request.getLeadId(), tenantId)) {
+                throw new ResourceNotFoundException("Lead not found: " + request.getLeadId());
+            }
+            booking.setLeadId(request.getLeadId());
+        }
 
         calculateAndApplyFinancials(booking, request.getCustomerAmount(),
                 request.getVendorCost(), request.getPaidAmount());
@@ -127,7 +152,7 @@ public class BookingServiceImpl implements BookingService {
     @Override
     @Transactional(readOnly = true)
     public BookingResponseDTO getByCode(String code) {
-        Booking booking = bookingRepository.findByBookingCodeAndActiveTrue(code)
+        Booking booking = bookingRepository.findByBookingCodeAndDeletedAtIsNull(code)
                 .orElseThrow(() -> new BookingNotFoundException(code));
         return bookingMapper.toResponse(booking);
     }
@@ -166,6 +191,11 @@ public class BookingServiceImpl implements BookingService {
 
         Booking booking = findActiveByPublicId(publicId);
         bookingMapper.updateEntity(request, booking);   // applies non-null DTO fields → entity
+
+        // Destination is a free-text snapshot (mapper ignores it) — apply it explicitly.
+        if (request.getDestination() != null) {
+            booking.setDestinationSnapshot(request.getDestination());
+        }
 
         // Recalculate only if either financial field was touched
         if (request.getCustomerAmount() != null || request.getVendorCost() != null) {
@@ -240,7 +270,6 @@ public class BookingServiceImpl implements BookingService {
                     "Cannot delete a " + booking.getStatus() + " booking. Cancel it first.");
         }
 
-        booking.setActive(Boolean.FALSE);
         booking.softDelete(currentUserEmail());
 
         bookingRepository.save(booking);
@@ -252,7 +281,7 @@ public class BookingServiceImpl implements BookingService {
     @Override
     @Transactional(readOnly = true)
     public List<BookingResponseDTO> getByCustomerId(Long customerId) {
-        return bookingRepository.findAllByCustomerIdAndActiveTrue(customerId)
+        return bookingRepository.findAllByCustomerIdAndDeletedAtIsNull(customerId)
                 .stream()
                 .map(bookingMapper::toResponse)
                 .toList();
@@ -303,12 +332,12 @@ public class BookingServiceImpl implements BookingService {
     @Transactional(readOnly = true)
     public BookingStatsResponseDTO getStats() {
         return BookingStatsResponseDTO.builder()
-                .totalBookings(bookingRepository.countByActiveTrue())
-                .confirmedBookings(bookingRepository.countByStatusAndActiveTrue(BookingStatus.CONFIRMED))
-                .pendingBookings(bookingRepository.countByStatusAndActiveTrue(BookingStatus.PENDING))
-                .cancelledBookings(bookingRepository.countByStatusAndActiveTrue(BookingStatus.CANCELLED))
-                .completedBookings(bookingRepository.countByStatusAndActiveTrue(BookingStatus.COMPLETED))
-                .refundedBookings(bookingRepository.countByStatusAndActiveTrue(BookingStatus.REFUNDED))
+                .totalBookings(bookingRepository.countByDeletedAtIsNull())
+                .confirmedBookings(bookingRepository.countByStatusAndDeletedAtIsNull(BookingStatus.CONFIRMED))
+                .pendingBookings(bookingRepository.countByStatusAndDeletedAtIsNull(BookingStatus.PENDING))
+                .cancelledBookings(bookingRepository.countByStatusAndDeletedAtIsNull(BookingStatus.CANCELLED))
+                .completedBookings(bookingRepository.countByStatusAndDeletedAtIsNull(BookingStatus.COMPLETED))
+                .refundedBookings(bookingRepository.countByStatusAndDeletedAtIsNull(BookingStatus.REFUNDED))
                 .totalRevenue(bookingRepository.sumTotalRevenue())
                 .totalCollected(bookingRepository.sumTotalCollected())
                 .totalPending(bookingRepository.sumTotalPending())
@@ -376,7 +405,7 @@ public class BookingServiceImpl implements BookingService {
     // ── Private Helpers ──────────────────────────────────────────────────────
 
     private Booking findActiveByPublicId(UUID publicId) {
-        return bookingRepository.findByPublicIdAndActiveTrue(publicId)
+        return bookingRepository.findByPublicIdAndDeletedAtIsNull(publicId)
                 .orElseThrow(() -> new BookingNotFoundException(publicId));
     }
 

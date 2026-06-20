@@ -15,6 +15,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/vehicles")
@@ -51,29 +52,29 @@ public class VehicleController {
                         PaginationMeta.from(vehiclePage, sortBy, sortDir)));
     }
 
-    @GetMapping("/{id}")
+    @GetMapping("/{publicId}")
     @PreAuthorize("isAuthenticated()")
-    public ResponseEntity<ApiResponse<VehicleResponseDTO>> getVehicleById(
-            @PathVariable Long id) {
+    public ResponseEntity<ApiResponse<VehicleResponseDTO>> getVehicleByPublicId(
+            @PathVariable UUID publicId) {
 
-        VehicleResponseDTO vehicle = vehicleService.getVehicleById(id);
+        VehicleResponseDTO vehicle = vehicleService.getVehicleByPublicId(publicId);
         return ResponseEntity.ok(ApiResponse.success("Vehicle fetched successfully", vehicle));
     }
 
-    @PutMapping("/{id}")
+    @PutMapping("/{publicId}")
     @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
     public ResponseEntity<ApiResponse<VehicleResponseDTO>> updateVehicle(
-            @PathVariable Long id,
+            @PathVariable UUID publicId,
             @Valid @RequestBody VehicleRequestDTO request) {
 
-        VehicleResponseDTO updated = vehicleService.updateVehicle(id, request);
+        VehicleResponseDTO updated = vehicleService.updateVehicle(publicId, request);
         return ResponseEntity.ok(ApiResponse.success("Vehicle updated successfully", updated));
     }
 
-    @DeleteMapping("/{id}")
+    @DeleteMapping("/{publicId}")
     @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
-    public ResponseEntity<ApiResponse<Void>> deleteVehicle(@PathVariable Long id) {
-        vehicleService.deleteVehicle(id);
+    public ResponseEntity<ApiResponse<Void>> deleteVehicle(@PathVariable UUID publicId) {
+        vehicleService.deleteVehicle(publicId);
         return ResponseEntity.ok(ApiResponse.success("Vehicle deleted successfully"));
     }
 

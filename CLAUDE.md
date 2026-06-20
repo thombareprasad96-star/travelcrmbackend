@@ -74,12 +74,12 @@ CORS is configured to allow `http://localhost:5173` and `http://localhost:5174` 
 ```
 auth/             Login, registration, JWT, SecurityConfig, two UserDetailsService impls
 booking/          Booking CRUD, CSV export, voucher send, filtering via JPA Specifications
-lead/             Lead pipeline (LeadStage, LeadType, LeadSource), itineraries
+lead/             Lead pipeline (LeadStage, LeadType, LeadSource), itineraries. Lead `services` are stored via @ElementCollection (lead_services join table), NOT a comma-separated string
 master/
   geography/      Country → Destination → City (cascading hierarchy)
   hotel/          Hotel, RoomType, MealPlan (nested under hotel)
-  sightseeing/    Sightseeing attractions (destination+city as strings, not FK)
-  vehicle/        Vehicle master
+  sightseeing/    Sightseeing attractions (real @ManyToOne City FK: fk_sightseeing_city)
+  vehicle/        Vehicle master (extends BaseTenantEntity: publicId + audit + soft-delete; endpoints keyed by publicId)
   airline/        Airline master
   cruise/         Cruise + CruiseRoomType
   addon/          Add-on services
@@ -122,9 +122,9 @@ Country
               ├── Hotel       (resolved via destinationId + city name string)
               │     ├── RoomType   (name, size, occupancy, bedType, description)
               │     └── MealPlan   (name, description, price)
-              └── Sightseeing (destination + city stored as strings, NOT FK)
+              └── Sightseeing (real @ManyToOne City FK: fk_sightseeing_city; DTO still exposes destination/city as name strings)
 
-Vehicle     (flat, tenant-scoped)
+Vehicle     (flat, tenant-scoped — extends BaseTenantEntity; PK column kept as vehicle_id via @AttributeOverride. API uses publicId)
 Airline     (flat, tenant-scoped)
 Cruise      (flat, tenant-scoped)
   └── CruiseRoomType
@@ -159,7 +159,7 @@ Notes:
 | Hotel | `contactPerson` (column: `contact_person`) | FE sends `contact`, mapped to this |
 | RoomType | `size`, `occupancy`, `bedType`, `description` | FE does NOT send `capacity` or `price` |
 | MealPlan | `name`, `description`, `price` | No `type` or `pricePerPerson` |
-| Sightseeing | `destination` + `city` as Strings | FE sends names, city resolved at save time |
+| Sightseeing | `@ManyToOne City` FK (`city_id`, `fk_sightseeing_city`) | FE sends `destination`+`city` names; service resolves them to the City FK at save time |
 | HotelDto | `city` (String, city.name) | FE reads `city` not `cityName` |
 | SightseeingDto | `destination`, `city` (Strings) | FE reads these not `destinationName`/`cityName` |
 
@@ -385,6 +385,25 @@ Long tenantId = TenantContext.getTenantId();
 if (tenantId == null) throw new IllegalStateException("TenantContext is empty...");
 ```
 
+### Tenant-scoped lookups — never use bare `findById(Long)`
+
+The Hibernate `@Filter("tenantFilter")` is only enabled on `@Transactional` methods (see
+`TenantFilterAspect`) and **never** applies to `EntityManager.find()` / `repository.findById()`
+/ `getReferenceById()`. Those bypass tenant isolation and can read across tenants.
+
+For any `BaseTenantEntity` (and `User`, which carries `tenant_id` on `BaseEntity`), always
+resolve through a tenant-scoped finder:
+
+```java
+repository.findByIdAndTenantId(id, TenantContext.getTenantId());
+repository.findByPublicIdAndTenantId(publicId, TenantContext.getTenantId());
+```
+
+Cross-aggregate logical FKs (e.g. `Booking.customerId`, `Booking.leadId`, `Reminder.leadRefId`,
+`Reminder.assignToUserId`) are validated this way in the service before persisting — a missing or
+cross-tenant reference throws `ResourceNotFoundException`. `SuperAdmin`/`Tenant` lookups are
+platform-level and intentionally exempt.
+
 ### Exception types
 
 - `ResourceNotFoundException(message)` — maps to 404
@@ -398,7 +417,9 @@ Hotel sends `destinationId` + `city` (string). Look up:
 cityRepository.findByTenantIdAndDestinationIdAndNameIgnoreCase(tenantId, destinationId, cityName)
 ```
 
-Sightseeing sends `destination` + `city` (both strings). Look up:
+Sightseeing sends `destination` + `city` (both strings) in the DTO, but the entity stores a
+real `@ManyToOne City` (FK `city_id` / `fk_sightseeing_city`). The service resolves the names
+to the City and sets the association:
 ```java
 cityRepository.findByTenantIdAndDestination_NameIgnoreCaseAndNameIgnoreCase(tenantId, destName, cityName)
 ```

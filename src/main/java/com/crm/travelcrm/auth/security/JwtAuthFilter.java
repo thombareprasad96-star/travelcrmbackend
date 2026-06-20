@@ -51,7 +51,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             if (email != null && SecurityContextHolder.getContext().getAuthentication() == null) {
                 try {
                     UserDetails userDetails;
-                    if ("SUPER_ADMIN".equals(role)) {
+                    if (JwtClaims.ROLE_SUPER_ADMIN.equals(role)) {
                         userDetails = superAdminDetailsService.loadUserByUsername(email);
                     } else if (tenantId != null) {
                         userDetails = userDetailsService.loadUserByEmailAndTenantId(email, tenantId);

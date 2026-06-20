@@ -24,7 +24,7 @@ public class JwtUtil {
     public String generateToken(SuperAdmin superAdmin) {
         return Jwts.builder()
                 .subject(superAdmin.getEmail())
-                .claim("role", "SUPER_ADMIN")
+                .claim(JwtClaims.ROLE, JwtClaims.ROLE_SUPER_ADMIN)
                 // SuperAdmin has no tenant — intentionally omitted
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + expiryMs))
@@ -35,8 +35,8 @@ public class JwtUtil {
     public String generateToken(User user) {
         return Jwts.builder()
                 .subject(user.getEmail())
-                .claim("role", user.getRole().name())
-                .claim("tenantId", user.getTenantId())   // ← ADDED
+                .claim(JwtClaims.ROLE, user.getRole().name())
+                .claim(JwtClaims.TENANT_ID, user.getTenantId())   // ← ADDED
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + expiryMs))
                 .signWith(getKey())
@@ -48,12 +48,12 @@ public class JwtUtil {
     }
 
     public String extractRole(String token) {
-        return getClaims(token).get("role", String.class);
+        return getClaims(token).get(JwtClaims.ROLE, String.class);
     }
 
     // ← NEW METHOD
     public Long extractTenantId(String token) {
-        Object value = getClaims(token).get("tenantId");
+        Object value = getClaims(token).get(JwtClaims.TENANT_ID);
         if (value == null)              return null;
         if (value instanceof Integer i) return i.longValue();
         if (value instanceof Long l)    return l;

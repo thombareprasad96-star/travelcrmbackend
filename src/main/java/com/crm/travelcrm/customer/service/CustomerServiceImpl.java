@@ -266,7 +266,7 @@ public class CustomerServiceImpl implements CustomerService {
         Customer customer = findOrThrow(publicId, tenantId);
 
         return bookingRepository
-                .findAllByCustomerIdAndActiveTrueOrderByBookingDateDesc(customer.getId())
+                .findAllByCustomerIdAndDeletedAtIsNullOrderByBookingDateDesc(customer.getId())
                 .stream()
                 .map(this::toBookingResponse)
                 .toList();

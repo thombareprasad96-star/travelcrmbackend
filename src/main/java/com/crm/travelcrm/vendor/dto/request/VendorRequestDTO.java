@@ -1,5 +1,6 @@
 package com.crm.travelcrm.vendor.dto.request;
 
+import com.crm.travelcrm.vendor.enums.VendorStatus;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
@@ -27,7 +28,8 @@ public class VendorRequestDTO {
     private String contractType;
     private String paymentTerms;
     private String commPref;
-    private String status;
+    /** Optional on create — defaults to ACTIVE server-side. */
+    private VendorStatus status;
 
     private String city;
     private String state;

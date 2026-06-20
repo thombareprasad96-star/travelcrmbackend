@@ -1,9 +1,6 @@
 package com.crm.travelcrm.notification.web;
 
-import com.crm.travelcrm.auth.entity.User;
-import com.crm.travelcrm.auth.security.JwtUtil;
-import com.crm.travelcrm.auth.security.UserDetailsServiceImpl;
-import com.crm.travelcrm.common.context.TenantContext;
+import com.crm.travelcrm.auth.api.TokenAuthenticator;
 import com.crm.travelcrm.common.dto.ApiResponse;
 import com.crm.travelcrm.common.dto.PagedApiResponse;
 import com.crm.travelcrm.common.dto.PaginationMeta;
@@ -13,9 +10,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -46,9 +40,8 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class NotificationController {
 
-    private final NotificationService    notificationService;
-    private final JwtUtil                jwtUtil;
-    private final UserDetailsServiceImpl userDetailsService;
+    private final NotificationService  notificationService;
+    private final TokenAuthenticator   tokenAuthenticator;
 
     // ── Feed ──────────────────────────────────────────────────────────────────
 
@@ -133,34 +126,16 @@ public class NotificationController {
      */
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(@RequestParam String token) {
-        // Manual token validation — mirrors JwtAuthFilter but without the filter chain
-        if (!jwtUtil.isTokenValid(token)) {
+        // Header-less auth: validate the token and populate SecurityContext + TenantContext
+        // via the auth module's public facade (mirrors JwtAuthFilter for the SSE flow).
+        if (!tokenAuthenticator.authenticateForCurrentThread(token)) {
             log.warn("SSE connection rejected: invalid or expired token");
             SseEmitter rejected = new SseEmitter(0L);
             rejected.completeWithError(new SecurityException("Invalid token"));
             return rejected;
         }
 
-        String email    = jwtUtil.extractEmail(token);
-        Long   tenantId = jwtUtil.extractTenantId(token);
-
-        try {
-            User user = (User) userDetailsService.loadUserByEmailAndTenantId(email, tenantId);
-
-            // Populate SecurityContext so NotificationServiceImpl.currentUserId() works
-            UsernamePasswordAuthenticationToken auth =
-                    new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
-            SecurityContextHolder.getContext().setAuthentication(auth);
-            TenantContext.setTenantId(tenantId);
-
-            return notificationService.subscribe();
-
-        } catch (Exception e) {
-            log.warn("SSE connection rejected for email={}: {}", email, e.getMessage());
-            SseEmitter rejected = new SseEmitter(0L);
-            rejected.completeWithError(e);
-            return rejected;
-        }
+        return notificationService.subscribe();
         // Note: TenantContext.clear() is NOT called here — the SSE response is async
         // and the thread is held open. The registry cleanup callbacks handle lifecycle.
     }

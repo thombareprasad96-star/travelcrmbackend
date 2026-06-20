@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
+import java.util.UUID;
 
 @Data
 @NoArgsConstructor
@@ -13,7 +14,8 @@ import java.time.LocalDateTime;
 @Builder
 public class VehicleResponseDTO {
 
-    private Long id;
+    // External-facing identifier — never expose the internal Long id
+    private UUID publicId;
     private String name;
     private String type;
     private Integer capacity;

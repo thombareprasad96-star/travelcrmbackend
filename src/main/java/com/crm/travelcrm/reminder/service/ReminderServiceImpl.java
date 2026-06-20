@@ -1,8 +1,11 @@
 package com.crm.travelcrm.reminder.service;
 
 import com.crm.travelcrm.auth.entity.User;
+import com.crm.travelcrm.auth.repository.UserRepository;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
+import com.crm.travelcrm.lead.entity.Lead;
+import com.crm.travelcrm.lead.repository.LeadRepository;
 import com.crm.travelcrm.reminder.dto.CreateReminderRequestDto;
 import com.crm.travelcrm.reminder.dto.ReminderResponseDto;
 import com.crm.travelcrm.reminder.dto.ReminderStatsDto;
@@ -29,6 +32,7 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.UUID;
 
 @Service
 @Slf4j
@@ -37,6 +41,8 @@ public class ReminderServiceImpl implements ReminderService {
 
     private final ReminderRepository reminderRepository;
     private final ReminderMapper reminderMapper;
+    private final LeadRepository leadRepository;
+    private final UserRepository userRepository;
 
     private static final DateTimeFormatter CSV_TS =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneOffset.UTC);
@@ -62,6 +68,9 @@ public class ReminderServiceImpl implements ReminderService {
         reminder.setOwnerUserId(currentUserId());
         reminder.setNotified(false);
 
+        // Resolve + validate the lead/assignee references (publicId → internal Long FK).
+        applyReferences(reminder, request.getLeadPublicId(), request.getAssignToPublicId(), tenantId);
+
         Reminder saved = reminderRepository.save(reminder);
         log.info("Reminder created | id: {} | tenantId: {} | due: {}",
                 saved.getId(), tenantId, saved.getDueDate());
@@ -75,6 +84,10 @@ public class ReminderServiceImpl implements ReminderService {
         Instant previousDue = reminder.getDueDate();
 
         reminderMapper.updateEntity(request, reminder);
+
+        // Re-resolve references only when the caller supplies a new publicId (partial update).
+        applyReferences(reminder, request.getLeadPublicId(), request.getAssignToPublicId(),
+                reminder.getTenantId());
 
         // If the reminder was re-scheduled into the future, allow it to fire again.
         if (request.getDueDate() != null
@@ -248,6 +261,29 @@ public class ReminderServiceImpl implements ReminderService {
         Long tenantId = currentTenantId();
         return reminderRepository.findByIdAndTenantIdAndDeletedAtIsNull(id, tenantId)
                 .orElseThrow(() -> new ResourceNotFoundException("Reminder not found: " + id));
+    }
+
+    /**
+     * Resolves the supplied lead/assignee publicIds to their internal Long FKs, validating
+     * that each exists within the current tenant. Denormalizes display snapshots
+     * (lead name, assignee name) so list views never need an extra query. No-op for null
+     * publicIds, so partial updates leave existing references untouched.
+     */
+    private void applyReferences(Reminder reminder, UUID leadPublicId, UUID assignToPublicId, Long tenantId) {
+        if (leadPublicId != null) {
+            Lead lead = leadRepository.findByPublicIdAndTenantIdAndDeletedAtIsNull(leadPublicId, tenantId)
+                    .orElseThrow(() -> new ResourceNotFoundException("Lead not found: " + leadPublicId));
+            reminder.setLeadRefId(lead.getId());
+            reminder.setLeadPublicId(lead.getPublicId());
+            reminder.setLeadName(lead.getCustomerName());
+        }
+        if (assignToPublicId != null) {
+            User assignee = userRepository.findByPublicIdAndTenantIdAndDeletedAtIsNull(assignToPublicId, tenantId)
+                    .orElseThrow(() -> new ResourceNotFoundException("User not found: " + assignToPublicId));
+            reminder.setAssignToUserId(assignee.getId());
+            reminder.setAssignToPublicId(assignee.getPublicId());
+            reminder.setAssignToName(assignee.getName());
+        }
     }
 
     private Long currentTenantId() {

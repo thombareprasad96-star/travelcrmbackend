@@ -1,6 +1,8 @@
 package com.crm.travelcrm.vendor.specification;
 
 import com.crm.travelcrm.vendor.entity.Vendor;
+import com.crm.travelcrm.vendor.enums.VendorPayStatus;
+import com.crm.travelcrm.vendor.enums.VendorStatus;
 import org.springframework.data.jpa.domain.Specification;
 
 public class VendorSpecification {
@@ -19,9 +21,9 @@ public class VendorSpecification {
         return (root, query, cb) -> cb.isNull(root.get("deletedAt"));
     }
 
-    public static Specification<Vendor> hasStatus(String status) {
+    public static Specification<Vendor> hasStatus(VendorStatus status) {
         return (root, query, cb) ->
-                status == null || status.isBlank() ? cb.conjunction()
+                status == null ? cb.conjunction()
                         : cb.equal(root.get("status"), status);
     }
 
@@ -31,9 +33,9 @@ public class VendorSpecification {
                         : cb.equal(root.get("vendorType"), type);
     }
 
-    public static Specification<Vendor> hasPayStatus(String payStatus) {
+    public static Specification<Vendor> hasPayStatus(VendorPayStatus payStatus) {
         return (root, query, cb) ->
-                payStatus == null || payStatus.isBlank() ? cb.conjunction()
+                payStatus == null ? cb.conjunction()
                         : cb.equal(root.get("payStatus"), payStatus);
     }
 

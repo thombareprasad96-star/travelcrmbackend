@@ -1,6 +1,8 @@
 package com.crm.travelcrm.vendor.entity;
 
 import com.crm.travelcrm.common.entity.BaseTenantEntity;
+import com.crm.travelcrm.vendor.enums.VendorPayStatus;
+import com.crm.travelcrm.vendor.enums.VendorStatus;
 import jakarta.persistence.*;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
@@ -76,13 +78,15 @@ public class Vendor extends BaseTenantEntity {
     @Column(name = "comm_pref", length = 50)
     private String commPref;
 
+    @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 20)
     @Builder.Default
-    private String status = "Active";
+    private VendorStatus status = VendorStatus.ACTIVE;
 
+    @Enumerated(EnumType.STRING)
     @Column(name = "pay_status", nullable = false, length = 20)
     @Builder.Default
-    private String payStatus = "Unpaid";
+    private VendorPayStatus payStatus = VendorPayStatus.UNPAID;
 
     @Column(name = "city", length = 100)
     private String city;

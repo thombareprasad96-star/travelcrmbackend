@@ -44,6 +44,9 @@ public interface LeadRepository extends JpaRepository<Lead, Long> {
     Optional<Lead> findByPhoneAndTenantIdAndDeletedAtIsNull(
             String phone, Long tenantId);
 
+    // ── Existence check (cross-aggregate FK validation, e.g. Booking.leadId) ──
+    boolean existsByIdAndTenantIdAndDeletedAtIsNull(Long id, Long tenantId);
+
     // ── Duplicate checks ─────────────────────────────────────────────────────
     boolean existsByEmailAndTenantIdAndDeletedAtIsNull(
             String email, Long tenantId);

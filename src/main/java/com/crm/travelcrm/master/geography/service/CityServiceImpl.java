@@ -227,11 +227,12 @@ public class CityServiceImpl implements CityService {
             return null;
         }
         Destination destination = resolveDestination(destinationId, tenantId);
+        // getId() returns a primitive long, so != is a correct value comparison here.
         if (destination.getCountry() == null
                 || country == null
                 || destination.getCountry().getId() != country.getId()) {
             throw new BusinessException(
-                    "Destination " + destinationId + " does not belong to the city's country",
+                    "City's country must match its destination's country",
                     HttpStatus.BAD_REQUEST);
         }
         return destination;

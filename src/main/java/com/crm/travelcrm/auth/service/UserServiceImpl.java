@@ -9,12 +9,15 @@ import com.crm.travelcrm.auth.enums.Role;
 import com.crm.travelcrm.auth.repository.UserRepository;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.exception.BusinessException;
-import com.crm.travelcrm.common.exception.EmailAlreadyExistsException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
+import com.crm.travelcrm.tenent.entity.Tenant;
+import com.crm.travelcrm.tenent.enums.TenantStatus;
+import com.crm.travelcrm.tenent.tenentsRepository.TenantRepository;
 import lombok.RequiredArgsConstructor;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,37 +32,60 @@ public class UserServiceImpl implements UserService {
 
     private static final Logger log = LogManager.getLogger(UserServiceImpl.class);
 
-    private static final Set<Role> CREATABLE_ROLES = Set.of(Role.MANAGER, Role.AGENT);
+    private static final Set<Role> CREATABLE_ROLES = Set.of(Role.MANAGER, Role.TRAVEL_AGENT);
 
     private final UserRepository   userRepository;
+    private final TenantRepository tenantRepository;
     private final PasswordEncoder  passwordEncoder;
 
+    // Authorization is enforced here at the service layer (not only in the
+    // controller) so it cannot be bypassed by any other caller. USER_CREATE is
+    // granted to TENANT_ADMIN only (see Role.authorities()).
     @Override
     @Transactional
+    @PreAuthorize("hasAuthority('USER_CREATE')")
     public UserResponseDTO createUser(CreateUserRequest request, Long tenantId) {
 
+        // tenantId is the caller's own tenant (from the authenticated principal,
+        // passed by the controller) — never taken from the request body.
+        requireActiveTenant(tenantId);
+
+        // Whitelist: a tenant admin may only ever mint MANAGER / TRAVEL_AGENT.
+        // Valid-but-forbidden roles (SUPERADMIN / TENANT_ADMIN) → 403.
+        // Unparseable roles never reach here — Jackson rejects them as 400.
         if (!CREATABLE_ROLES.contains(request.getRole())) {
             throw new BusinessException(
                     "Role " + request.getRole() + " cannot be assigned by a tenant admin",
                     HttpStatus.FORBIDDEN);
         }
 
-        if (userRepository.existsByEmailAndTenantId(request.getEmail(), tenantId)) {
-            throw new EmailAlreadyExistsException(request.getEmail());
+        // Normalize before the uniqueness check AND before persisting so the
+        // check and the stored value can never diverge by case/whitespace.
+        String email = request.getEmail().trim().toLowerCase();
+
+        // Email is unique per tenant (uq_user_email_tenant) — scope the check to tenant.
+        if (userRepository.existsByEmailAndTenantId(email, tenantId)) {
+            throw new BusinessException(
+                    "A user with email " + email + " already exists in your organization.",
+                    HttpStatus.CONFLICT);
         }
 
+        Long managerId = resolveManagerId(request.getManagerPublicId(), request.getRole(), tenantId);
+
         User user = User.builder()
-                .name(request.getName())
-                .email(request.getEmail())
+                .name(request.getName().trim())
+                .email(email)
                 .password(passwordEncoder.encode(request.getPassword()))
                 .role(request.getRole())
                 .tenantId(tenantId)
+                .managerId(managerId)
                 .phoneNumber(request.getPhoneNumber())
                 .isActive(true)
                 .build();
 
         User saved = userRepository.save(user);
-        log.info("User created: email={} role={} tenantId={}", saved.getEmail(), saved.getRole(), tenantId);
+        log.info("User created: email={} role={} tenantId={} managerId={}",
+                saved.getEmail(), saved.getRole(), tenantId, managerId);
 
         return toResponse(saved);
     }
@@ -147,6 +173,45 @@ public class UserServiceImpl implements UserService {
         return availableUsers;
     }
 
+
+    // A tenant admin whose own organization is inactive/suspended/soft-deleted
+    // must not be able to provision new users. 403, not 500.
+    private void requireActiveTenant(Long tenantId) {
+        Tenant tenant = tenantRepository.findById(tenantId)
+                .orElseThrow(() -> new BusinessException(
+                        "Your organization could not be found.", HttpStatus.FORBIDDEN));
+
+        if (tenant.isDeleted() || tenant.getStatus() != TenantStatus.ACTIVE) {
+            throw new BusinessException(
+                    "Your organization is " + tenant.getStatus()
+                            + "; new users cannot be created.",
+                    HttpStatus.FORBIDDEN);
+        }
+    }
+
+    // Resolves the optional managerPublicId to an internal manager id.
+    // Only a TRAVEL_AGENT may have a manager, and that manager must be an
+    // active MANAGER inside the same tenant — never cross-tenant.
+    private Long resolveManagerId(UUID managerPublicId, Role role, Long tenantId) {
+        if (managerPublicId == null) {
+            return null;
+        }
+        if (role != Role.TRAVEL_AGENT) {
+            throw new BusinessException(
+                    "A manager can only be assigned to a TRAVEL_AGENT.",
+                    HttpStatus.BAD_REQUEST);
+        }
+        User manager = userRepository
+                .findByPublicIdAndTenantIdAndDeletedAtIsNull(managerPublicId, tenantId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Manager not found: " + managerPublicId));
+        if (manager.getRole() != Role.MANAGER) {
+            throw new BusinessException(
+                    "Assigned manager must have the MANAGER role.",
+                    HttpStatus.BAD_REQUEST);
+        }
+        return manager.getId();
+    }
 
     // Loads a tenant user that a tenant admin is allowed to manage.
     // Restricting to CREATABLE_ROLES also prevents admins from editing/deleting

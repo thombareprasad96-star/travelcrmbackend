@@ -1,5 +1,7 @@
 package com.crm.travelcrm.vendor.dto.response;
 
+import com.crm.travelcrm.vendor.enums.VendorPayStatus;
+import com.crm.travelcrm.vendor.enums.VendorStatus;
 import lombok.Builder;
 import lombok.Data;
 
@@ -23,8 +25,9 @@ public class VendorResponseDTO {
     private String contractType;
     private String paymentTerms;
     private String commPref;
-    private String status;
-    private String payStatus;
+    // Serialized as the enum name ("ACTIVE", "UNPAID", …) for the frontend.
+    private VendorStatus status;
+    private VendorPayStatus payStatus;
 
     private String city;
     private String state;

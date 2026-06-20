@@ -4,6 +4,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
+import java.util.UUID;
 
 public interface VehicleService {
 
@@ -11,11 +12,11 @@ public interface VehicleService {
 
     Page<VehicleResponseDTO> getAllVehicles(int page, int size, String sortBy, String sortDir);
 
-    VehicleResponseDTO getVehicleById(Long id);
+    VehicleResponseDTO getVehicleByPublicId(UUID publicId);
 
-    VehicleResponseDTO updateVehicle(Long id, VehicleRequestDTO request);
+    VehicleResponseDTO updateVehicle(UUID publicId, VehicleRequestDTO request);
 
-    void deleteVehicle(Long id);
+    void deleteVehicle(UUID publicId);
 
     String uploadVehicleImage(MultipartFile file);
 

@@ -103,8 +103,8 @@ public class Lead extends BaseTenantEntity {
     @Column(name = "extra_beds")
     private Integer extraBeds;
 
-    // Stored as comma-separated values in a single column for simplicity
-    // Use @ElementCollection for a proper join table approach
+    // Stored as a proper join table (lead_services) via @ElementCollection —
+    // one row per service, NOT a comma-separated string column.
     @ElementCollection(fetch = FetchType.EAGER)
     @CollectionTable(name = "lead_services", joinColumns = @JoinColumn(name = "lead_id"))
     @Column(name = "service")

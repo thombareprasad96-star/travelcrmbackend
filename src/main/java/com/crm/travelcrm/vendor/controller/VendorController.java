@@ -6,6 +6,8 @@ import com.crm.travelcrm.common.dto.PaginationMeta;
 import com.crm.travelcrm.vendor.dto.request.*;
 import com.crm.travelcrm.vendor.dto.response.VendorResponseDTO;
 import com.crm.travelcrm.vendor.dto.response.VendorStatsDTO;
+import com.crm.travelcrm.vendor.enums.VendorPayStatus;
+import com.crm.travelcrm.vendor.enums.VendorStatus;
 import com.crm.travelcrm.vendor.service.VendorService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -39,6 +41,15 @@ public class VendorController {
 //    public ResponseEntity<List<VendorResponseDTO>> getAll() {
 //        return ResponseEntity.ok(vendorService.getAll());
 //
+
+    // Enum metadata for FE dropdowns — returns all valid status / pay-status values.
+    @GetMapping("/statuses")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<Map<String, List<String>>> getStatuses() {
+        return ResponseEntity.ok(Map.of(
+                "status", java.util.Arrays.stream(VendorStatus.values()).map(Enum::name).toList(),
+                "payStatus", java.util.Arrays.stream(VendorPayStatus.values()).map(Enum::name).toList()));
+    }
 
     @GetMapping
     @PreAuthorize("isAuthenticated()")

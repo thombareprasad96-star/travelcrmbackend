@@ -4,6 +4,7 @@ import com.crm.travelcrm.notification.api.NotificationChannel;
 import com.crm.travelcrm.notification.api.NotifyEvent;
 import com.crm.travelcrm.notification.domain.entity.Notification;
 import com.crm.travelcrm.notification.domain.enums.DeliveryChannel;
+import com.crm.travelcrm.notification.domain.enums.NotificationReferenceType;
 import com.crm.travelcrm.notification.infrastructure.TenantAdminResolver;
 import com.crm.travelcrm.notification.infrastructure.repository.NotificationRepository;
 import com.crm.travelcrm.notification.infrastructure.sse.SseEmitterRegistry;
@@ -59,7 +60,7 @@ public class InAppNotificationChannel implements NotificationChannel {
                     .type(event.getType())
                     .title(event.getTitle())
                     .message(event.getMessage())
-                    .referenceType(event.getReferenceType())
+                    .referenceType(NotificationReferenceType.fromString(event.getReferenceType()))
                     .referencePublicId(event.getReferencePublicId())
                     .build();
 

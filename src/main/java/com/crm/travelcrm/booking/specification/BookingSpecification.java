@@ -48,7 +48,7 @@ public class BookingSpecification {
             List<Predicate> predicates = new ArrayList<>();
 
             // always filter soft-deleted records
-            predicates.add(cb.isTrue(root.get("active")));
+            predicates.add(cb.isNull(root.get("deletedAt")));
 
             if (status != null) {
                 predicates.add(cb.equal(root.get("status"), status));
@@ -93,6 +93,6 @@ public class BookingSpecification {
     // ── Active only (reusable base filter) ───────────────────────────────────
 
     public static Specification<Booking> isActive() {
-        return (root, query, cb) -> cb.isTrue(root.get("active"));
+        return (root, query, cb) -> cb.isNull(root.get("deletedAt"));
     }
 }

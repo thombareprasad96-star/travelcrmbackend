@@ -1,0 +1,73 @@
+<mxfile host="app.diagrams.net" type="device">
+  <diagram name="TravelCRM-ER" id="travelcrm-er">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- ===================== Platform / tenancy ===================== -->
+        <mxCell id="TENANT" value="TENANT&#10;PK id&#10;UK organization_code, email&#10;status, plan, max_users" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;verticalAlign=top;spacingLeft=6;" vertex="1" parent="1"><mxGeometry x="40" y="40" width="200" height="90" as="geometry"/></mxCell>
+        <mxCell id="SUPER_ADMIN" value="SUPER_ADMIN&#10;PK id&#10;UK email&#10;password, enabled" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;verticalAlign=top;spacingLeft=6;" vertex="1" parent="1"><mxGeometry x="300" y="40" width="200" height="90" as="geometry"/></mxCell>
+        <mxCell id="USER" value="USER&#10;PK id&#10;~ tenant_id (logical)&#10;~ manager_id (self, logical)&#10;email, role, is_active" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;verticalAlign=top;spacingLeft=6;" vertex="1" parent="1"><mxGeometry x="560" y="40" width="220" height="100" as="geometry"/></mxCell>
+
+        <!-- ===================== Geography ===================== -->
+        <mxCell id="COUNTRY" value="COUNTRY&#10;PK id&#10;~ tenant_id&#10;UK (tenant_id,name) (tenant_id,code)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;verticalAlign=top;spacingLeft=6;" vertex="1" parent="1"><mxGeometry x="40" y="220" width="220" height="90" as="geometry"/></mxCell>
+        <mxCell id="DESTINATION" value="DESTINATION (destination_master)&#10;PK destination_id&#10;FK country_id -> COUNTRY&#10;~ tenant_id, global" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;verticalAlign=top;spacingLeft=6;" vertex="1" parent="1"><mxGeometry x="320" y="220" width="240" height="90" as="geometry"/></mxCell>
+        <mxCell id="CITY" value="CITY (cities)&#10;PK id&#10;FK country_id -> COUNTRY&#10;FK destination_id -> DESTINATION (null)&#10;~ tenant_id" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;verticalAlign=top;spacingLeft=6;" vertex="1" parent="1"><mxGeometry x="620" y="220" width="260" height="100" as="geometry"/></mxCell>
+
+        <!-- ===================== Master under City ===================== -->
+        <mxCell id="HOTEL" value="HOTEL&#10;PK id&#10;FK city_id -> CITY&#10;~ tenant_id" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;verticalAlign=top;spacingLeft=6;" vertex="1" parent="1"><mxGeometry x="940" y="40" width="200" height="80" as="geometry"/></mxCell>
+        <mxCell id="ROOM_TYPE" value="ROOM_TYPE (hotel_room_types)&#10;PK id&#10;FK hotel_id -> HOTEL" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;verticalAlign=top;spacingLeft=6;" vertex="1" parent="1"><mxGeometry x="1200" y="40" width="220" height="70" as="geometry"/></mxCell>
+        <mxCell id="MEAL_PLAN" value="MEAL_PLAN (hotel_meal_plans)&#10;PK id&#10;FK hotel_id -> HOTEL" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;verticalAlign=top;spacingLeft=6;" vertex="1" parent="1"><mxGeometry x="1200" y="150" width="220" height="70" as="geometry"/></mxCell>
+        <mxCell id="SIGHTSEEING" value="SIGHTSEEING&#10;PK id&#10;FK city_id -> CITY&#10;~ tenant_id" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;verticalAlign=top;spacingLeft=6;" vertex="1" parent="1"><mxGeometry x="940" y="260" width="200" height="80" as="geometry"/></mxCell>
+        <mxCell id="CRUISE" value="CRUISE&#10;PK id&#10;FK city_id -> CITY (null)&#10;~ tenant_id" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;verticalAlign=top;spacingLeft=6;" vertex="1" parent="1"><mxGeometry x="940" y="380" width="200" height="80" as="geometry"/></mxCell>
+        <mxCell id="CRUISE_ROOM_TYPE" value="CRUISE_ROOM_TYPE&#10;PK id&#10;FK cruise_id -> CRUISE" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;verticalAlign=top;spacingLeft=6;" vertex="1" parent="1"><mxGeometry x="1200" y="380" width="220" height="70" as="geometry"/></mxCell>
+        <mxCell id="AIRLINE" value="AIRLINE&#10;PK id&#10;FK city_id -> CITY (null)&#10;~ tenant_id, iata" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;verticalAlign=top;spacingLeft=6;" vertex="1" parent="1"><mxGeometry x="940" y="500" width="200" height="80" as="geometry"/></mxCell>
+        <mxCell id="ADDON" value="ADDON (addons)&#10;PK id&#10;FK city_id -> CITY (null)&#10;~ tenant_id, active" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;verticalAlign=top;spacingLeft=6;" vertex="1" parent="1"><mxGeometry x="940" y="620" width="200" height="80" as="geometry"/></mxCell>
+        <mxCell id="VEHICLE" value="VEHICLE (vehicle_master) [no BaseEntity]&#10;PK vehicle_id&#10;FK city_id -> CITY (null)&#10;~ tenant_id" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;align=left;verticalAlign=top;spacingLeft=6;" vertex="1" parent="1"><mxGeometry x="940" y="740" width="240" height="80" as="geometry"/></mxCell>
+
+        <!-- ===================== CRM core ===================== -->
+        <mxCell id="LEAD" value="LEAD (leads)&#10;PK id&#10;FK assigned_user_id -> USER&#10;~ tenant_id&#10;UK (tenant_id,email) (tenant_id,phone)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=left;verticalAlign=top;spacingLeft=6;" vertex="1" parent="1"><mxGeometry x="320" y="420" width="260" height="100" as="geometry"/></mxCell>
+        <mxCell id="LEAD_ITINERARY" value="LEAD_ITINERARY&#10;PK id&#10;FK lead_id -> LEAD" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=left;verticalAlign=top;spacingLeft=6;" vertex="1" parent="1"><mxGeometry x="620" y="420" width="220" height="70" as="geometry"/></mxCell>
+        <mxCell id="CUSTOMER" value="CUSTOMER&#10;PK id&#10;~ tenant_id&#10;UK (tenant_id,phone) (tenant_id,customer_code)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=left;verticalAlign=top;spacingLeft=6;" vertex="1" parent="1"><mxGeometry x="40" y="420" width="240" height="100" as="geometry"/></mxCell>
+        <mxCell id="BOOKING" value="BOOKING (@Audited)&#10;PK id&#10;~ customer_id, destination_id, lead_id (logical)&#10;~ tenant_id" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=left;verticalAlign=top;spacingLeft=6;" vertex="1" parent="1"><mxGeometry x="320" y="580" width="260" height="100" as="geometry"/></mxCell>
+        <mxCell id="VENDOR" value="VENDOR (vendors)&#10;PK id&#10;~ tenant_id&#10;+ secondary tables" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=left;verticalAlign=top;spacingLeft=6;" vertex="1" parent="1"><mxGeometry x="40" y="580" width="220" height="80" as="geometry"/></mxCell>
+        <mxCell id="VENDOR_BANK" value="vendor_bank_details&#10;PK/FK vendor_id (1:1)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=left;verticalAlign=top;spacingLeft=6;" vertex="1" parent="1"><mxGeometry x="40" y="700" width="200" height="60" as="geometry"/></mxCell>
+        <mxCell id="VENDOR_FIN" value="vendor_financials&#10;PK/FK vendor_id (1:1)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=left;verticalAlign=top;spacingLeft=6;" vertex="1" parent="1"><mxGeometry x="260" y="700" width="200" height="60" as="geometry"/></mxCell>
+        <mxCell id="REMINDER" value="REMINDER&#10;PK id&#10;~ owner_user_id (logical)&#10;lead_id/assign_to = free text&#10;~ tenant_id" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=left;verticalAlign=top;spacingLeft=6;" vertex="1" parent="1"><mxGeometry x="320" y="720" width="240" height="100" as="geometry"/></mxCell>
+        <mxCell id="NOTIFICATION" value="NOTIFICATION&#10;PK id&#10;~ recipient_user_id (logical)&#10;reference_public_id (polymorphic UUID)&#10;~ tenant_id" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=left;verticalAlign=top;spacingLeft=6;" vertex="1" parent="1"><mxGeometry x="600" y="720" width="260" height="100" as="geometry"/></mxCell>
+
+        <!-- ===================== Real FK edges (solid) ===================== -->
+        <mxCell id="e_dest_country" style="endArrow=block;html=1;" edge="1" parent="1" source="DESTINATION" target="COUNTRY"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_city_country" style="endArrow=block;html=1;" edge="1" parent="1" source="CITY" target="COUNTRY"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_city_dest" style="endArrow=block;html=1;" edge="1" parent="1" source="CITY" target="DESTINATION"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_hotel_city" style="endArrow=block;html=1;" edge="1" parent="1" source="HOTEL" target="CITY"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_sight_city" style="endArrow=block;html=1;" edge="1" parent="1" source="SIGHTSEEING" target="CITY"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_cruise_city" style="endArrow=block;html=1;" edge="1" parent="1" source="CRUISE" target="CITY"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_airline_city" style="endArrow=block;html=1;" edge="1" parent="1" source="AIRLINE" target="CITY"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_addon_city" style="endArrow=block;html=1;" edge="1" parent="1" source="ADDON" target="CITY"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_vehicle_city" style="endArrow=block;html=1;" edge="1" parent="1" source="VEHICLE" target="CITY"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_room_hotel" style="endArrow=block;html=1;" edge="1" parent="1" source="ROOM_TYPE" target="HOTEL"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_meal_hotel" style="endArrow=block;html=1;" edge="1" parent="1" source="MEAL_PLAN" target="HOTEL"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_croom_cruise" style="endArrow=block;html=1;" edge="1" parent="1" source="CRUISE_ROOM_TYPE" target="CRUISE"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_itin_lead" style="endArrow=block;html=1;" edge="1" parent="1" source="LEAD_ITINERARY" target="LEAD"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_lead_user" style="endArrow=block;html=1;" edge="1" parent="1" source="LEAD" target="USER"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_vbank_vendor" style="endArrow=block;html=1;" edge="1" parent="1" source="VENDOR_BANK" target="VENDOR"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_vfin_vendor" style="endArrow=block;html=1;" edge="1" parent="1" source="VENDOR_FIN" target="VENDOR"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+        <!-- ===================== Logical edges (dashed, no DB FK) ===================== -->
+        <mxCell id="e_user_tenant" value="logical" style="endArrow=open;html=1;dashed=1;" edge="1" parent="1" source="USER" target="TENANT"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_user_user" value="manager (self)" style="endArrow=open;html=1;dashed=1;" edge="1" parent="1" source="USER" target="USER"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_notif_user" value="recipient" style="endArrow=open;html=1;dashed=1;" edge="1" parent="1" source="NOTIFICATION" target="USER"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_rem_user" value="owner" style="endArrow=open;html=1;dashed=1;" edge="1" parent="1" source="REMINDER" target="USER"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_book_cust" value="customer" style="endArrow=open;html=1;dashed=1;" edge="1" parent="1" source="BOOKING" target="CUSTOMER"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_book_dest" value="destination" style="endArrow=open;html=1;dashed=1;" edge="1" parent="1" source="BOOKING" target="DESTINATION"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_book_lead" value="from lead" style="endArrow=open;html=1;dashed=1;" edge="1" parent="1" source="BOOKING" target="LEAD"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+        <!-- ===================== Legend ===================== -->
+        <mxCell id="LEGEND" value="Legend&#10;solid arrow = real DB FK (@ManyToOne)&#10;dashed arrow = logical ref (no FK constraint)&#10;~ field = logical id column&#10;blue=platform  green=geography  orange=master  purple=CRM  red=non-standard base" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;align=left;verticalAlign=top;spacingLeft=6;" vertex="1" parent="1"><mxGeometry x="40" y="840" width="520" height="110" as="geometry"/></mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

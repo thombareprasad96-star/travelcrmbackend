@@ -30,10 +30,16 @@ import java.util.Collection;
 public class User extends BaseEntity implements UserDetails {
 
     // NULL tenant_id = SUPERADMIN (platform-level user, belongs to no tenant)
-    // Non-null tenant_id = tenant user (ADMIN, MANAGER, AGENT)
+    // Non-null tenant_id = tenant user (ADMIN, MANAGER, TRAVEL_AGENT)
     // No DB-level FK — cross-aggregate reference to tenants.id, enforced at the application layer.
     @Column(name = "tenant_id")
     private Long tenantId;
+
+    // Owning MANAGER for a TRAVEL_AGENT (self-reference by users.id), nullable.
+    // Backs lead visibility: a lead is visible to its assigned agent, that
+    // agent's manager, and the tenant admin. Null for managers/admins.
+    @Column(name = "manager_id")
+    private Long managerId;
 
     @Column(name = "full_name", nullable = false, length = 150)
     private String name;

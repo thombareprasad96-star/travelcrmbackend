@@ -5,7 +5,7 @@ import com.crm.travelcrm.notification.api.NotifyEvent;
 import com.crm.travelcrm.notification.api.TemplateRenderer;
 import com.crm.travelcrm.notification.domain.entity.Notification;
 import com.crm.travelcrm.notification.domain.enums.DeliveryChannel;
-import com.crm.travelcrm.auth.repository.UserRepository;
+import com.crm.travelcrm.auth.api.UserDirectory;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.mail.SimpleMailMessage;
@@ -25,9 +25,9 @@ import java.util.Map;
  * failures the error is logged and the attempt is abandoned — no dead-letter queue
  * in this implementation (add one if required by SLA).
  *
- * <p><b>Tenancy:</b> {@link UserRepository} queries the {@code users} table which
- * extends {@code BaseEntity} (not {@code BaseTenantEntity}), so no tenant filter
- * or TenantContext is needed here. Email addresses are read by internal user ID.
+ * <p><b>Tenancy:</b> {@link UserDirectory} resolves email by internal user id from the
+ * {@code users} table, which extends {@code BaseEntity} (not {@code BaseTenantEntity}),
+ * so no tenant filter or TenantContext is needed here.
  */
 @Slf4j
 @Component
@@ -37,7 +37,7 @@ public class EmailNotificationChannel implements NotificationChannel {
     private static final int MAX_ATTEMPTS = 3;
 
     private final JavaMailSender mailSender;
-    private final UserRepository userRepository;
+    private final UserDirectory userDirectory;
     private final TemplateRenderer templateRenderer;
 
     @Override
@@ -58,11 +58,8 @@ public class EmailNotificationChannel implements NotificationChannel {
         String body    = templateRenderer.render(event.getMessage() != null ? event.getMessage() : event.getTitle(), payload);
 
         for (Long recipientId : event.getRecipientUserIds()) {
-            userRepository.findById(recipientId).ifPresent(user -> {
-                if (user.getEmail() != null) {
-                    sendWithRetry(user.getEmail(), subject, body, recipientId);
-                }
-            });
+            userDirectory.emailById(recipientId)
+                    .ifPresent(email -> sendWithRetry(email, subject, body, recipientId));
         }
     }
 

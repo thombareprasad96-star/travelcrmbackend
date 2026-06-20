@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Service
@@ -46,22 +47,22 @@ public class VehicleServiceImpl implements VehicleService {
     }
 
     @Override
-    public VehicleResponseDTO getVehicleById(Long id) {
-        return VehicleMapper.toResponseDTO(getVisibleVehicle(id));
+    public VehicleResponseDTO getVehicleByPublicId(UUID publicId) {
+        return VehicleMapper.toResponseDTO(getVisibleVehicle(publicId));
     }
 
     @Override
     @Transactional
-    public VehicleResponseDTO updateVehicle(Long id, VehicleRequestDTO request) {
-        VehicleEntity entity = getEditableVehicle(id);
+    public VehicleResponseDTO updateVehicle(UUID publicId, VehicleRequestDTO request) {
+        VehicleEntity entity = getEditableVehicle(publicId);
         VehicleMapper.updateEntity(entity, request);
         return VehicleMapper.toResponseDTO(vehicleRepository.save(entity));
     }
 
     @Override
     @Transactional
-    public void deleteVehicle(Long id) {
-        VehicleEntity entity = getEditableVehicle(id);
+    public void deleteVehicle(UUID publicId) {
+        VehicleEntity entity = getEditableVehicle(publicId);
         vehicleRepository.delete(entity);
     }
 
@@ -93,21 +94,23 @@ public class VehicleServiceImpl implements VehicleService {
         return entities.stream().map(VehicleMapper::toResponseDTO).collect(Collectors.toList());
     }
 
-    private VehicleEntity getVisibleVehicle(Long id) {
-        VehicleEntity vehicle = vehicleRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Vehicle not found with id: " + id));
-
+    // Tenant-scoped read: resolves a vehicle visible to the current tenant (global or owned).
+    // Never uses bare findById(Long) — that bypasses tenant isolation.
+    private VehicleEntity getVisibleVehicle(UUID publicId) {
         Long tenantId = TenantContext.getTenantId();
-        if (tenantId != null
-                && vehicle.getTenantId() != null
-                && !vehicle.getTenantId().equals(tenantId)) {
-            throw new ResourceNotFoundException("Vehicle not found with id: " + id);
+        if (tenantId == null) {
+            // Platform admin (SuperAdmin) — no tenant scoping, sees everything.
+            return vehicleRepository.findByPublicId(publicId)
+                    .orElseThrow(() -> new ResourceNotFoundException(
+                            "Vehicle not found with id: " + publicId));
         }
-        return vehicle;
+        return vehicleRepository.findVisibleByPublicId(publicId, tenantId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Vehicle not found with id: " + publicId));
     }
 
-    private VehicleEntity getEditableVehicle(Long id) {
-        VehicleEntity vehicle = getVisibleVehicle(id);
+    private VehicleEntity getEditableVehicle(UUID publicId) {
+        VehicleEntity vehicle = getVisibleVehicle(publicId);
 
         Long tenantId = TenantContext.getTenantId();
         if (tenantId != null && !tenantId.equals(vehicle.getTenantId())) {

@@ -39,11 +39,9 @@ import java.time.LocalDate;
                 @UniqueConstraint(
                         name = "uk_customer_tenant_phone",
                         columnNames = {"tenant_id", "phone"}
-                ),
-                @UniqueConstraint(
-                        name = "uk_customer_tenant_code",
-                        columnNames = {"tenant_id", "customer_code"}
                 )
+                // customer_code uniqueness is enforced by the soft-delete-aware partial
+                // unique index uq_customers_code_tenant (see db/indexes.sql), not a constraint.
         }
 )
 @Getter

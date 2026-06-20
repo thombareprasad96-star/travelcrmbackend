@@ -20,43 +20,43 @@ public interface BookingRepository extends JpaRepository<Booking, Long>,
 
     // ── Lookup ───────────────────────────────────────────────────────────────
 
-    Optional<Booking> findByPublicIdAndActiveTrue(UUID publicId);
+    Optional<Booking> findByPublicIdAndDeletedAtIsNull(UUID publicId);
 
-    Optional<Booking> findByBookingCodeAndActiveTrue(String bookingCode);
+    Optional<Booking> findByBookingCodeAndDeletedAtIsNull(String bookingCode);
 
-    Optional<Booking> findByIdAndActiveTrue(Long id);
+    Optional<Booking> findByIdAndDeletedAtIsNull(Long id);
 
     Optional<Booking> findTopByOrderByIdDesc();
 
-    List<Booking> findAllByCustomerIdAndActiveTrue(Long customerId);
+    List<Booking> findAllByCustomerIdAndDeletedAtIsNull(Long customerId);
 
     boolean existsByBookingCode(String bookingCode);
 
     // ── Stats queries ────────────────────────────────────────────────────────
 
-    long countByActiveTrue();
+    long countByDeletedAtIsNull();
 
-    long countByStatusAndActiveTrue(BookingStatus status);
+    long countByStatusAndDeletedAtIsNull(BookingStatus status);
 
-    @Query("SELECT COALESCE(SUM(b.customerAmount), 0) FROM Booking b WHERE b.active = true")
+    @Query("SELECT COALESCE(SUM(b.customerAmount), 0) FROM Booking b WHERE b.deletedAt IS NULL")
     BigDecimal sumTotalRevenue();
 
-    @Query("SELECT COALESCE(SUM(b.paidAmount), 0) FROM Booking b WHERE b.active = true")
+    @Query("SELECT COALESCE(SUM(b.paidAmount), 0) FROM Booking b WHERE b.deletedAt IS NULL")
     BigDecimal sumTotalCollected();
 
-    @Query("SELECT COALESCE(SUM(b.totalPayable - b.paidAmount), 0) FROM Booking b WHERE b.active = true")
+    @Query("SELECT COALESCE(SUM(b.totalPayable - b.paidAmount), 0) FROM Booking b WHERE b.deletedAt IS NULL")
     BigDecimal sumTotalPending();
 
-    @Query("SELECT COALESCE(SUM(b.customerAmount), 0) FROM Booking b WHERE b.active = true AND b.status = 'REFUNDED'")
+    @Query("SELECT COALESCE(SUM(b.customerAmount), 0) FROM Booking b WHERE b.deletedAt IS NULL AND b.status = 'REFUNDED'")
     BigDecimal sumTotalRefund();
 
-    @Query("SELECT COALESCE(SUM(b.netProfit), 0) FROM Booking b WHERE b.active = true")
+    @Query("SELECT COALESCE(SUM(b.netProfit), 0) FROM Booking b WHERE b.deletedAt IS NULL")
     BigDecimal sumNetProfit();
 
-    @Query("SELECT COALESCE(SUM(b.gst), 0) FROM Booking b WHERE b.active = true")
+    @Query("SELECT COALESCE(SUM(b.gst), 0) FROM Booking b WHERE b.deletedAt IS NULL")
     BigDecimal sumGstCollected();
 
-    @Query("SELECT COALESCE(SUM(b.tcs), 0) FROM Booking b WHERE b.active = true")
+    @Query("SELECT COALESCE(SUM(b.tcs), 0) FROM Booking b WHERE b.deletedAt IS NULL")
     BigDecimal sumTcsCollected();
 
     // ── Customer-module aggregates (tenant-scoped) ─────────────────────────────
@@ -64,7 +64,7 @@ public interface BookingRepository extends JpaRepository<Booking, Long>,
     // booking-derived figures. All run in the database — never in memory.
 
     /** One ordered history row per active booking for a customer. */
-    List<Booking> findAllByCustomerIdAndActiveTrueOrderByBookingDateDesc(Long customerId);
+    List<Booking> findAllByCustomerIdAndDeletedAtIsNullOrderByBookingDateDesc(Long customerId);
 
     /**
      * Grouped booking metrics for a batch of customers, scoped to the tenant.
@@ -77,7 +77,7 @@ public interface BookingRepository extends JpaRepository<Booking, Long>,
                    COALESCE(SUM(b.customerAmount), 0) AS totalSpent,
                    MAX(b.bookingDate)    AS lastBookingDate
             FROM Booking b
-            WHERE b.active = true
+            WHERE b.deletedAt IS NULL
               AND b.tenantId = :tenantId
               AND b.customerId IN :customerIds
             GROUP BY b.customerId
@@ -88,18 +88,18 @@ public interface BookingRepository extends JpaRepository<Booking, Long>,
 
     /** Lifetime revenue (sum of customerAmount) for one tenant. */
     @Query("SELECT COALESCE(SUM(b.customerAmount), 0) FROM Booking b " +
-            "WHERE b.active = true AND b.tenantId = :tenantId")
+            "WHERE b.deletedAt IS NULL AND b.tenantId = :tenantId")
     BigDecimal sumRevenueByTenant(@Param("tenantId") Long tenantId);
 
     /** Total active bookings for one tenant. */
-    @Query("SELECT COUNT(b) FROM Booking b WHERE b.active = true AND b.tenantId = :tenantId")
+    @Query("SELECT COUNT(b) FROM Booking b WHERE b.deletedAt IS NULL AND b.tenantId = :tenantId")
     long countByTenant(@Param("tenantId") Long tenantId);
 
     /** Distinct customer ids with 3+ active bookings — feeds "repeat customers". */
     @Query("""
             SELECT b.customerId
             FROM Booking b
-            WHERE b.active = true AND b.tenantId = :tenantId
+            WHERE b.deletedAt IS NULL AND b.tenantId = :tenantId
             GROUP BY b.customerId
             HAVING COUNT(b) >= 3
             """)

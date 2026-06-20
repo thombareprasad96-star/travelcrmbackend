@@ -1,6 +1,7 @@
 package com.crm.travelcrm.notification.domain.entity;
 
 import com.crm.travelcrm.common.entity.BaseTenantEntity;
+import com.crm.travelcrm.notification.domain.enums.NotificationReferenceType;
 import com.crm.travelcrm.notification.domain.enums.NotificationStatus;
 import jakarta.persistence.*;
 import lombok.*;
@@ -56,9 +57,10 @@ public class Notification extends BaseTenantEntity {
     @Builder.Default
     private NotificationStatus status = NotificationStatus.UNREAD;
 
-    /** Entity type that triggered this notification ("LEAD", "BOOKING", …). */
+    /** Entity type that triggered this notification — discriminator for FE routing. */
+    @Enumerated(EnumType.STRING)
     @Column(name = "reference_type", length = 50, updatable = false)
-    private String referenceType;
+    private NotificationReferenceType referenceType;
 
     /** Public UUID of the source entity — safe to return in API responses. */
     @Column(name = "reference_public_id", updatable = false)

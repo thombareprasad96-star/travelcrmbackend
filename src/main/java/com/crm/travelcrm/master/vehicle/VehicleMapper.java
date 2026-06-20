@@ -23,7 +23,7 @@ public class VehicleMapper {
         if (entity == null) return null;
 
         return VehicleResponseDTO.builder()
-                .id(entity.getId())
+                .publicId(entity.getPublicId())
                 .name(entity.getName())
                 .type(entity.getType())
                 .capacity(entity.getCapacity())

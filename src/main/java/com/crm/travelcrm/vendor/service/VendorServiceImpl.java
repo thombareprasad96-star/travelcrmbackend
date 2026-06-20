@@ -12,6 +12,8 @@ import com.crm.travelcrm.vendor.dto.request.*;
 import com.crm.travelcrm.vendor.dto.response.VendorResponseDTO;
 import com.crm.travelcrm.vendor.dto.response.VendorStatsDTO;
 import com.crm.travelcrm.vendor.entity.Vendor;
+import com.crm.travelcrm.vendor.enums.VendorPayStatus;
+import com.crm.travelcrm.vendor.enums.VendorStatus;
 import com.crm.travelcrm.vendor.mapper.VendorMapper;
 import com.crm.travelcrm.vendor.repository.VendorRepository;
 import com.crm.travelcrm.vendor.specification.VendorSpecification;
@@ -115,8 +117,8 @@ public class VendorServiceImpl implements VendorService {
         Vendor vendor = vendorMapper.toEntity(req);
         vendor.setTenantId(tenantId);
         vendor.setVendorCode(vendorCodeGenerator.generate());
-        vendor.setStatus(req.getStatus() != null ? req.getStatus() : "Active");
-        vendor.setPayStatus("Unpaid");
+        vendor.setStatus(req.getStatus() != null ? req.getStatus() : VendorStatus.ACTIVE);
+        vendor.setPayStatus(VendorPayStatus.UNPAID);
         vendor.setTotalBusiness(BigDecimal.ZERO);
         vendor.setTotalPaid(BigDecimal.ZERO);
         vendor.setCreditLimit(req.getCreditLimit() != null ? req.getCreditLimit() : BigDecimal.ZERO);
@@ -207,9 +209,9 @@ public class VendorServiceImpl implements VendorService {
         Specification<Vendor> spec = Specification
                 .where(VendorSpecification.hasTenant(tenantId))
                 .and(VendorSpecification.notDeleted())
-                .and(VendorSpecification.hasStatus(status))
+                .and(VendorSpecification.hasStatus(parseStatus(status)))
                 .and(VendorSpecification.hasType(type))
-                .and(VendorSpecification.hasPayStatus(payStatus));
+                .and(VendorSpecification.hasPayStatus(parsePayStatus(payStatus)));
 
         log.debug("Filtering vendors: status={}, type={}, payStatus={}", status, type, payStatus);
 
@@ -255,9 +257,9 @@ public class VendorServiceImpl implements VendorService {
         Long tenantId = TenantContext.getTenantId();
 
         long total       = vendorRepository.countByTenantIdAndDeletedAtIsNull(tenantId);
-        long active      = vendorRepository.countByTenantIdAndStatusAndDeletedAtIsNull(tenantId, "Active");
-        long inactive    = vendorRepository.countByTenantIdAndStatusAndDeletedAtIsNull(tenantId, "Inactive");
-        long blacklisted = vendorRepository.countByTenantIdAndStatusAndDeletedAtIsNull(tenantId, "Blacklisted");
+        long active      = vendorRepository.countByTenantIdAndStatusAndDeletedAtIsNull(tenantId, VendorStatus.ACTIVE);
+        long inactive    = vendorRepository.countByTenantIdAndStatusAndDeletedAtIsNull(tenantId, VendorStatus.INACTIVE);
+        long blacklisted = vendorRepository.countByTenantIdAndStatusAndDeletedAtIsNull(tenantId, VendorStatus.BLACKLISTED);
 
         Map<String, Long> totalByType = new LinkedHashMap<>();
         for (String vType : VENDOR_TYPES) {
@@ -338,8 +340,8 @@ public class VendorServiceImpl implements VendorService {
                     .append(escape(v.getCity())).append(",")
                     .append(escape(v.getState())).append(",")
                     .append(escape(v.getCountry())).append(",")
-                    .append(escape(v.getStatus())).append(",")
-                    .append(escape(v.getPayStatus())).append(",")
+                    .append(escape(v.getStatus() != null ? v.getStatus().name() : "")).append(",")
+                    .append(escape(v.getPayStatus() != null ? v.getPayStatus().name() : "")).append(",")
                     .append(v.getRating() != null ? v.getRating() : "").append(",")
                     .append(v.getTotalBusiness() != null ? v.getTotalBusiness() : "0").append(",")
                     .append(v.getTotalPaid() != null ? v.getTotalPaid() : "0").append(",")
@@ -367,8 +369,8 @@ public class VendorServiceImpl implements VendorService {
 
     private Vendor findOrThrow(Long id) {
         Long tenantId = TenantContext.getTenantId();
-        return vendorRepository.findById(id)
-                .filter(v -> v.getTenantId().equals(tenantId) && v.getDeletedAt() == null)
+        // Tenant-scoped at the query level — does NOT load cross-tenant rows into memory.
+        return vendorRepository.findByIdAndTenantIdAndDeletedAtIsNull(id, tenantId)
                 .orElseThrow(() -> new ResourceNotFoundException("Vendor not found: " + id));
     }
 
@@ -384,5 +386,24 @@ public class VendorServiceImpl implements VendorService {
             return "\"" + val.replace("\"", "\"\"") + "\"";
         }
         return val;
+    }
+
+    /** Lenient filter parsing: blank/unknown values mean "no filter" (returns null). */
+    private static VendorStatus parseStatus(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return VendorStatus.valueOf(value.trim().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    private static VendorPayStatus parsePayStatus(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return VendorPayStatus.valueOf(value.trim().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 }

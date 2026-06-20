@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authorization.AuthorizationDeniedException;
 import org.springframework.validation.FieldError;
@@ -80,12 +81,15 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", summary);
     }
 
-//    @ExceptionHandler(HttpMessageNotReadableException.class)
-//    public ResponseEntity<ErrorResponse> handleUnreadableMessage(HttpMessageNotReadableException ex) {
-//        log.warn("Malformed request body: {}", ex.getMessage());
-//        return build(HttpStatus.BAD_REQUEST, "BAD_REQUEST",
-//                "Invalid request body. Check enum values and date formats (yyyy-MM-dd).");
-//    }
+    // Unparseable body — e.g. a `role` value that is not one of the Role enum
+    // constants, or a malformed date. Surfaces as 400, never a 500.
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ErrorResponse> handleUnreadableMessage(HttpMessageNotReadableException ex) {
+        log.warn("Malformed request body: {}", ex.getMessage());
+        return build(HttpStatus.BAD_REQUEST, "BAD_REQUEST",
+                "Invalid request body. Check that 'role' is one of MANAGER or TRAVEL_AGENT "
+                        + "and that enum values and date formats (yyyy-MM-dd) are valid.");
+    }
 
     @ExceptionHandler(BookingNotFoundException.class)
     public ResponseEntity<ErrorResponse> handleBookingNotFound(BookingNotFoundException ex) {

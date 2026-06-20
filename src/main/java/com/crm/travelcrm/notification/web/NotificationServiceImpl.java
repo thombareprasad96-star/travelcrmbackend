@@ -1,6 +1,6 @@
 package com.crm.travelcrm.notification.web;
 
-import com.crm.travelcrm.auth.entity.User;
+import com.crm.travelcrm.auth.api.CurrentUserProvider;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.notification.domain.entity.Notification;
 import com.crm.travelcrm.notification.domain.enums.NotificationStatus;
@@ -12,8 +12,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -27,6 +25,7 @@ public class NotificationServiceImpl implements NotificationService {
 
     private final NotificationRepository notificationRepository;
     private final SseEmitterRegistry     sseEmitterRegistry;
+    private final CurrentUserProvider    currentUserProvider;
 
     // ── Feed ──────────────────────────────────────────────────────────────────
 
@@ -78,8 +77,7 @@ public class NotificationServiceImpl implements NotificationService {
                 .findByIdAndRecipientUserIdAndDeletedAtIsNull(id, userId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Notification not found: " + id));
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        n.softDelete(auth != null ? auth.getName() : "system");
+        n.softDelete(currentUserProvider.currentUsernameOrSystem());
         notificationRepository.save(n);
         log.debug("Notification {} soft-deleted for user {}", id, userId);
     }
@@ -107,17 +105,16 @@ public class NotificationServiceImpl implements NotificationService {
     // ── Private helpers ───────────────────────────────────────────────────────
 
     /**
-     * Extracts the internal Long id of the authenticated user from SecurityContext.
-     * The principal is always a {@link User} for tenant requests; SuperAdmin is a
-     * separate entity type and does not receive in-app notifications.
+     * Internal Long id of the authenticated tenant user. SuperAdmin is a separate
+     * entity type and does not receive in-app notifications, so a null actor is an error here.
      */
     private Long currentUserId() {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth == null || !(auth.getPrincipal() instanceof User user)) {
+        Long userId = currentUserProvider.currentUserIdOrNull();
+        if (userId == null) {
             throw new IllegalStateException(
                     "No authenticated User in SecurityContext. " +
                     "Notifications are only available to tenant users, not SuperAdmin.");
         }
-        return user.getId();
+        return userId;
     }
 }

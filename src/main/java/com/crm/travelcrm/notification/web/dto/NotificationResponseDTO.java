@@ -2,6 +2,7 @@ package com.crm.travelcrm.notification.web.dto;
 
 import com.crm.travelcrm.notification.api.NotifyEvent;
 import com.crm.travelcrm.notification.domain.entity.Notification;
+import com.crm.travelcrm.notification.domain.enums.NotificationReferenceType;
 import com.crm.travelcrm.notification.domain.enums.NotificationStatus;
 import lombok.Builder;
 import lombok.Getter;
@@ -20,7 +21,7 @@ public class NotificationResponseDTO {
     private String title;
     private String message;
     private NotificationStatus status;
-    private String referenceType;
+    private NotificationReferenceType referenceType;
     private UUID referencePublicId;
     private Instant readAt;
     private LocalDateTime createdAt;
@@ -47,7 +48,7 @@ public class NotificationResponseDTO {
                 .title(event.getTitle())
                 .message(event.getMessage())
                 .status(NotificationStatus.UNREAD)
-                .referenceType(event.getReferenceType())
+                .referenceType(NotificationReferenceType.fromString(event.getReferenceType()))
                 .referencePublicId(event.getReferencePublicId())
                 .createdAt(LocalDateTime.now())
                 .build();

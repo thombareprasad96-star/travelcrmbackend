@@ -29,6 +29,10 @@ public interface CustomerRepository
 
     Optional<Customer> findByPublicIdAndTenantIdAndDeletedAtIsNull(UUID publicId, Long tenantId);
 
+    // Tenant-scoped lookup by internal id — used to validate cross-aggregate references
+    // (e.g. Booking.customerId) without bypassing tenant isolation via bare findById.
+    Optional<Customer> findByIdAndTenantIdAndDeletedAtIsNull(Long id, Long tenantId);
+
     Optional<Customer> findByPhoneAndTenantIdAndDeletedAtIsNull(String phone, Long tenantId);
 
     // ── Listing ────────────────────────────────────────────────────────────────

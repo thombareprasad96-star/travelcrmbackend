@@ -4,6 +4,8 @@ import com.crm.travelcrm.auth.enums.Role;
 import jakarta.validation.constraints.*;
 import lombok.Data;
 
+import java.util.UUID;
+
 @Data
 public class CreateUserRequest {
 
@@ -29,4 +31,8 @@ public class CreateUserRequest {
 
     @Size(max = 20, message = "Phone number must be 20 characters or fewer")
     private String phoneNumber;
+
+    // Optional. Only meaningful for TRAVEL_AGENT — the publicId of the MANAGER
+    // who owns this agent. Resolved + validated server-side (same tenant, role).
+    private UUID managerPublicId;
 }

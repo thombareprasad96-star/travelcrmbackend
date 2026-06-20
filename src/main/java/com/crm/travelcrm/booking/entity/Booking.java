@@ -122,10 +122,8 @@ public class Booking extends BaseTenantEntity {
     private List<String> services = new ArrayList<>();
 
     // ───────────────── Soft Delete ─────────────────
-
-    @Builder.Default
-    @Column(name = "active", nullable = false)
-    private Boolean active = Boolean.TRUE;
+    // Soft-delete is tracked solely by BaseEntity.deletedAt / deletedBy.
+    // (The previous standalone `active` boolean was removed — a single source of truth.)
 
     // ───────────────── Derived Fields ─────────────────
 

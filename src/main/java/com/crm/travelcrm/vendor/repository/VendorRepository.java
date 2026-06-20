@@ -1,6 +1,7 @@
 package com.crm.travelcrm.vendor.repository;
 
 import com.crm.travelcrm.vendor.entity.Vendor;
+import com.crm.travelcrm.vendor.enums.VendorStatus;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
@@ -19,6 +20,13 @@ public interface VendorRepository extends JpaRepository<Vendor, Long>, JpaSpecif
 
     Optional<Vendor> findTopByOrderByIdDesc();
 
+    // Tenant-scoped single-item lookups — never use bare findById(Long) (bypasses tenant filter).
+    Optional<Vendor> findByIdAndTenantId(Long id, Long tenantId);
+
+    Optional<Vendor> findByIdAndTenantIdAndDeletedAtIsNull(Long id, Long tenantId);
+
+    Optional<Vendor> findByPublicIdAndTenantId(java.util.UUID publicId, Long tenantId);
+
     Optional<Vendor> findByVendorCodeAndTenantId(String vendorCode, Long tenantId);
 
     Optional<Vendor> findByVendorCodeAndTenantIdAndDeletedAtIsNull(String vendorCode, Long tenantId);
@@ -27,7 +35,7 @@ public interface VendorRepository extends JpaRepository<Vendor, Long>, JpaSpecif
 
     List<Vendor> findByTenantIdAndVendorTypeAndDeletedAtIsNull(Long tenantId, String vendorType);
 
-    List<Vendor> findByTenantIdAndStatus(Long tenantId, String status);
+    List<Vendor> findByTenantIdAndStatus(Long tenantId, VendorStatus status);
 
     @EntityGraph(attributePaths = {"services"})
     List<Vendor> findAllByTenantIdAndDeletedAtIsNull(Long tenantId);
@@ -38,9 +46,9 @@ public interface VendorRepository extends JpaRepository<Vendor, Long>, JpaSpecif
 
     long countByTenantIdAndDeletedAtIsNull(Long tenantId);
 
-    long countByTenantIdAndStatus(Long tenantId, String status);
+    long countByTenantIdAndStatus(Long tenantId, VendorStatus status);
 
-    long countByTenantIdAndStatusAndDeletedAtIsNull(Long tenantId, String status);
+    long countByTenantIdAndStatusAndDeletedAtIsNull(Long tenantId, VendorStatus status);
 
     long countByTenantIdAndVendorType(Long tenantId, String vendorType);
 

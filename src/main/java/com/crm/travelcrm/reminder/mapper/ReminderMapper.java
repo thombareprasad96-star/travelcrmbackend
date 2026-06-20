@@ -17,8 +17,12 @@ import org.mapstruct.*;
 )
 public interface ReminderMapper {
 
+    @Mapping(target = "leadDisplayCode", source = "leadId")
     ReminderResponseDto toDto(Reminder reminder);
 
+    // Lead/user references are resolved + validated in the service, not auto-mapped here.
+    @Mapping(target = "leadRefId", ignore = true)
+    @Mapping(target = "assignToUserId", ignore = true)
     Reminder toEntity(CreateReminderRequestDto request);
 
     /** Applies only the non-null fields of {@code request} onto {@code reminder}. */

@@ -8,6 +8,7 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * PUT /api/reminders/{id} body. Only non-null fields are applied (partial-friendly),
@@ -24,9 +25,20 @@ public class UpdateReminderRequestDto {
     private ReminderType type;
     private ReminderPriority priority;
     private ReminderStatus status;
+
+    /** Preferred: UUID of the referenced lead. Resolved to the internal Long FK server-side. */
+    private UUID leadPublicId;
+
+    /** Preferred: UUID of the assigned user. Resolved to the internal Long FK server-side. */
+    private UUID assignToPublicId;
+
+    /** @deprecated legacy display code. Use {@link #leadPublicId}. */
+    @Deprecated
     private String leadId;
     private String leadName;
     private String phone;
+    /** @deprecated legacy user code. Use {@link #assignToPublicId}. */
+    @Deprecated
     private String assignTo;
     private Instant dueDate;
     private Instant snoozedUntil;
