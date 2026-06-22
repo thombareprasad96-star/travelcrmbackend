@@ -33,6 +33,32 @@ public class CloudinaryService {
         }
     }
 
+    /**
+     * Uploads raw bytes (e.g. a generated PDF) at a fixed public id, overwriting any
+     * previous asset at the same id. {@code resource_type=raw} keeps the file as-is.
+     *
+     * @param bytes    file content
+     * @param publicId full Cloudinary public id incl. folder + extension,
+     *                 e.g. {@code "quotations/<uuid>.pdf"}
+     * @return the secure (https) delivery URL
+     */
+    public String uploadRaw(byte[] bytes, String publicId) {
+        try {
+            Map<?, ?> result = cloudinary.uploader().upload(
+                    bytes,
+                    ObjectUtils.asMap(
+                            "public_id",     publicId,
+                            "resource_type", "raw",
+                            "overwrite",     true
+                    )
+            );
+            return (String) result.get("secure_url");
+        } catch (IOException e) {
+            log.error("Cloudinary raw upload failed for publicId '{}': {}", publicId, e.getMessage());
+            throw new RuntimeException("File upload failed: " + e.getMessage(), e);
+        }
+    }
+
     public void deleteImage(String publicId) {
         if (publicId == null || publicId.isBlank()) {
             return;

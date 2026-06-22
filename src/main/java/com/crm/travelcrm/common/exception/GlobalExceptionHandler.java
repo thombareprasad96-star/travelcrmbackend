@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.io.IOException;
 import java.time.LocalDateTime;
@@ -133,6 +134,17 @@ public class GlobalExceptionHandler {
     @ExceptionHandler({ IOException.class, AsyncRequestNotUsableException.class })
     public void handleClientDisconnect(Exception ex) {
         log.debug("Client connection aborted: {}", ex.getMessage());
+    }
+
+    // Unknown URL — no controller mapping and no matching static resource. Spring
+    // raises this for mistyped paths (e.g. a stray trailing space in
+    // "/api/quotations/{id}/pdf"). Return a clean 404 instead of letting it fall
+    // through to the generic 500 handler below.
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ErrorResponse> handleNoResourceFound(NoResourceFoundException ex) {
+        log.warn("No resource found for path: {}", ex.getResourcePath());
+        return build(HttpStatus.NOT_FOUND, "NOT_FOUND",
+                "Resource not found: " + ex.getResourcePath());
     }
 
     @ExceptionHandler(Exception.class)

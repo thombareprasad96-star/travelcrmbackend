@@ -3,6 +3,7 @@ package com.crm.travelcrm.lead.service;
 import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.auth.repository.UserRepository;
 import com.crm.travelcrm.common.context.TenantContext;
+import com.crm.travelcrm.common.event.LeadSoftDeletedEvent;
 import com.crm.travelcrm.lead.dto.CreateLeadRequestDto;
 import com.crm.travelcrm.lead.dto.LeadBoardColumnDto;
 import com.crm.travelcrm.lead.dto.LeadResponseDto;
@@ -221,6 +222,11 @@ public class LeadServiceImpl implements LeadService {
 
         leadRepository.save(lead);
         log.info("Lead soft-deleted | publicId: {} | tenantId: {}", publicId, tenantId);
+
+        // Cascade: let the quotation module soft-delete this lead's quotations.
+        // Published in-transaction so a synchronous listener participates in the same
+        // commit (atomic cascade). The event lives in common — no cross-module import.
+        eventPublisher.publishEvent(new LeadSoftDeletedEvent(lead.getId(), tenantId));
     }
 
     // ── Kanban board ────────────────────────────────────────────────────────────

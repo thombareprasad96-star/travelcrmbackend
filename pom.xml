@@ -368,6 +368,58 @@
 			<version>1.38.0</version>
 		</dependency>
 
+		<!-- ===================================================== -->
+		<!-- THYMELEAF — PDF HTML templating                         -->
+		<!-- (version managed by the Spring Boot parent)            -->
+		<!-- ===================================================== -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-thymeleaf</artifactId>
+			<exclusions>
+				<exclusion>
+					<groupId>org.springframework.boot</groupId>
+					<artifactId>spring-boot-starter-logging</artifactId>
+				</exclusion>
+				<exclusion>
+					<groupId>ch.qos.logback</groupId>
+					<artifactId>logback-classic</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+
+		<!-- ===================================================== -->
+		<!-- OPENPDF-HTML — renders the Thymeleaf HTML to a PDF     -->
+		<!-- (Flying Saucer fork merged into OpenPDF, pkg org.openpdf) -->
+		<!-- ===================================================== -->
+		<dependency>
+			<groupId>com.github.librepdf</groupId>
+			<artifactId>openpdf-html</artifactId>
+			<version>2.4.0</version>
+			<exclusions>
+				<exclusion>
+					<groupId>commons-logging</groupId>
+					<artifactId>commons-logging</artifactId>
+				</exclusion>
+				<exclusion>
+					<groupId>ch.qos.logback</groupId>
+					<artifactId>logback-classic</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+
+		<!-- ===================================================== -->
+		<!-- OGNL — required by Thymeleaf's StandardDialect for     -->
+		<!-- ${...} evaluation in the standalone TemplateEngine     -->
+		<!-- used by QuotationPdfService (Spring Boot's own         -->
+		<!-- Thymeleaf path uses SpEL, so OGNL isn't pulled in).    -->
+		<!-- Version aligns with Thymeleaf 3.1.x.                   -->
+		<!-- ===================================================== -->
+		<dependency>
+			<groupId>ognl</groupId>
+			<artifactId>ognl</artifactId>
+			<version>3.3.4</version>
+		</dependency>
+
 	</dependencies>
 
 	<build>
