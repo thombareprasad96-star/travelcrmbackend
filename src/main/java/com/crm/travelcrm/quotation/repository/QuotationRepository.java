@@ -11,6 +11,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -30,6 +31,33 @@ public interface QuotationRepository
             UUID leadPublicId, Long tenantId);
 
     long countByLeadPublicIdAndTenantIdAndDeletedAtIsNull(UUID leadPublicId, Long tenantId);
+
+    // ── Latest quotation for a lead ─────────────────────────────────────────────
+    // "Latest" = newest row by createdAt (versioning is new-row, so the newest row is
+    // the newest version), id DESC as a deterministic tiebreaker. Tenant-scoped.
+    Optional<Quotation> findFirstByLeadPublicIdAndTenantIdAndDeletedAtIsNullOrderByCreatedAtDescIdDesc(
+            UUID leadPublicId, Long tenantId);
+
+    // Lean batch projection for embedding in the lead list/board — selects ONLY the
+    // ids needed to render a View/Download action, never loading the (wide) Quotation
+    // entity. One query for many leads, reduced to latest-per-lead in the service
+    // (JPQL has no Postgres DISTINCT ON).
+    @Query("""
+            SELECT q.leadPublicId AS leadPublicId, q.publicId AS quotationPublicId
+              FROM Quotation q
+             WHERE q.leadPublicId IN :ids
+               AND q.tenantId = :tenantId
+               AND q.deletedAt IS NULL
+             ORDER BY q.createdAt DESC, q.id DESC
+            """)
+    List<LatestQuotationRef> findLatestRefsForLeads(
+            @Param("ids") Collection<UUID> ids, @Param("tenantId") Long tenantId);
+
+    /** Closed projection: a lead's publicId paired with the publicId of its latest quotation. */
+    interface LatestQuotationRef {
+        UUID getLeadPublicId();
+        UUID getQuotationPublicId();
+    }
 
     // ── Quote-number sequence ───────────────────────────────────────────────────
     // Counts root quotations (a family's first version) for a tenant. The next quote

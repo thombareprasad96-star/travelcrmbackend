@@ -9,6 +9,7 @@ import com.crm.travelcrm.lead.entity.LeadItinerary;
 import com.crm.travelcrm.lead.repository.LeadRepository;
 import com.crm.travelcrm.quotation.dto.QuotationEmailRequestDto;
 import com.crm.travelcrm.quotation.dto.QuotationPdfResource;
+import com.crm.travelcrm.quotation.dto.QuotationRefDto;
 import com.crm.travelcrm.quotation.dto.QuotationRequestDto;
 import com.crm.travelcrm.quotation.dto.QuotationResponseDto;
 import com.crm.travelcrm.quotation.dto.QuotationSummaryDto;
@@ -33,7 +34,10 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -134,6 +138,40 @@ public class QuotationServiceImpl implements QuotationService {
                 .stream()
                 .map(quotationMapper::toSummary)
                 .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public QuotationSummaryDto getLatestByLead(UUID leadPublicId) {
+        Long tenantId = currentTenantId();
+        return quotationRepository
+                .findFirstByLeadPublicIdAndTenantIdAndDeletedAtIsNullOrderByCreatedAtDescIdDesc(leadPublicId, tenantId)
+                .map(quotationMapper::toSummary)
+                .orElse(null);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public QuotationRefDto getLatestRefByLead(UUID leadPublicId) {
+        return getLatestRefsByLeads(List.of(leadPublicId)).get(leadPublicId);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Map<UUID, QuotationRefDto> getLatestRefsByLeads(Collection<UUID> leadPublicIds) {
+        // Guard the empty case — never fire an "IN ()" query.
+        if (leadPublicIds == null || leadPublicIds.isEmpty()) {
+            return Map.of();
+        }
+        Long tenantId = currentTenantId();
+        // Rows arrive createdAt DESC, id DESC — keep the first (latest) ref seen per lead.
+        Map<UUID, QuotationRefDto> result = new LinkedHashMap<>();
+        for (QuotationRepository.LatestQuotationRef row :
+                quotationRepository.findLatestRefsForLeads(leadPublicIds, tenantId)) {
+            result.putIfAbsent(row.getLeadPublicId(),
+                    QuotationRefDto.builder().publicId(row.getQuotationPublicId()).build());
+        }
+        return result;
     }
 
     // ── Delete (soft) ─────────────────────────────────────────────────────────
@@ -288,6 +326,7 @@ public class QuotationServiceImpl implements QuotationService {
 
         q.setLeadId(lead.getId());
         q.setLeadPublicId(lead.getPublicId());
+        q.setLeadStage(lead.getLeadStage());
         q.setCustomerName(lead.getCustomerName());
         q.setCustomerPhone(lead.getPhone());
         q.setCustomerEmail(lead.getEmail());
@@ -342,6 +381,7 @@ public class QuotationServiceImpl implements QuotationService {
         Quotation c = new Quotation();
         c.setLeadId(src.getLeadId());
         c.setLeadPublicId(src.getLeadPublicId());
+        c.setLeadStage(src.getLeadStage());
         c.setQuoteNo(src.getQuoteNo());     // versions share the family's quote number
         c.setTitle(src.getTitle());
         c.setVersion(newVersion);

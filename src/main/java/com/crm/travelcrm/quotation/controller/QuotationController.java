@@ -89,6 +89,15 @@ public class QuotationController {
         return ResponseEntity.ok(ApiResponse.success("Quotations fetched successfully", result));
     }
 
+    // ── Latest quotation for a lead ───────────────────────────────────────────
+    // Newest by createdAt (id DESC tiebreak). data is omitted (NON_NULL) when the
+    // lead has no quotation yet — the frontend's "Create vs View" signal.
+    @GetMapping("/lead/{leadId}/latest")
+    public ResponseEntity<ApiResponse<QuotationSummaryDto>> getLatestForLead(@PathVariable UUID leadId) {
+        QuotationSummaryDto result = quotationService.getLatestByLead(leadId);
+        return ResponseEntity.ok(ApiResponse.success("Latest quotation fetched", result));
+    }
+
     // ── Delete (soft) ─────────────────────────────────────────────────────────
     @DeleteMapping("/{publicId}")
     public ResponseEntity<ApiResponse<Void>> delete(@PathVariable UUID publicId) {

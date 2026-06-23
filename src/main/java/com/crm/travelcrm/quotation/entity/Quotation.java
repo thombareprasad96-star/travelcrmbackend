@@ -1,6 +1,7 @@
 package com.crm.travelcrm.quotation.entity;
 
 import com.crm.travelcrm.common.entity.BaseTenantEntity;
+import com.crm.travelcrm.lead.enums.LeadStage;
 import com.crm.travelcrm.quotation.enums.DiscountType;
 import com.crm.travelcrm.quotation.enums.QuotationStage;
 import jakarta.persistence.*;
@@ -79,6 +80,16 @@ public class Quotation extends BaseTenantEntity {
     @Enumerated(EnumType.STRING)
     @Column(name = "stage", nullable = false, length = 30)
     private QuotationStage stage;
+
+    /**
+     * Snapshot of the originating lead's stage at create/update time. Read-only from the
+     * quotation's perspective — the lead pipeline owns it. Refreshed whenever the lead is
+     * (re)linked in {@code linkLeadAndSnapshot}, so the builder/list views can surface the
+     * lead's pipeline position alongside the quotation's own {@link #stage}.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "lead_stage", length = 50)
+    private LeadStage leadStage;
 
     /** Optional hero/cover image (Cloudinary URL) rendered at the top of the PDF. */
     @Column(name = "cover_image_url", length = 500)

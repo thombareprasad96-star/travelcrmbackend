@@ -32,7 +32,7 @@ public class QuotationRequestDto {
     @Size(max = 30)
     private String version;
 
-    private QuotationStage stage;
+    private QuotationStage quotationStage;
 
     @Size(max = 500)
     private String coverImageUrl;

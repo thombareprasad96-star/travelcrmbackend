@@ -4,6 +4,7 @@ import com.crm.travelcrm.auth.dto.UserDto;
 import com.crm.travelcrm.lead.enums.LeadSource;
 import com.crm.travelcrm.lead.enums.LeadStage;
 import com.crm.travelcrm.lead.enums.LeadType;
+import com.crm.travelcrm.quotation.dto.QuotationRefDto;
 import lombok.Builder;
 import lombok.Data;
 
@@ -39,6 +40,9 @@ public class LeadResponseDto {
     private String notes;
     private List<ItineraryItem> itinerary;
     private LocalDateTime createdAt;
+
+    /** Ref to this lead's newest quotation (null when none) — drives the "View/Download vs Create" UI. */
+    private QuotationRefDto latestQuotation;
 
     @Data
     @Builder

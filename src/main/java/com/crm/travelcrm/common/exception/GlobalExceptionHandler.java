@@ -147,6 +147,25 @@ public class GlobalExceptionHandler {
                 "Resource not found: " + ex.getResourcePath());
     }
 
+    // Cross-tenant access blocked by TenantEntityListener (pre-persist / pre-update).
+    // Must surface as 403, not a generic 500.
+    @ExceptionHandler(SecurityException.class)
+    public ResponseEntity<ErrorResponse> handleSecurity(SecurityException ex) {
+        log.warn("Security violation: {}", ex.getMessage());
+        return build(HttpStatus.FORBIDDEN, "FORBIDDEN",
+                "You do not have permission to perform this action.");
+    }
+
+    // Optimistic-lock conflict (e.g. two concurrent updates of the same vendor).
+    // 409 lets the client retry with fresh data instead of silently losing a write.
+    @ExceptionHandler(org.springframework.dao.OptimisticLockingFailureException.class)
+    public ResponseEntity<ErrorResponse> handleOptimisticLock(
+            org.springframework.dao.OptimisticLockingFailureException ex) {
+        log.warn("Optimistic lock conflict: {}", ex.getMessage());
+        return build(HttpStatus.CONFLICT, "CONFLICT",
+                "This record was changed by someone else. Please reload and try again.");
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleGenericException(Exception ex) {
         log.error("Unexpected error: ", ex);

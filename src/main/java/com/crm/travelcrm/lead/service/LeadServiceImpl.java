@@ -19,6 +19,8 @@ import com.crm.travelcrm.lead.mapper.LeadMapper;
 import com.crm.travelcrm.lead.repository.LeadRepository;
 import com.crm.travelcrm.notification.api.NotifyEvent;
 import com.crm.travelcrm.notification.domain.enums.DeliveryChannel;
+import com.crm.travelcrm.quotation.dto.QuotationRefDto;
+import com.crm.travelcrm.quotation.service.QuotationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -47,6 +49,7 @@ public class LeadServiceImpl implements LeadService {
     private final LeadMapper     leadMapper;
     private final ApplicationEventPublisher eventPublisher;
     private final UserRepository userRepository;
+    private final QuotationService quotationService;
 
     // ── Create ────────────────────────────────────────────────────────────────
 
@@ -86,9 +89,15 @@ public class LeadServiceImpl implements LeadService {
         Pageable pageable = PageRequest.of(page, size, sort);
 
         // Scoped to tenant + excludes soft-deleted records
-        return leadRepository
-                .findAllByTenantIdAndDeletedAtIsNull(tenantId, pageable)
-                .map(leadMapper::toResponse);
+        Page<Lead> leadPage = leadRepository.findAllByTenantIdAndDeletedAtIsNull(tenantId, pageable);
+
+        List<LeadResponseDto> dtos = leadPage.getContent().stream()
+                .map(leadMapper::toResponse)
+                .collect(Collectors.toList());
+        // One batch query for the latest quotation of every lead on this page (no N+1).
+        enrichWithLatestQuotation(dtos);
+
+        return new PageImpl<>(dtos, pageable, leadPage.getTotalElements());
     }
 
     @Override
@@ -102,7 +111,9 @@ public class LeadServiceImpl implements LeadService {
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Lead not found: " + publicId));
 
-        return leadMapper.toResponse(lead);
+        LeadResponseDto dto = leadMapper.toResponse(lead);
+        dto.setLatestQuotation(quotationService.getLatestRefByLead(dto.getId()));
+        return dto;
     }
 
     @Override
@@ -244,7 +255,7 @@ public class LeadServiceImpl implements LeadService {
 
         // Emit every stage in pipeline order, including empty columns, so the
         // board always renders all seven lanes.
-        return Arrays.stream(LeadStage.values())
+        List<LeadBoardColumnDto> columns = Arrays.stream(LeadStage.values())
                 .map(stage -> {
                     List<Lead> stageLeads = byStage.getOrDefault(stage, List.of());
                     BigDecimal total = stageLeads.stream()
@@ -259,6 +270,26 @@ public class LeadServiceImpl implements LeadService {
                             .build();
                 })
                 .toList();
+
+        // One batch quotation query for every lead across all columns (no N+1).
+        enrichWithLatestQuotation(columns.stream()
+                .flatMap(c -> c.getLeads().stream())
+                .toList());
+
+        return columns;
+    }
+
+    /**
+     * Batch-populate {@code latestQuotation} on the given lead DTOs using a single
+     * quotation query (avoids one query per lead). Mutates the DTOs in place; leads
+     * with no quotation are left null.
+     */
+    private void enrichWithLatestQuotation(List<LeadResponseDto> dtos) {
+        if (dtos.isEmpty()) return;
+        List<UUID> leadIds = dtos.stream().map(LeadResponseDto::getId).toList();
+        Map<UUID, QuotationRefDto> latest = quotationService.getLatestRefsByLeads(leadIds);
+        if (latest.isEmpty()) return;
+        dtos.forEach(dto -> dto.setLatestQuotation(latest.get(dto.getId())));
     }
 
     @Override

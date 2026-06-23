@@ -12,12 +12,17 @@ import java.util.UUID;
 public interface UserRepository extends JpaRepository<User, Long> {
     Optional<User> findByEmail(String email);
     Optional<User> findByEmailAndTenantId(String email, Long tenantId);
+    // Soft-delete-aware variants — used by login + the JWT filter so a soft-deleted
+    // user is never authenticated (a deleted row must not resolve to a principal).
+    Optional<User> findByEmailAndDeletedAtIsNull(String email);
+    Optional<User> findByEmailAndTenantIdAndDeletedAtIsNull(String email, Long tenantId);
     boolean existsByEmail(String email);
     boolean existsByEmailAndTenantId(String email, Long tenantId);
     List<User> findByTenantIdAndRoleInAndIsActiveTrue(Long tenantId, List<String> roles);
     List<User> findAllByTenantId(Long tenantId);
     List<User> findAllByTenantIdAndDeletedAtIsNull(Long tenantId);
     Optional<User> findByPublicIdAndTenantIdAndDeletedAtIsNull(UUID publicId, Long tenantId);
+    Optional<User> findByIdAndTenantIdAndDeletedAtIsNull(Long id, Long tenantId);
     void deleteByTenantId(Long tenantId);
     List<User> findByTenantIdAndIsActiveTrueAndDeletedAtIsNullOrderByNameAsc(Long tenantId);
 }

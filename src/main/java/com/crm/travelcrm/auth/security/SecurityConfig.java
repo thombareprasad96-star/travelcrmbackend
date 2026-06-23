@@ -39,6 +39,11 @@ public class SecurityConfig {
     private final UserDetailsServiceImpl userDetailsService;
     private final RateLimitFilter rateLimitFilter;
 
+    // Comma-separated allowed origins; override per environment (add the prod URL there).
+    @org.springframework.beans.factory.annotation.Value(
+            "${app.cors.allowed-origins:http://localhost:5173,http://localhost:5173}")
+    private List<String> allowedOrigins;
+
 
     // ─── Authentication Providers ────────────────────────────────────────────
 
@@ -90,11 +95,7 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOrigins(List.of(
-                "http://localhost:5173",
-
-                "http://localhost:5174" // dev — add prod URL here when deploying
-        ));
+        config.setAllowedOrigins(allowedOrigins);
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
         config.setAllowCredentials(true);

@@ -23,6 +23,11 @@ CREATE INDEX IF NOT EXISTS idx_reminders_assign_to  ON reminders(assign_to_user_
 CREATE INDEX IF NOT EXISTS idx_users_manager        ON users(manager_id);
 CREATE INDEX IF NOT EXISTS idx_leads_tenant_stage   ON leads(tenant_id, lead_stage);
 
+-- Lead list (GET /api/leads) default sort: WHERE tenant_id=? AND deleted_at IS NULL
+-- ORDER BY created_at DESC. Partial index over live rows serves the filter + sort
+-- without a filesort.
+CREATE INDEX IF NOT EXISTS idx_leads_tenant_created ON leads(tenant_id, created_at DESC) WHERE deleted_at IS NULL;
+
 -- ── Partial unique indexes (soft-delete compatible) ─────────────────────────
 -- Uniqueness enforced only across LIVE rows, so a code/email can be reused after
 -- the original row is soft-deleted (deleted_at IS NOT NULL).
@@ -52,3 +57,8 @@ UPDATE vendors SET status = UPPER(status)
         WHERE status IS NOT NULL AND status <> UPPER(status);
 UPDATE vendors SET pay_status = UPPER(REPLACE(pay_status, ' ', '_'))
         WHERE pay_status IS NOT NULL AND pay_status <> UPPER(REPLACE(pay_status, ' ', '_'));
+
+-- ── Optimistic-lock backfill ────────────────────────────────────────────────
+-- Vendor gained an @Version column (row_version). Pre-existing rows have NULL, which
+-- Hibernate can choke on at first update — initialize them to 0. Idempotent.
+UPDATE vendors SET row_version = 0 WHERE row_version IS NULL;

@@ -29,7 +29,7 @@ public class AuthController {
             @Valid @RequestBody RegisterRequestDTO request,
             @RequestHeader(value = "X-Signup-Secret", required = false) String secret) {
 
-        if (secret == null || !secret.equals(signupSecret)) {
+        if (secret == null || !constantTimeEquals(secret, signupSecret)) {
             log.warn("Invalid signup secret used");
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
                     .body("Invalid signup secret");
@@ -60,5 +60,12 @@ public class AuthController {
         return ResponseEntity.ok(
                 authService.userLogin(request)
         );
+    }
+
+    /** Constant-time comparison so the signup secret can't be guessed via response timing. */
+    private static boolean constantTimeEquals(String a, String b) {
+        return java.security.MessageDigest.isEqual(
+                a.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                b.getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 }

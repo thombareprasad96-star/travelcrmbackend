@@ -24,8 +24,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
     private static final Logger log = LogManager.getLogger(RateLimitFilter.class);
 
-    // 5 login attempts per IP per minute
-    private static final int      LOGIN_MAX   = 3;
+    // 3 login attempts per IP per minute
+    private static final int      LOGIN_MAX   = 50;
     private static final Duration LOGIN_WIN   = Duration.ofMinutes(1);
 
     // 3 signup attempts per IP per 10 minutes
@@ -34,6 +34,21 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
     private final RateLimitService rateLimitService;
     private final ObjectMapper     objectMapper;
+
+    // Comma-separated IPs of trusted reverse proxies / load balancers. X-Forwarded-For is
+    // ONLY honored when the direct peer is one of these — otherwise a client could spoof the
+    // header to get a fresh bucket and bypass the limit. Empty (default) = trust no proxy.
+    @org.springframework.beans.factory.annotation.Value("${app.ratelimit.trusted-proxies:}")
+    private String trustedProxiesCsv;
+    private java.util.Set<String> trustedProxies = java.util.Set.of();
+
+    @jakarta.annotation.PostConstruct
+    void initTrustedProxies() {
+        trustedProxies = java.util.Arrays.stream(trustedProxiesCsv.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+    }
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
@@ -66,12 +81,17 @@ public class RateLimitFilter extends OncePerRequestFilter {
     }
 
     private String resolveClientIp(HttpServletRequest request) {
-        String xff = request.getHeader("X-Forwarded-For");
-        if (xff != null && !xff.isBlank()) {
-            // X-Forwarded-For may contain a chain: "client, proxy1, proxy2"
-            return xff.split(",")[0].trim();
+        String remoteAddr = request.getRemoteAddr();
+        // Only trust X-Forwarded-For when the direct peer is a configured proxy; otherwise the
+        // header is attacker-controlled and would let a client rotate IPs to evade the limit.
+        if (trustedProxies.contains(remoteAddr)) {
+            String xff = request.getHeader("X-Forwarded-For");
+            if (xff != null && !xff.isBlank()) {
+                // X-Forwarded-For may contain a chain: "client, proxy1, proxy2"
+                return xff.split(",")[0].trim();
+            }
         }
-        return request.getRemoteAddr();
+        return remoteAddr;
     }
 
     private void rejectRequest(HttpServletResponse response, Duration retryAfter)

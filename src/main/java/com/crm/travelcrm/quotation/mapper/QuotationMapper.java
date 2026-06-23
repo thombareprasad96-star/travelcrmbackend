@@ -36,7 +36,7 @@ public class QuotationMapper {
     public void applyRequest(QuotationRequestDto req, Quotation q) {
         q.setTitle(req.getTitle() != null && !req.getTitle().isBlank() ? req.getTitle() : "Quotation");
         q.setVersion(req.getVersion() != null && !req.getVersion().isBlank() ? req.getVersion() : "v1.0");
-        q.setStage(req.getStage() != null ? req.getStage() : QuotationStage.DRAFT);
+        q.setStage(req.getQuotationStage() != null ? req.getQuotationStage() : QuotationStage.DRAFT);
         q.setCoverImageUrl(req.getCoverImageUrl());
         q.setNotes(req.getNotes());
 
@@ -287,7 +287,8 @@ public class QuotationMapper {
                 .days(days)
                 .rooms(rooms)
                 .pdfUrl(q.getPdfUrl())
-                .stage(q.getStage())
+                .quotationStage(q.getStage())
+                .leadStage(q.getLeadStage())
                 .coverImageUrl(q.getCoverImageUrl())
                 .notes(q.getNotes())
                 .customer(QuotationResponseDto.Customer.builder()
@@ -478,7 +479,8 @@ public class QuotationMapper {
                 .version(q.getVersion())
                 .versionNumber(q.getVersionNumber())
                 .pdfUrl(q.getPdfUrl())
-                .stage(q.getStage())
+                .quotationStage(q.getStage())
+                .leadStage(q.getLeadStage())
                 .customerName(q.getCustomerName())
                 .destination(q.getDestination())
                 .travelDate(q.getTravelDate())

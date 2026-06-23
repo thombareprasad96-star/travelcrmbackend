@@ -25,11 +25,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 On Windows use `mvnw.cmd` instead of `./mvnw`.
 
-Frontend lives at `E:\CRM_PROJECT\travelcrmfrontend` (Vite + React + Tailwind).
+Frontend lives at `D:\CRM PROJECT\frontend` (Vite + React + Tailwind).
 
 ```bash
 # Frontend dev server
-cd E:\CRM_PROJECT\travelcrmfrontend
+cd "D:\CRM PROJECT\frontend"
 npm run dev        # runs on http://localhost:5173
 ```
 
@@ -262,7 +262,7 @@ Automatic — `Notification extends BaseTenantEntity`, so Hibernate filter scope
 
 ## Frontend Architecture
 
-Project: `E:\CRM_PROJECT\travelcrmfrontend`
+Project: `D:\CRM PROJECT\frontend`
 Stack: **React 18 + Vite + Tailwind CSS**. No TypeScript. Routing via `react-router-dom`.
 
 ### Key directories

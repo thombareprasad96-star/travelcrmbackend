@@ -59,15 +59,23 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                         userDetails = userDetailsService.loadUserByUsername(email);
                     }
 
-                    UsernamePasswordAuthenticationToken auth =
-                            new UsernamePasswordAuthenticationToken(
-                                    userDetails, null, userDetails.getAuthorities());
-                    auth.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-                    SecurityContextHolder.getContext().setAuthentication(auth);
+                    // Reject deactivated principals (User.isEnabled() == isActive;
+                    // SuperAdmin.isEnabled() == enabled). Soft-deleted users are already
+                    // excluded by the loaders, so they surface as "not found" above.
+                    if (!userDetails.isEnabled()) {
+                        logger.warn("JWT principal is disabled/inactive: " + email);
+                        SecurityContextHolder.clearContext();
+                    } else {
+                        UsernamePasswordAuthenticationToken auth =
+                                new UsernamePasswordAuthenticationToken(
+                                        userDetails, null, userDetails.getAuthorities());
+                        auth.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                        SecurityContextHolder.getContext().setAuthentication(auth);
 
-                    // Set tenant context for this request thread
-                    if (tenantId != null) {
-                        TenantContext.setTenantId(tenantId);
+                        // Set tenant context for this request thread
+                        if (tenantId != null) {
+                            TenantContext.setTenantId(tenantId);
+                        }
                     }
                 } catch (Exception ex) {
                     // Token is valid but the principal no longer exists (deleted /

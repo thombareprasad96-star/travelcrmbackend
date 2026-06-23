@@ -194,7 +194,7 @@ public class VendorServiceImpl implements VendorService {
     @Transactional
     public void delete(Long id) {
         Vendor vendor = findOrThrow(id);
-        vendor.softDelete("system");
+        vendor.softDelete(currentUserEmail());
         vendorRepository.save(vendor);
         log.info("Vendor soft-deleted with id: {}", id);
     }
@@ -378,6 +378,12 @@ public class VendorServiceImpl implements VendorService {
     private Long currentUserId() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         return (auth != null && auth.getPrincipal() instanceof User u) ? u.getId() : null;
+    }
+
+    /** Logged-in user's email for the audit trail (softDelete, etc.). */
+    private String currentUserEmail() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        return auth != null ? auth.getName() : "system";
     }
 
     private String escape(String val) {

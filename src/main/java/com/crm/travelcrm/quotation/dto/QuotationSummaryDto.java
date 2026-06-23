@@ -1,5 +1,6 @@
 package com.crm.travelcrm.quotation.dto;
 
+import com.crm.travelcrm.lead.enums.LeadStage;
 import com.crm.travelcrm.quotation.enums.QuotationStage;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.Builder;
@@ -25,7 +26,8 @@ public class QuotationSummaryDto {
     private String version;
     private Integer versionNumber;
     private String pdfUrl;
-    private QuotationStage stage;
+    private QuotationStage quotationStage;   // this quotation's own lifecycle stage
+    private LeadStage leadStage;             // read-only snapshot of the originating lead's pipeline stage
     private String customerName;
     private String destination;
     private LocalDate travelDate;

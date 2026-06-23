@@ -14,14 +14,14 @@ public class UserDetailsServiceImpl implements UserDetailsService {
     /** Fallback used only when no tenantId is available (e.g. SuperAdmin flow). */
     @Override
     public UserDetails loadUserByUsername(String email) throws UsernameNotFoundException {
-        return userRepository.findByEmail(email)
+        return userRepository.findByEmailAndDeletedAtIsNull(email)
                 .orElseThrow(() -> new UsernameNotFoundException("User not found"));
     }
 
     /** Primary path: loads user scoped to the tenant from the JWT claim. */
     public UserDetails loadUserByEmailAndTenantId(String email, Long tenantId)
             throws UsernameNotFoundException {
-        return userRepository.findByEmailAndTenantId(email, tenantId)
+        return userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(email, tenantId)
                 .orElseThrow(() -> new UsernameNotFoundException(
                         "User not found for email=" + email + " tenantId=" + tenantId));
     }

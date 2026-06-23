@@ -2,13 +2,16 @@ package com.crm.travelcrm.quotation.service;
 
 import com.crm.travelcrm.quotation.dto.QuotationEmailRequestDto;
 import com.crm.travelcrm.quotation.dto.QuotationPdfResource;
+import com.crm.travelcrm.quotation.dto.QuotationRefDto;
 import com.crm.travelcrm.quotation.dto.QuotationRequestDto;
 import com.crm.travelcrm.quotation.dto.QuotationResponseDto;
 import com.crm.travelcrm.quotation.dto.QuotationSummaryDto;
 import com.crm.travelcrm.quotation.enums.QuotationStage;
 import org.springframework.data.domain.Page;
 
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 public interface QuotationService {
@@ -23,6 +26,15 @@ public interface QuotationService {
                                      int page, int size, String sortBy, String sortDir);
 
     List<QuotationSummaryDto> getByLead(UUID leadPublicId);
+
+    /** Latest quotation (full summary) for a single lead (newest createdAt, id DESC tiebreak), or {@code null}. */
+    QuotationSummaryDto getLatestByLead(UUID leadPublicId);
+
+    /** Minimal ref (publicId only) to a lead's latest quotation — for the lead list. {@code null} if none. */
+    QuotationRefDto getLatestRefByLead(UUID leadPublicId);
+
+    /** Minimal refs to the latest quotation per lead for a batch of lead publicIds — one lean query. */
+    Map<UUID, QuotationRefDto> getLatestRefsByLeads(Collection<UUID> leadPublicIds);
 
     void delete(UUID publicId);
 

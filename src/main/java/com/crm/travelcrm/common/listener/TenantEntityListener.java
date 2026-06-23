@@ -11,16 +11,22 @@ public class TenantEntityListener {
 
     @PrePersist
     public void prePersist(BaseTenantEntity entity) {
+        Long contextTenant = TenantContext.getTenantId();
         if (entity.getTenantId() == null) {
-            Long tenantId = TenantContext.getTenantId();
-            if (tenantId == null) {
+            if (contextTenant == null) {
                 throw new IllegalStateException(
                         "TenantContext is empty — cannot persist " +
                                 entity.getClass().getSimpleName() +
                                 " without a tenantId. Is JwtAuthFilter running?");
             }
-            entity.setTenantId(tenantId);
-            log.debug("Auto-set tenantId={} on {}", tenantId, entity.getClass().getSimpleName());
+            entity.setTenantId(contextTenant);
+            log.debug("Auto-set tenantId={} on {}", contextTenant, entity.getClass().getSimpleName());
+        } else if (contextTenant != null && !contextTenant.equals(entity.getTenantId())) {
+            // A service set a tenantId that doesn't match the request's tenant — block it
+            // (defense-in-depth, mirrors the cross-tenant guard in preUpdate).
+            throw new SecurityException(
+                    "Cross-tenant persist blocked: entity.tenantId=" +
+                            entity.getTenantId() + " context.tenantId=" + contextTenant);
         }
     }
 

@@ -37,6 +37,13 @@ import java.util.List;
 @Getter @Setter @NoArgsConstructor @AllArgsConstructor @SuperBuilder
 public class Vendor extends BaseTenantEntity {
 
+    // Optimistic lock — prevents lost updates on concurrent read-modify-write of the
+    // financial counters (totalPaid, totalBusiness) and the running rating average.
+    // A conflicting concurrent update fails with OptimisticLockingFailureException (→ 409).
+    @Version
+    @Column(name = "row_version")
+    private Long rowVersion;
+
     @Column(name = "vendor_code", nullable = false, length = 20)
     private String vendorCode;
 

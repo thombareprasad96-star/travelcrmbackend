@@ -2,6 +2,7 @@ package com.crm.travelcrm.auth.api;
 
 import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.auth.repository.UserRepository;
+import com.crm.travelcrm.common.context.TenantContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -45,7 +46,14 @@ public class AuthApiService implements CurrentUserProvider, UserDirectory {
     @Override
     @Transactional(readOnly = true)
     public Optional<String> emailById(Long userId) {
-        return userRepository.findById(userId).map(User::getEmail);
+        // Tenant-scope the lookup when a tenant is bound to the thread; fall back to the
+        // unscoped find for tenant-less flows (e.g. async delivery with no TenantContext)
+        // so notification email resolution is never silently broken.
+        Long tenantId = TenantContext.getTenantId();
+        Optional<User> user = (tenantId != null)
+                ? userRepository.findByIdAndTenantIdAndDeletedAtIsNull(userId, tenantId)
+                : userRepository.findById(userId);
+        return user.map(User::getEmail);
     }
 
     @Override

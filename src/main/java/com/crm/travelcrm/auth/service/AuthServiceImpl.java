@@ -8,6 +8,7 @@ import com.crm.travelcrm.auth.repository.SuperAdminRepository;
 import com.crm.travelcrm.auth.repository.UserRepository;
 import com.crm.travelcrm.auth.security.JwtUtil;
 import com.crm.travelcrm.common.entity.SuperAdmin;
+import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.EmailAlreadyExistsException;
 import lombok.RequiredArgsConstructor;
 import org.apache.logging.log4j.LogManager;
@@ -97,7 +98,8 @@ public class AuthServiceImpl implements AuthService {
         logger.trace("Entered userLogin()");
         logger.debug("Login request for email: {}", request.getEmail());
 
-        User user = userRepository.findByEmail(request.getEmail())
+        // Soft-deleted users are never found — they cannot authenticate.
+        User user = userRepository.findByEmailAndDeletedAtIsNull(request.getEmail())
                 .orElseThrow(() -> {
                     logger.warn("User not found: {}", request.getEmail());
                     return new BadCredentialsException("Invalid email or password");
@@ -106,6 +108,15 @@ public class AuthServiceImpl implements AuthService {
         if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
             logger.warn("Password mismatch for user: {}", request.getEmail());
             throw new BadCredentialsException("Invalid email or password");
+        }
+
+        // Deactivated accounts cannot log in. Checked only after a correct password so
+        // we don't reveal account state to someone who doesn't already hold the credentials.
+        if (!Boolean.TRUE.equals(user.getIsActive())) {
+            logger.warn("Login blocked for inactive user: {}", request.getEmail());
+            throw new BusinessException(
+                    "Your account is inactive. Please contact your administrator.",
+                    HttpStatus.FORBIDDEN);
         }
 
         String token = jwtUtil.generateToken(user);

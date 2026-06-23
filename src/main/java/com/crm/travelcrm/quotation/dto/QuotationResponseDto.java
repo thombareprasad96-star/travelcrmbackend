@@ -1,5 +1,6 @@
 package com.crm.travelcrm.quotation.dto;
 
+import com.crm.travelcrm.lead.enums.LeadStage;
 import com.crm.travelcrm.quotation.enums.DiscountType;
 import com.crm.travelcrm.quotation.enums.QuotationStage;
 import com.fasterxml.jackson.annotation.JsonInclude;
@@ -30,7 +31,8 @@ public class QuotationResponseDto {
     private String version;
     private Integer versionNumber;
     private String pdfUrl;
-    private QuotationStage stage;
+    private QuotationStage quotationStage;   // this quotation's own lifecycle stage (Draft/Sent/Approved/Rejected)
+    private LeadStage leadStage;             // read-only snapshot of the originating lead's pipeline stage
     private String coverImageUrl;
     private String notes;
 
