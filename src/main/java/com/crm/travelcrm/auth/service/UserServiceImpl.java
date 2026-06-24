@@ -1,9 +1,11 @@
 package com.crm.travelcrm.auth.service;
 
 import com.crm.travelcrm.auth.dto.CreateUserRequest;
+import com.crm.travelcrm.auth.dto.ResetPasswordRequest;
 import com.crm.travelcrm.auth.dto.UpdateUserRequest;
 import com.crm.travelcrm.auth.dto.UserDto;
 import com.crm.travelcrm.auth.dto.UserResponseDTO;
+import com.crm.travelcrm.auth.dto.UserStatsDTO;
 import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.auth.enums.Role;
 import com.crm.travelcrm.auth.repository.UserRepository;
@@ -32,7 +34,9 @@ public class UserServiceImpl implements UserService {
 
     private static final Logger log = LogManager.getLogger(UserServiceImpl.class);
 
-    private static final Set<Role> CREATABLE_ROLES = Set.of(Role.MANAGER, Role.TRAVEL_AGENT);
+    // Roles a tenant admin may assign / manage. Only the platform SUPERADMIN is excluded.
+    private static final Set<Role> CREATABLE_ROLES = Set.of(
+            Role.STAFF, Role.MANAGER, Role.TRAVEL_AGENT, Role.TENANT_ADMIN, Role.ACCOUNTANT);
 
     private final UserRepository   userRepository;
     private final TenantRepository tenantRepository;
@@ -50,8 +54,8 @@ public class UserServiceImpl implements UserService {
         // passed by the controller) — never taken from the request body.
         requireActiveTenant(tenantId);
 
-        // Whitelist: a tenant admin may only ever mint MANAGER / TRAVEL_AGENT.
-        // Valid-but-forbidden roles (SUPERADMIN / TENANT_ADMIN) → 403.
+        // Whitelist: a tenant admin may mint any tenant role (Staff, Manager,
+        // Travel Agent, Organization Admin, Account) — only SUPERADMIN is forbidden → 403.
         // Unparseable roles never reach here — Jackson rejects them as 400.
         if (!CREATABLE_ROLES.contains(request.getRole())) {
             throw new BusinessException(
@@ -97,6 +101,12 @@ public class UserServiceImpl implements UserService {
                 .stream()
                 .map(this::toResponse)
                 .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public UserResponseDTO getUser(UUID publicId, Long tenantId) {
+        return toResponse(findManagedUser(publicId, tenantId));
     }
 
     @Override
@@ -173,6 +183,62 @@ public class UserServiceImpl implements UserService {
         return availableUsers;
     }
 
+
+    @Override
+    @Transactional(readOnly = true)
+    public UserStatsDTO getStats(Long tenantId) {
+        return UserStatsDTO.builder()
+                .total(userRepository.countByTenantIdAndDeletedAtIsNull(tenantId))
+                .active(userRepository.countByTenantIdAndDeletedAtIsNullAndIsActiveTrue(tenantId))
+                .inactive(userRepository.countByTenantIdAndDeletedAtIsNullAndIsActiveFalse(tenantId))
+                .managers(userRepository.countByTenantIdAndDeletedAtIsNullAndRole(tenantId, Role.MANAGER))
+                .build();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<UserResponseDTO> searchUsers(String query, Long tenantId) {
+        if (query == null || query.isBlank()) {
+            return getUsersByTenant(tenantId);
+        }
+        return userRepository.searchInTenant(tenantId, query.trim())
+                .stream()
+                .map(this::toResponse)
+                .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public boolean isEmailAvailable(String email, Long tenantId) {
+        if (email == null || email.isBlank()) {
+            return false;
+        }
+        return !userRepository.existsByEmailAndTenantId(email.trim().toLowerCase(), tenantId);
+    }
+
+    @Override
+    @Transactional
+    public UserResponseDTO toggleStatus(UUID publicId, Long tenantId) {
+        User user = findManagedUser(publicId, tenantId);
+        user.setIsActive(!Boolean.TRUE.equals(user.getIsActive()));
+        User saved = userRepository.save(user);
+        log.info("User status toggled: publicId={} active={} tenantId={}",
+                publicId, saved.getIsActive(), tenantId);
+        return toResponse(saved);
+    }
+
+    @Override
+    @Transactional
+    public void resetPassword(UUID publicId, ResetPasswordRequest request, Long tenantId) {
+        if (request.getConfirmPassword() != null
+                && !request.getNewPassword().equals(request.getConfirmPassword())) {
+            throw new BusinessException("Passwords do not match.", HttpStatus.BAD_REQUEST);
+        }
+        User user = findManagedUser(publicId, tenantId);
+        user.setPassword(passwordEncoder.encode(request.getNewPassword()));
+        userRepository.save(user);
+        log.info("Password reset by admin for user publicId={} tenantId={}", publicId, tenantId);
+    }
 
     // A tenant admin whose own organization is inactive/suspended/soft-deleted
     // must not be able to provision new users. 403, not 500.

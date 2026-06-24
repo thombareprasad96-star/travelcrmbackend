@@ -56,6 +56,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
         return !request.getRequestURI().startsWith("/api/auth/");
     }
 
+
     @Override
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,

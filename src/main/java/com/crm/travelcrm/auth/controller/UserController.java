@@ -1,9 +1,11 @@
 package com.crm.travelcrm.auth.controller;
 
 import com.crm.travelcrm.auth.dto.CreateUserRequest;
+import com.crm.travelcrm.auth.dto.ResetPasswordRequest;
 import com.crm.travelcrm.auth.dto.UpdateUserRequest;
 import com.crm.travelcrm.auth.dto.UserDto;
 import com.crm.travelcrm.auth.dto.UserResponseDTO;
+import com.crm.travelcrm.auth.dto.UserStatsDTO;
 import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.auth.service.UserService;
 import com.crm.travelcrm.common.dto.ApiResponse;
@@ -17,6 +19,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @RestController
@@ -52,6 +55,58 @@ public class UserController {
         return ResponseEntity.ok(ApiResponse.success("Users retrieved successfully", users));
     }
 
+    // Aggregate counts for the Users page stat cards.
+    @GetMapping("/stats")
+    @PreAuthorize("hasAuthority('USER_READ')")
+    public ResponseEntity<ApiResponse<UserStatsDTO>> getStats(
+            @AuthenticationPrincipal User currentUser) {
+
+        UserStatsDTO stats = userService.getStats(currentUser.getTenantId());
+        return ResponseEntity.ok(ApiResponse.success("User stats retrieved successfully", stats));
+    }
+
+    // Free-text search over name / email / phone within the caller's tenant.
+    @GetMapping("/search")
+    @PreAuthorize("hasAuthority('USER_READ')")
+    public ResponseEntity<ApiResponse<List<UserResponseDTO>>> search(
+            @RequestParam(required = false) String query,
+            @AuthenticationPrincipal User currentUser) {
+
+        List<UserResponseDTO> users = userService.searchUsers(query, currentUser.getTenantId());
+        return ResponseEntity.ok(ApiResponse.success("Users retrieved successfully", users));
+    }
+
+    // Real-time email-availability check for the Create User form.
+    @GetMapping("/check-email")
+    @PreAuthorize("hasAuthority('USER_READ')")
+    public ResponseEntity<ApiResponse<Map<String, Boolean>>> checkEmail(
+            @RequestParam String email,
+            @AuthenticationPrincipal User currentUser) {
+
+        boolean available = userService.isEmailAvailable(email, currentUser.getTenantId());
+        return ResponseEntity.ok(
+                ApiResponse.success("Email availability checked", Map.of("available", available)));
+    }
+
+    // Lightweight active-user list for "assign to" / "copy from" dropdowns.
+    @GetMapping("/dropdown")
+    @PreAuthorize("hasAuthority('USER_READ')")
+    public ResponseEntity<ApiResponse<List<UserDto>>> dropdown() {
+        List<UserDto> users = userService.getAvailableUsers();
+        return ResponseEntity.ok(ApiResponse.success("Users retrieved successfully", users));
+    }
+
+    // Single user (edit page).
+    @GetMapping("/{publicId}")
+    @PreAuthorize("hasAuthority('USER_READ')")
+    public ResponseEntity<ApiResponse<UserResponseDTO>> getUser(
+            @PathVariable UUID publicId,
+            @AuthenticationPrincipal User currentUser) {
+
+        UserResponseDTO user = userService.getUser(publicId, currentUser.getTenantId());
+        return ResponseEntity.ok(ApiResponse.success("User retrieved successfully", user));
+    }
+
     @PutMapping("/{publicId}")
     @PreAuthorize("hasAuthority('USER_UPDATE')")
     public ResponseEntity<ApiResponse<UserResponseDTO>> updateUser(
@@ -71,6 +126,29 @@ public class UserController {
 
         userService.deleteUser(publicId, currentUser.getTenantId(), currentUser.getEmail());
         return ResponseEntity.ok(ApiResponse.success("User deleted successfully"));
+    }
+
+    // Flip a managed user between active / inactive.
+    @PatchMapping("/{publicId}/toggle-status")
+    @PreAuthorize("hasAuthority('USER_UPDATE')")
+    public ResponseEntity<ApiResponse<UserResponseDTO>> toggleStatus(
+            @PathVariable UUID publicId,
+            @AuthenticationPrincipal User currentUser) {
+
+        UserResponseDTO updated = userService.toggleStatus(publicId, currentUser.getTenantId());
+        return ResponseEntity.ok(ApiResponse.success("User status updated successfully", updated));
+    }
+
+    // Admin sets a new password for a managed user (no current-password check).
+    @PostMapping("/{publicId}/reset-password")
+    @PreAuthorize("hasAuthority('USER_UPDATE')")
+    public ResponseEntity<ApiResponse<Void>> resetPassword(
+            @PathVariable UUID publicId,
+            @Valid @RequestBody ResetPasswordRequest request,
+            @AuthenticationPrincipal User currentUser) {
+
+        userService.resetPassword(publicId, request, currentUser.getTenantId());
+        return ResponseEntity.ok(ApiResponse.success("Password reset successfully"));
     }
 
 

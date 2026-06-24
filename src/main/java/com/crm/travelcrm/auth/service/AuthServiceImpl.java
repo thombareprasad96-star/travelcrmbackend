@@ -19,6 +19,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @RequiredArgsConstructor
@@ -136,5 +137,36 @@ public class AuthServiceImpl implements AuthService {
                 user.getEmail(),
                 user.getRole().name()
         );
+    }
+
+    // ----------------------------- change password ----------------------------
+    @Override
+    @Transactional
+    public void changePassword(User currentUser, String currentPassword, String newPassword) {
+
+        logger.trace("Entered changePassword()");
+
+        // Re-load a managed, non-deleted entity from the authenticated principal's email
+        // (the principal can be detached, and soft-deleted users must never proceed).
+        User user = userRepository.findByEmailAndDeletedAtIsNull(currentUser.getEmail())
+                .orElseThrow(() -> {
+                    logger.warn("Change-password requested for unknown user: {}", currentUser.getEmail());
+                    return new BadCredentialsException("Invalid email or password");
+                });
+
+        if (!passwordEncoder.matches(currentPassword, user.getPassword())) {
+            logger.warn("Change-password rejected — wrong current password for {}", user.getEmail());
+            throw new BusinessException("Current password is incorrect.", HttpStatus.BAD_REQUEST);
+        }
+
+        if (passwordEncoder.matches(newPassword, user.getPassword())) {
+            throw new BusinessException(
+                    "New password must be different from the current password.",
+                    HttpStatus.BAD_REQUEST);
+        }
+
+        user.setPassword(passwordEncoder.encode(newPassword));
+        userRepository.save(user);
+        logger.info("Password changed for user: {}", user.getEmail());
     }
 }

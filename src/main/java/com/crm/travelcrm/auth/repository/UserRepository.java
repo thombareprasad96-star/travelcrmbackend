@@ -1,7 +1,10 @@
 package com.crm.travelcrm.auth.repository;
 
 import com.crm.travelcrm.auth.entity.User;
+import com.crm.travelcrm.auth.enums.Role;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -25,4 +28,21 @@ public interface UserRepository extends JpaRepository<User, Long> {
     Optional<User> findByIdAndTenantIdAndDeletedAtIsNull(Long id, Long tenantId);
     void deleteByTenantId(Long tenantId);
     List<User> findByTenantIdAndIsActiveTrueAndDeletedAtIsNullOrderByNameAsc(Long tenantId);
+
+    // ── Stats (Users page cards) — all scoped to tenant, excluding soft-deleted ──
+    long countByTenantIdAndDeletedAtIsNull(Long tenantId);
+    long countByTenantIdAndDeletedAtIsNullAndIsActiveTrue(Long tenantId);
+    long countByTenantIdAndDeletedAtIsNullAndIsActiveFalse(Long tenantId);
+    long countByTenantIdAndDeletedAtIsNullAndRole(Long tenantId, Role role);
+
+    // Free-text search over name / email / phone within the caller's tenant.
+    @Query("""
+            SELECT u FROM User u
+            WHERE u.tenantId = :tenantId AND u.deletedAt IS NULL
+              AND (LOWER(u.name) LIKE LOWER(CONCAT('%', :q, '%'))
+                OR LOWER(u.email) LIKE LOWER(CONCAT('%', :q, '%'))
+                OR LOWER(COALESCE(u.phoneNumber, '')) LIKE LOWER(CONCAT('%', :q, '%')))
+            ORDER BY u.name ASC
+            """)
+    List<User> searchInTenant(@Param("tenantId") Long tenantId, @Param("q") String q);
 }

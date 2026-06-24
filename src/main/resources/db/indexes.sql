@@ -62,3 +62,13 @@ UPDATE vendors SET pay_status = UPPER(REPLACE(pay_status, ' ', '_'))
 -- Vendor gained an @Version column (row_version). Pre-existing rows have NULL, which
 -- Hibernate can choke on at first update — initialize them to 0. Idempotent.
 UPDATE vendors SET row_version = 0 WHERE row_version IS NULL;
+
+-- ── Role enum CHECK constraint refresh ──────────────────────────────────────
+-- Hibernate generated users_role_check from the Role enum when the table was first
+-- created (original 4 roles). ddl-auto=update never alters an existing constraint,
+-- so roles added later (STAFF, ACCOUNTANT) get rejected at the DB level — breaking
+-- both user creation and the dev seeder. Drop + recreate with the full current set.
+-- (DROP-then-ADD on every startup keeps it idempotent.)
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
+ALTER TABLE users ADD CONSTRAINT users_role_check
+        CHECK (role IN ('SUPERADMIN','TENANT_ADMIN','MANAGER','TRAVEL_AGENT','STAFF','ACCOUNTANT'));
