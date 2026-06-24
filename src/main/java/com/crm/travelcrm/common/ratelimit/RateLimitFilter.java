@@ -30,6 +30,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
     // 3 signup attempts per IP per 10 minutes
     private static final int      SIGNUP_MAX  = 3;
+
     private static final Duration SIGNUP_WIN  = Duration.ofMinutes(10);
 
     private final RateLimitService rateLimitService;

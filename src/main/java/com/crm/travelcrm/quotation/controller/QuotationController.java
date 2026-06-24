@@ -8,6 +8,8 @@ import com.crm.travelcrm.quotation.dto.QuotationPdfResource;
 import com.crm.travelcrm.quotation.dto.QuotationRequestDto;
 import com.crm.travelcrm.quotation.dto.QuotationResponseDto;
 import com.crm.travelcrm.quotation.dto.QuotationSummaryDto;
+import com.crm.travelcrm.quotation.analytics.WeblinkAnalyticsDto;
+import com.crm.travelcrm.quotation.analytics.WeblinkAnalyticsService;
 import com.crm.travelcrm.quotation.enums.QuotationStage;
 import com.crm.travelcrm.quotation.service.QuotationService;
 import jakarta.validation.Valid;
@@ -33,6 +35,7 @@ import java.util.UUID;
 public class QuotationController {
 
     private final QuotationService quotationService;
+    private final WeblinkAnalyticsService weblinkAnalyticsService;
 
     // ── Create ──────────────────────────────────────────────────────────────--
     @PostMapping
@@ -162,6 +165,13 @@ public class QuotationController {
         log.info("POST /api/quotations/{}/send-email -> {}", publicId, request.getToEmail());
         quotationService.sendEmail(publicId, request);
         return ResponseEntity.ok(ApiResponse.success("Quotation emailed successfully"));
+    }
+
+    // ── Weblink view analytics ──────────────────────────────────────────────--
+    @GetMapping("/{publicId}/weblink-analytics")
+    public ResponseEntity<ApiResponse<WeblinkAnalyticsDto>> weblinkAnalytics(@PathVariable UUID publicId) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Weblink analytics fetched", weblinkAnalyticsService.getAnalytics(publicId)));
     }
 
     // ── Share link ──────────────────────────────────────────────────────────--

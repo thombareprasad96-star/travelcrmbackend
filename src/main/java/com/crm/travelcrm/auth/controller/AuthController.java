@@ -4,6 +4,8 @@ import com.crm.travelcrm.auth.dto.LoginRequestDTO;
 import com.crm.travelcrm.auth.dto.LoginResponseDTO;
 import com.crm.travelcrm.auth.dto.RegisterRequestDTO;
 import com.crm.travelcrm.auth.service.AuthService;
+import com.crm.travelcrm.common.util.ClientIp;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -53,12 +55,12 @@ public class AuthController {
 
     @PostMapping("/user/login")
     public ResponseEntity<LoginResponseDTO> userLogin(
-            @RequestBody LoginRequestDTO request) {
+            @RequestBody LoginRequestDTO request, HttpServletRequest httpRequest) {
 
         log.info("User login request for {}", request.getEmail());
 
         return ResponseEntity.ok(
-                authService.userLogin(request)
+                authService.userLogin(request, ClientIp.resolve(httpRequest))
         );
     }
 

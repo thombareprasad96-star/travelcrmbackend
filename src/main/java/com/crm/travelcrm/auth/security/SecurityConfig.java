@@ -75,6 +75,8 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers("/api/auth/**").permitAll()
+                        // Public quotation share links (capability URL by publicId) — read-only PDF
+                        .requestMatchers(HttpMethod.GET, "/api/public/**").permitAll()
                         // SSE stream: EventSource cannot set Authorization headers,
                         // so the JWT is passed as ?token= and validated in the controller
                         .requestMatchers(HttpMethod.GET, "/api/notifications/stream").permitAll()

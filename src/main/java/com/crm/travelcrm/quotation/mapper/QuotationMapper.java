@@ -35,7 +35,8 @@ public class QuotationMapper {
 
     public void applyRequest(QuotationRequestDto req, Quotation q) {
         q.setTitle(req.getTitle() != null && !req.getTitle().isBlank() ? req.getTitle() : "Quotation");
-        q.setVersion(req.getVersion() != null && !req.getVersion().isBlank() ? req.getVersion() : "v1.0");
+        // version is NOT taken from the request — the service assigns it (per-lead auto
+        // numbering on create: v1.0, v2.0, …) and leaves it unchanged on update.
         q.setStage(req.getQuotationStage() != null ? req.getQuotationStage() : QuotationStage.DRAFT);
         q.setCoverImageUrl(req.getCoverImageUrl());
         q.setNotes(req.getNotes());

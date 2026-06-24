@@ -70,7 +70,18 @@ public class QuotationServiceImpl implements QuotationService {
         Quotation q = new Quotation();
         q.setTenantId(tenantId);
         quotationMapper.applyRequest(request, q);
-        q.setVersionNumber(1);          // first version of a new family (parentQuotationId stays null)
+
+        // Per-lead auto versioning: the Nth live quotation for a lead becomes vN.0
+        // (1st → v1.0, 2nd → v2.0, …). Sorted latest-first, so the newest version is on top.
+        int versionNumber = 1;
+        if (request.getLeadId() != null) {
+            long existing = quotationRepository
+                    .countByLeadPublicIdAndTenantIdAndDeletedAtIsNull(request.getLeadId(), tenantId);
+            versionNumber = (int) existing + 1;
+        }
+        q.setVersionNumber(versionNumber);
+        q.setVersion("v" + versionNumber + ".0");
+
         q.setQuoteNo((int) (quotationRepository.countByTenantIdAndParentQuotationIdIsNull(tenantId) + 1));
         linkLeadAndSnapshot(q, request.getLeadId(), tenantId);
 
@@ -253,6 +264,32 @@ public class QuotationServiceImpl implements QuotationService {
         return QuotationPdfResource.inline(quotationPdfService.render(quotationMapper.toResponse(q)));
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public QuotationPdfResource getPublicPdf(UUID publicId) {
+        // Capability-URL access: no auth / no tenant context. Lookup is by the globally-unique
+        // publicId only. Read-only — never mutates and never exposes anything but this one PDF.
+        Quotation q = quotationRepository.findByPublicIdAndDeletedAtIsNull(publicId)
+                .orElseThrow(() -> new ResourceNotFoundException("Quotation not found: " + publicId));
+        if (StringUtils.hasText(q.getPdfUrl())) {
+            return QuotationPdfResource.remote(q.getPdfUrl());
+        }
+        return QuotationPdfResource.inline(quotationPdfService.render(quotationMapper.toResponse(q)));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public QuotationResponseDto getPublicByPublicId(UUID publicId) {
+        // Capability-URL access (no auth/tenant) — lookup by the globally-unique publicId.
+        Quotation q = quotationRepository.findByPublicIdAndDeletedAtIsNull(publicId)
+                .orElseThrow(() -> new ResourceNotFoundException("Quotation not found: " + publicId));
+        QuotationResponseDto dto = quotationMapper.toResponse(q);
+        // Strip internal/agent-only fields from the public, customer-facing payload.
+        dto.setCreatedBy(null);
+        dto.setLeadId(null);
+        return dto;
+    }
+
     // ── Email ─────────────────────────────────────────────────────────────────
 
     @Override
@@ -298,7 +335,8 @@ public class QuotationServiceImpl implements QuotationService {
         String base = publicBaseUrl.endsWith("/")
                 ? publicBaseUrl.substring(0, publicBaseUrl.length() - 1)
                 : publicBaseUrl;
-        return base + "/api/quotations/" + publicId + "/pdf";
+        // Public, shareable link (no auth) — recipients open it directly from WhatsApp/email.
+        return base + "/api/public/quotations/" + publicId + "/pdf";
     }
 
     // ════════════════════════════════════════════════════════════════════════

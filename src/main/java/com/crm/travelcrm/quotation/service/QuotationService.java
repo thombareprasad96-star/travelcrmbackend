@@ -51,6 +51,12 @@ public interface QuotationService {
     /** Resolve the quotation PDF — the stored Cloudinary URL if present, else freshly rendered bytes. */
     QuotationPdfResource getPdf(UUID publicId);
 
+    /** Public (unauthenticated) PDF for the share link — looked up by publicId only, no tenant scope. */
+    QuotationPdfResource getPublicPdf(UUID publicId);
+
+    /** Public (unauthenticated) quotation JSON for the web-format share page (/q/{publicId}). */
+    QuotationResponseDto getPublicByPublicId(UUID publicId);
+
     /** Email the generated PDF to the given recipient. */
     void sendEmail(UUID publicId, QuotationEmailRequestDto request);
 

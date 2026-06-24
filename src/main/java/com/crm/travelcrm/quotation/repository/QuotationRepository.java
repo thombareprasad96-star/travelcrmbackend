@@ -23,6 +23,10 @@ public interface QuotationRepository
     // ── Single fetch (tenant-scoped, never bare findById) ─────────────────────
     Optional<Quotation> findByPublicIdAndTenantIdAndDeletedAtIsNull(UUID publicId, Long tenantId);
 
+    // Tenant-agnostic lookup for the PUBLIC share link only (publicId is a globally-unique,
+    // unguessable UUID — capability URL). Never use this on authenticated, tenant-scoped paths.
+    Optional<Quotation> findByPublicIdAndDeletedAtIsNull(UUID publicId);
+
     // ── List ──────────────────────────────────────────────────────────────────
     Page<Quotation> findAllByTenantIdAndDeletedAtIsNull(Long tenantId, Pageable pageable);
 

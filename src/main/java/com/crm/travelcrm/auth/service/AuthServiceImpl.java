@@ -10,6 +10,7 @@ import com.crm.travelcrm.auth.security.JwtUtil;
 import com.crm.travelcrm.common.entity.SuperAdmin;
 import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.EmailAlreadyExistsException;
+import com.crm.travelcrm.common.staffip.StaffIpService;
 import lombok.RequiredArgsConstructor;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -29,6 +30,7 @@ public class AuthServiceImpl implements AuthService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtUtil jwtUtil;
+    private final StaffIpService staffIpService;
 
     // ------------------------------------------------------------------ register
 
@@ -93,7 +95,7 @@ public class AuthServiceImpl implements AuthService {
     }
 
     @Override
-    public LoginResponseDTO userLogin(LoginRequestDTO request) {
+    public LoginResponseDTO userLogin(LoginRequestDTO request, String clientIp) {
 
         logger.trace("Entered userLogin()");
         logger.debug("Login request for email: {}", request.getEmail());
@@ -121,6 +123,9 @@ public class AuthServiceImpl implements AuthService {
 
         String token = jwtUtil.generateToken(user);
         logger.info("User logged in: {}", request.getEmail());
+
+        // Capture the staff member's IP into the tenant's "home IP" set — best-effort, never blocks login.
+        staffIpService.recordStaffIp(user.getTenantId(), clientIp);
 
         return new LoginResponseDTO(
                 user.getName(),

@@ -8,5 +8,5 @@ import org.springframework.http.ResponseEntity;
 public interface AuthService {
     ResponseEntity<String> registerSuperAdmin(RegisterRequestDTO request);
     LoginResponseDTO superAdminLogin(LoginRequestDTO request);
-    LoginResponseDTO userLogin(LoginRequestDTO request);
+    LoginResponseDTO userLogin(LoginRequestDTO request, String clientIp);
 }
