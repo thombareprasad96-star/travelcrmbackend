@@ -1,6 +1,7 @@
 package com.crm.travelcrm.booking.controller;
 
 
+import com.crm.travelcrm.booking.dto.request.CancelBookingRequestDTO;
 import com.crm.travelcrm.booking.dto.request.CreateBookingRequestDTO;
 import com.crm.travelcrm.booking.dto.request.PaymentUpdateRequestDTO;
 import com.crm.travelcrm.booking.dto.request.StatusUpdateRequestDTO;
@@ -33,8 +34,10 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/bookings")
 @RequiredArgsConstructor
-@PreAuthorize("hasAuthority('CRM_FULL')")
-public class BookingController {
+@PreAuthorize("hasAuthority('BOOKING_READ')")   // class default; mutating methods override below
+public class
+
+BookingController {
 
     private static final Logger log = LogManager.getLogger(BookingController.class);
 
@@ -46,6 +49,7 @@ public class BookingController {
 
 
     @PostMapping
+    @PreAuthorize("hasAuthority('BOOKING_CREATE')")
     public ResponseEntity<ApiResponse<BookingResponseDTO>> create(
             @Valid @RequestBody CreateBookingRequestDTO request) {
         log.info("POST /api/bookings - customer: {}", request.getCustomerId());
@@ -54,16 +58,8 @@ public class BookingController {
                 .body(ApiResponse.success("Booking created successfully", response, 201));
     }
 
-    // ── Create from Lead ─────────────────────────────────────────────────────
-
-    @PostMapping("/from-lead/{leadId}")
-    public ResponseEntity<ApiResponse<BookingResponseDTO>> createFromLead(
-            @PathVariable Long leadId) {
-        log.info("POST /api/bookings/from-lead/{}", leadId);
-        BookingResponseDTO response = bookingService.createFromLead(leadId);
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(ApiResponse.success("Booking created from lead successfully", response, 201));
-    }
+    // Lead → Booking conversion lives on the lead-centric path and is handled by
+    // LeadConversionController (POST /api/leads/{publicId}/convert-to-booking).
 
     // ── Get All (Paginated) ──────────────────────────────────────────────────
 
@@ -98,6 +94,7 @@ public class BookingController {
     // ── Update ───────────────────────────────────────────────────────────────
 
     @PutMapping("/{publicId}")
+    @PreAuthorize("hasAuthority('BOOKING_UPDATE')")
     public ResponseEntity<ApiResponse<BookingResponseDTO>> update(
             @PathVariable UUID publicId,
             @Valid @RequestBody UpdateBookingRequestDTO request) {
@@ -109,6 +106,7 @@ public class BookingController {
     // ── Update Status ────────────────────────────────────────────────────────
 
     @PatchMapping("/{publicId}/status")
+    @PreAuthorize("hasAuthority('BOOKING_UPDATE')")
     public ResponseEntity<ApiResponse<BookingResponseDTO>> updateStatus(
             @PathVariable UUID publicId,
             @Valid @RequestBody StatusUpdateRequestDTO request) {
@@ -117,9 +115,22 @@ public class BookingController {
                 bookingService.updateStatus(publicId, request)));
     }
 
+    // ── Cancel (with explicit lead handling) ──────────────────────────────────
+
+    @PostMapping("/{publicId}/cancel")
+    @PreAuthorize("hasAuthority('BOOKING_CANCEL')")
+    public ResponseEntity<ApiResponse<BookingResponseDTO>> cancel(
+            @PathVariable UUID publicId,
+            @Valid @RequestBody CancelBookingRequestDTO request) {
+        log.info("POST /api/bookings/{}/cancel - action: {}", publicId, request.getAction());
+        return ResponseEntity.ok(ApiResponse.success("Booking cancelled successfully",
+                bookingService.cancel(publicId, request)));
+    }
+
     // ── Update Payment ───────────────────────────────────────────────────────
 
     @PatchMapping("/{publicId}/payment")
+    @PreAuthorize("hasAuthority('BOOKING_UPDATE')")
     public ResponseEntity<ApiResponse<BookingResponseDTO>> updatePayment(
             @PathVariable UUID publicId,
             @Valid @RequestBody PaymentUpdateRequestDTO request) {
@@ -131,6 +142,7 @@ public class BookingController {
     // ── Soft Delete ──────────────────────────────────────────────────────────
 
     @DeleteMapping("/{publicId}")
+    @PreAuthorize("hasAuthority('BOOKING_DELETE')")
     public ResponseEntity<ApiResponse<Void>> delete(@PathVariable UUID publicId) {
         log.info("DELETE /api/bookings/{}", publicId);
         bookingService.delete(publicId);
@@ -214,6 +226,7 @@ public class BookingController {
 
 
     @PostMapping("/{publicId}/send-voucher")
+    @PreAuthorize("hasAuthority('BOOKING_UPDATE')")
     public ResponseEntity<ApiResponse<Void>> sendVoucher(@PathVariable UUID publicId) {
         log.info("POST /api/bookings/{}/send-voucher", publicId);
         bookingService.sendVoucher(publicId);

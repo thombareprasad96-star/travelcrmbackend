@@ -55,7 +55,7 @@ public class SightseeingController {
     }
 
     @PostMapping
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<SightseeingDto>> create(@Valid @RequestBody CreateSightseeingRequest request) {
         SightseeingDto created = sightseeingService.create(request);
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -63,7 +63,7 @@ public class SightseeingController {
     }
 
     @PutMapping("/{id}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<SightseeingDto>> update(
             @PathVariable Long id,
             @Valid @RequestBody UpdateSightseeingRequest request) {
@@ -71,14 +71,14 @@ public class SightseeingController {
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
         sightseeingService.delete(id);
         return ResponseEntity.noContent().build();
     }
 
     @PostMapping(value = "/upload-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<Map<String, String>>> uploadImage(@RequestParam("file") MultipartFile file) {
         String url = sightseeingService.uploadImage(file);
         return ResponseEntity.ok(ApiResponse.success("Image uploaded", Map.of("imagePath", url)));

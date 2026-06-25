@@ -33,6 +33,10 @@ public class BookingResponseDTO {
 
     private Long leadId;
 
+    // Traceability — source lead/quotation this booking was converted from (UUIDs, nullable)
+    private UUID sourceLeadPublicId;
+    private UUID sourceQuotationPublicId;
+
     // Dates
     @JsonFormat(pattern = "yyyy-MM-dd")
     private LocalDate bookingDate;

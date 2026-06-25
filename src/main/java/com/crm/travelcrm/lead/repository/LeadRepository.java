@@ -11,6 +11,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -30,6 +31,15 @@ public interface LeadRepository extends JpaRepository<Lead, Long> {
     @EntityGraph(attributePaths = "assignedUser")
     List<Lead> findAllByTenantIdAndDeletedAtIsNullOrderByCreatedAtDesc(Long tenantId);
 
+    // ── Scope-filtered variants (own / team): owner_id IN (:assignedUserIds) ──
+    @EntityGraph(attributePaths = "assignedUser")
+    Page<Lead> findAllByTenantIdAndDeletedAtIsNullAndAssignedUser_IdIn(
+            Long tenantId, Collection<Long> assignedUserIds, Pageable pageable);
+
+    @EntityGraph(attributePaths = "assignedUser")
+    List<Lead> findAllByTenantIdAndDeletedAtIsNullAndAssignedUser_IdInOrderByCreatedAtDesc(
+            Long tenantId, Collection<Long> assignedUserIds);
+
     // ── Single fetch ─────────────────────────────────────────────────────────
     @EntityGraph(attributePaths = "assignedUser")
     Optional<Lead> findByPublicIdAndTenantIdAndDeletedAtIsNull(
@@ -46,6 +56,11 @@ public interface LeadRepository extends JpaRepository<Lead, Long> {
 
     // ── Existence check (cross-aggregate FK validation, e.g. Booking.leadId) ──
     boolean existsByIdAndTenantIdAndDeletedAtIsNull(Long id, Long tenantId);
+
+    // Tenant-scoped fetch by internal id — used by the cancel-booking flow to revert
+    // (REOPENED) or hard-delete the associated lead. Tenant-safe (never bare findById).
+    @EntityGraph(attributePaths = "assignedUser")
+    Optional<Lead> findByIdAndTenantIdAndDeletedAtIsNull(Long id, Long tenantId);
 
     // ── Duplicate checks ─────────────────────────────────────────────────────
     boolean existsByEmailAndTenantIdAndDeletedAtIsNull(
@@ -88,6 +103,28 @@ public interface LeadRepository extends JpaRepository<Lead, Long> {
             """)
     List<UserWorkloadDto> findUserWorkload(@Param("tenantId") Long tenantId);
 
+    /**
+     * Scope-filtered workload: same as {@link #findUserWorkload} but limited to the given
+     * owner ids (the caller's own/team-visible users). Used when the requester's LEAD_READ
+     * scope is not ALL, so an own/team-scoped user can't enumerate the whole tenant.
+     */
+    @Query("""
+            SELECT new com.crm.travelcrm.lead.dto.UserWorkloadDto(
+                u.publicId, u.name, u.email, COUNT(l))
+            FROM User u
+            LEFT JOIN Lead l
+                   ON l.assignedUser = u
+                  AND l.deletedAt IS NULL
+            WHERE u.tenantId = :tenantId
+              AND u.isActive = true
+              AND u.deletedAt IS NULL
+              AND u.id IN :userIds
+            GROUP BY u.publicId, u.name, u.email
+            ORDER BY COUNT(l) DESC, u.name ASC
+            """)
+    List<UserWorkloadDto> findUserWorkloadForUsers(@Param("tenantId") Long tenantId,
+                                                   @Param("userIds") Collection<Long> userIds);
+
     /** Lead count per (user, stage) pair — feeds the per-user pipeline view. */
     @Query("""
             SELECT new com.crm.travelcrm.lead.dto.UserLeadStageCountDto(
@@ -100,4 +137,22 @@ public interface LeadRepository extends JpaRepository<Lead, Long> {
             ORDER BY u.name ASC, l.leadStage ASC
             """)
     List<UserLeadStageCountDto> countLeadsByStagePerUser(@Param("tenantId") Long tenantId);
+
+    /**
+     * Scope-filtered (user, stage) breakdown — same as {@link #countLeadsByStagePerUser} but
+     * limited to the caller's own/team-visible owner ids.
+     */
+    @Query("""
+            SELECT new com.crm.travelcrm.lead.dto.UserLeadStageCountDto(
+                u.publicId, u.name, l.leadStage, COUNT(l))
+            FROM Lead l
+            JOIN l.assignedUser u
+            WHERE l.tenantId = :tenantId
+              AND l.deletedAt IS NULL
+              AND u.id IN :userIds
+            GROUP BY u.publicId, u.name, l.leadStage
+            ORDER BY u.name ASC, l.leadStage ASC
+            """)
+    List<UserLeadStageCountDto> countLeadsByStagePerUserForUsers(@Param("tenantId") Long tenantId,
+                                                                 @Param("userIds") Collection<Long> userIds);
 }

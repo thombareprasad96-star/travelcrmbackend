@@ -44,7 +44,7 @@ public class CruiseController {
     }
 
     @PostMapping
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<CruiseDto>> create(@Valid @RequestBody CreateCruiseRequest request) {
         CruiseDto created = cruiseService.create(request);
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -52,7 +52,7 @@ public class CruiseController {
     }
 
     @PutMapping("/{id}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<CruiseDto>> update(
             @PathVariable Long id,
             @Valid @RequestBody UpdateCruiseRequest request) {
@@ -60,7 +60,7 @@ public class CruiseController {
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
         cruiseService.delete(id);
         return ResponseEntity.noContent().build();
@@ -68,7 +68,7 @@ public class CruiseController {
 
     // Room type endpoints
     @PostMapping("/{cruiseId}/room-types")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<CruiseRoomTypeDto>> addRoomType(
             @PathVariable Long cruiseId,
             @Valid @RequestBody CreateCruiseRoomTypeRequest request) {
@@ -78,7 +78,7 @@ public class CruiseController {
     }
 
     @PutMapping("/{cruiseId}/room-types/{roomTypeId}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<CruiseRoomTypeDto>> updateRoomType(
             @PathVariable Long cruiseId,
             @PathVariable Long roomTypeId,
@@ -88,7 +88,7 @@ public class CruiseController {
     }
 
     @DeleteMapping("/{cruiseId}/room-types/{roomTypeId}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<Void> deleteRoomType(
             @PathVariable Long cruiseId,
             @PathVariable Long roomTypeId) {

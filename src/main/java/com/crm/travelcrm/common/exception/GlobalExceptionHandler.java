@@ -192,8 +192,8 @@ public class GlobalExceptionHandler {
 
         return build(
                 HttpStatus.FORBIDDEN,
-                "FORBIDDEN",
-                "You do not have permission to perform this action."
+                "PERMISSION_DENIED",
+                "You don't have access to this. Please contact your administrator."
         );
     }
 

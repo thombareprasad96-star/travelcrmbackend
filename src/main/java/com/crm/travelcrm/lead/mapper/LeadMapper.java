@@ -99,6 +99,8 @@ public class LeadMapper {
                 .notes(lead.getNotes())
                 .itinerary(itineraryItems)
                 .createdAt(lead.getCreatedAt())
+                .convertedAt(lead.getConvertedAt())
+                .convertedBookingPublicId(lead.getConvertedBookingPublicId())
                 .build();
     }
 

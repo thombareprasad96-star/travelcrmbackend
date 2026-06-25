@@ -26,12 +26,16 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/leads")
 @RequiredArgsConstructor
-@PreAuthorize("hasAuthority('CRM_FULL')")
+@PreAuthorize("hasAuthority('LEAD_READ')")   // class default; mutating methods override below
+// NOTE (rollout reference): method-level @PreAuthorize OVERRIDES this class default, it does not
+// stack. So every mutating endpoint MUST declare its own LEAD_CREATE/UPDATE/DELETE — a new method
+// added without one silently inherits read-only LEAD_READ (fails OPEN to read, not closed).
 public class LeadController {
 
     private final LeadService leadService;
 
     @PostMapping
+    @PreAuthorize("hasAuthority('LEAD_CREATE')")
     public ResponseEntity<ApiResponse<LeadResponseDto>> createLead(
             @Valid @RequestBody CreateLeadRequestDto request) {
 
@@ -88,6 +92,7 @@ public class LeadController {
 
     /** Drag-and-drop: move a lead to a new stage without sending the full lead payload. */
     @PatchMapping("/{publicId}/stage")
+    @PreAuthorize("hasAuthority('LEAD_UPDATE')")
     public ResponseEntity<ApiResponse<LeadResponseDto>> updateLeadStage(
             @PathVariable UUID publicId,
             @Valid @RequestBody UpdateLeadStageRequestDto request) {
@@ -99,6 +104,7 @@ public class LeadController {
     }
 
     @PutMapping("/{publicId}")
+    @PreAuthorize("hasAuthority('LEAD_UPDATE')")
     public ResponseEntity<ApiResponse<LeadResponseDto>> updateLead(
             @PathVariable UUID publicId,
             @Valid @RequestBody CreateLeadRequestDto request) {
@@ -109,6 +115,7 @@ public class LeadController {
     }
 
     @DeleteMapping("/{publicId}")
+    @PreAuthorize("hasAuthority('LEAD_DELETE')")
     public ResponseEntity<ApiResponse<Void>> deleteLead(@PathVariable UUID publicId) {
 
         log.info("Received delete lead request for publicId: {}", publicId);

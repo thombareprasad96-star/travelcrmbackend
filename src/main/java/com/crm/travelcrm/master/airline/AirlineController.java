@@ -44,7 +44,7 @@ public class AirlineController {
     }
 
     @PostMapping
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<AirlineDto>> create(@Valid @RequestBody CreateAirlineRequest request) {
         AirlineDto created = airlineService.create(request);
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -52,7 +52,7 @@ public class AirlineController {
     }
 
     @PutMapping("/{id}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<AirlineDto>> update(
             @PathVariable Long id,
             @Valid @RequestBody UpdateAirlineRequest request) {
@@ -60,7 +60,7 @@ public class AirlineController {
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
         airlineService.delete(id);
         return ResponseEntity.noContent().build();

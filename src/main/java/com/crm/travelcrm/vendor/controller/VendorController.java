@@ -37,14 +37,14 @@ public class VendorController {
 
     // 1. GET ALL
 //    @GetMapping
-//    @PreAuthorize("isAuthenticated()")
+//    @PreAuthorize("hasAuthority('VENDOR_READ')")
 //    public ResponseEntity<List<VendorResponseDTO>> getAll() {
 //        return ResponseEntity.ok(vendorService.getAll());
 //
 
     // Enum metadata for FE dropdowns — returns all valid status / pay-status values.
     @GetMapping("/statuses")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('VENDOR_READ')")
     public ResponseEntity<Map<String, List<String>>> getStatuses() {
         return ResponseEntity.ok(Map.of(
                 "status", java.util.Arrays.stream(VendorStatus.values()).map(Enum::name).toList(),
@@ -52,7 +52,7 @@ public class VendorController {
     }
 
     @GetMapping
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('VENDOR_READ')")
     public ResponseEntity<PagedApiResponse<VendorResponseDTO>> getAll(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "10") int size,
@@ -70,28 +70,28 @@ public class VendorController {
 
 // 2. GET BY ID
     @GetMapping("/{id}")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('VENDOR_READ')")
     public ResponseEntity<VendorResponseDTO> getById(@PathVariable Long id) {
         return ResponseEntity.ok(vendorService.getById(id));
     }
 
     // 3. GET BY CODE — must be before /{id} to avoid path conflict
     @GetMapping("/code/{code}")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('VENDOR_READ')")
     public ResponseEntity<VendorResponseDTO> getByCode(@PathVariable String code) {
         return ResponseEntity.ok(vendorService.getByCode(code));
     }
 
     // 4. CREATE
     @PostMapping
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAuthority('VENDOR_CREATE')")
     public ResponseEntity<VendorResponseDTO> create(@Valid @RequestBody VendorRequestDTO request) {
         return ResponseEntity.status(HttpStatus.CREATED).body(vendorService.create(request));
     }
 
     // 5. UPDATE
     @PutMapping("/{id}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAuthority('VENDOR_UPDATE')")
     public ResponseEntity<VendorResponseDTO> update(
             @PathVariable Long id,
             @Valid @RequestBody VendorRequestDTO request) {
@@ -100,7 +100,7 @@ public class VendorController {
 
     // 6. UPDATE STATUS
     @PatchMapping("/{id}/status")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAuthority('VENDOR_UPDATE')")
     public ResponseEntity<VendorResponseDTO> updateStatus(
             @PathVariable Long id,
             @Valid @RequestBody VendorStatusUpdateDTO request) {
@@ -109,7 +109,7 @@ public class VendorController {
 
     // 7. UPDATE PAYMENT
     @PatchMapping("/{id}/payment")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAuthority('VENDOR_UPDATE')")
     public ResponseEntity<VendorResponseDTO> updatePayment(
             @PathVariable Long id,
             @Valid @RequestBody VendorPaymentUpdateDTO request) {
@@ -118,7 +118,7 @@ public class VendorController {
 
     // 8. DELETE
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAuthority('VENDOR_DELETE')")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
         vendorService.delete(id);
         return ResponseEntity.noContent().build();
@@ -126,7 +126,7 @@ public class VendorController {
 
     // 9. FILTER
     @GetMapping("/filter")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('VENDOR_READ')")
     public ResponseEntity<List<VendorResponseDTO>> filter(
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String type,
@@ -136,35 +136,35 @@ public class VendorController {
 
     // 10. SEARCH
     @GetMapping("/search")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('VENDOR_READ')")
     public ResponseEntity<List<VendorResponseDTO>> search(@RequestParam("q") String q) {
         return ResponseEntity.ok(vendorService.search(q));
     }
 
     // 11. GET BY TYPE
     @GetMapping("/type/{type}")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('VENDOR_READ')")
     public ResponseEntity<List<VendorResponseDTO>> getByType(@PathVariable String type) {
         return ResponseEntity.ok(vendorService.getByType(type));
     }
 
     // 12. STATS
     @GetMapping("/stats")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('VENDOR_READ')")
     public ResponseEntity<VendorStatsDTO> getStats() {
         return ResponseEntity.ok(vendorService.getStats());
     }
 
     // 13. GET BOOKINGS
     @GetMapping("/{id}/bookings")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('VENDOR_READ')")
     public ResponseEntity<List<Map<String, Object>>> getBookings(@PathVariable Long id) {
         return ResponseEntity.ok(vendorService.getBookings(id));
     }
 
     // 14. RATE VENDOR
     @PostMapping("/{id}/rating")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('VENDOR_READ')")
     public ResponseEntity<VendorResponseDTO> rateVendor(
             @PathVariable Long id,
             @Valid @RequestBody VendorRatingDTO request) {
@@ -173,7 +173,7 @@ public class VendorController {
 
     // 15. EXPORT CSV — raw bytes, no ApiResponse wrapper
     @GetMapping("/export")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('VENDOR_READ')")
     public ResponseEntity<byte[]> exportCsv() {
         byte[] csv = vendorService.exportCsv();
         return ResponseEntity.ok()
@@ -184,7 +184,7 @@ public class VendorController {
 
     // 16. SEND EMAIL
     @PostMapping("/{id}/send-email")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAuthority('VENDOR_UPDATE')")
     public ResponseEntity<Map<String, String>> sendEmail(
             @PathVariable Long id,
             @Valid @RequestBody VendorEmailDTO request) {

@@ -61,6 +61,21 @@ public class PermissionTemplateService {
     }
 
     @Transactional
+    public PermissionTemplateDTO update(String value, CreateTemplateRequest req, Long tenantId) {
+        PermissionTemplate template = requireTemplate(value, tenantId);
+        template.setLabel(req.getLabel().trim());
+        template.setDescription(req.getDescription());
+        if (req.getIsDefault() != null) {
+            template.setDefault(req.getIsDefault());
+        }
+        // Replace the permission map only when the client actually sends one.
+        if (req.getPermissions() != null) {
+            template.setPermissionsJson(serialize(req.getPermissions()));
+        }
+        return toDto(templateRepository.save(template));
+    }
+
+    @Transactional
     public void delete(String value, Long tenantId) {
         templateRepository.delete(requireTemplate(value, tenantId));
     }

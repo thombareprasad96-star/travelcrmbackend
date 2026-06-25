@@ -45,4 +45,8 @@ public interface UserRepository extends JpaRepository<User, Long> {
             ORDER BY u.name ASC
             """)
     List<User> searchInTenant(@Param("tenantId") Long tenantId, @Param("q") String q);
+
+    /** IDs of active team members reporting to this manager (User.managerId) — for scope filtering. */
+    @Query("SELECT u.id FROM User u WHERE u.tenantId = :tenantId AND u.managerId = :managerId AND u.deletedAt IS NULL")
+    List<Long> findIdsByTenantIdAndManagerId(@Param("tenantId") Long tenantId, @Param("managerId") Long managerId);
 }

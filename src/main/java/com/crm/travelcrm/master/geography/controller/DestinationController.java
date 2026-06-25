@@ -85,7 +85,7 @@ public class DestinationController {
     // countryId is in the request body. Used by DestinationMaster.jsx.
 
     @PostMapping("/destinations")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<DestinationDto>> create(
             @Valid @RequestBody CreateDestinationRequest request) {
 
@@ -97,7 +97,7 @@ public class DestinationController {
     // ── POST nested (countryId in path) ───────────────────────────────────────
 
     @PostMapping("/countries/{countryId}/destinations")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<DestinationDto>> createByCountry(
             @PathVariable Long countryId,
             @Valid @RequestBody CreateDestinationRequest request) {
@@ -110,7 +110,7 @@ public class DestinationController {
     // ── PUT ───────────────────────────────────────────────────────────────────
 
     @PutMapping("/destinations/{destinationId}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<DestinationDto>> update(
             @PathVariable Long destinationId,
             @Valid @RequestBody UpdateDestinationRequest request) {
@@ -136,7 +136,7 @@ public class DestinationController {
     // ── DELETE ────────────────────────────────────────────────────────────────
 
     @DeleteMapping("/destinations/{destinationId}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<Void> delete(@PathVariable Long destinationId) {
         destinationService.delete(destinationId);
         return ResponseEntity.noContent().build();

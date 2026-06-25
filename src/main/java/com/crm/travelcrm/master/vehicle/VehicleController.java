@@ -25,7 +25,7 @@ public class VehicleController {
     private final VehicleService vehicleService;
 
     @PostMapping
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<VehicleResponseDTO>> createVehicle(
             @Valid @RequestBody VehicleRequestDTO request) {
 
@@ -62,7 +62,7 @@ public class VehicleController {
     }
 
     @PutMapping("/{publicId}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<VehicleResponseDTO>> updateVehicle(
             @PathVariable UUID publicId,
             @Valid @RequestBody VehicleRequestDTO request) {
@@ -72,14 +72,14 @@ public class VehicleController {
     }
 
     @DeleteMapping("/{publicId}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<Void>> deleteVehicle(@PathVariable UUID publicId) {
         vehicleService.deleteVehicle(publicId);
         return ResponseEntity.ok(ApiResponse.success("Vehicle deleted successfully"));
     }
 
     @PostMapping(value = "/upload-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<Map<String, String>>> uploadVehicleImage(
             @RequestParam("file") MultipartFile file) {
 

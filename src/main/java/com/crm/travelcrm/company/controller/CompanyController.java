@@ -25,14 +25,14 @@ public class CompanyController {
     private final CompanyService companyService;
 
     @GetMapping
-    @PreAuthorize("hasAuthority('CRM_FULL')")
+    @PreAuthorize("isAuthenticated()")
     public ResponseEntity<ApiResponse<CompanyDTO>> get(@AuthenticationPrincipal User currentUser) {
         return ResponseEntity.ok(ApiResponse.success(
                 "Company retrieved successfully", companyService.get(currentUser.getTenantId())));
     }
 
     @PutMapping
-    @PreAuthorize("hasAuthority('USER_UPDATE')")
+    @PreAuthorize("hasAuthority('SETTINGS_MANAGE')")
     public ResponseEntity<ApiResponse<CompanyDTO>> update(
             @Valid @RequestBody CompanyUpdateRequest request,
             @AuthenticationPrincipal User currentUser) {
@@ -41,7 +41,7 @@ public class CompanyController {
     }
 
     @PostMapping("/logo")
-    @PreAuthorize("hasAuthority('USER_UPDATE')")
+    @PreAuthorize("hasAuthority('SETTINGS_MANAGE')")
     public ResponseEntity<ApiResponse<CompanyDTO>> uploadLogo(
             @RequestParam("file") MultipartFile file,
             @AuthenticationPrincipal User currentUser) {
@@ -50,7 +50,7 @@ public class CompanyController {
     }
 
     @PostMapping("/favicon")
-    @PreAuthorize("hasAuthority('USER_UPDATE')")
+    @PreAuthorize("hasAuthority('SETTINGS_MANAGE')")
     public ResponseEntity<ApiResponse<CompanyDTO>> uploadFavicon(
             @RequestParam("file") MultipartFile file,
             @AuthenticationPrincipal User currentUser) {
@@ -59,7 +59,7 @@ public class CompanyController {
     }
 
     @GetMapping("/subscription")
-    @PreAuthorize("hasAuthority('CRM_FULL')")
+    @PreAuthorize("isAuthenticated()")
     public ResponseEntity<ApiResponse<SubscriptionDTO>> getSubscription(
             @AuthenticationPrincipal User currentUser) {
         return ResponseEntity.ok(ApiResponse.success(
@@ -67,7 +67,7 @@ public class CompanyController {
     }
 
     @GetMapping("/ai-credits")
-    @PreAuthorize("hasAuthority('CRM_FULL')")
+    @PreAuthorize("isAuthenticated()")
     public ResponseEntity<ApiResponse<AiCreditsDTO>> getAiCredits(
             @AuthenticationPrincipal User currentUser) {
         return ResponseEntity.ok(ApiResponse.success(

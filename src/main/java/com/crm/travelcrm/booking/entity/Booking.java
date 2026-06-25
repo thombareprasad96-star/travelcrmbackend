@@ -59,6 +59,16 @@ public class Booking extends BaseTenantEntity {
     @Column(name = "lead_id")
     private Long leadId;
 
+    // ── Conversion traceability (Lead → Quotation → Booking) ──────────────────
+    // Set only when this booking was produced by converting a lead. They store the
+    // source lead/quotation by their publicId (UUID) — never the internal Long id — so
+    // Reports can trace a booking back to the lead and the quotation it came from.
+    @Column(name = "source_lead_public_id")
+    private java.util.UUID sourceLeadPublicId;
+
+    @Column(name = "source_quotation_public_id")
+    private java.util.UUID sourceQuotationPublicId;
+
     // ───────────────── Financials ─────────────────
 
     @Builder.Default

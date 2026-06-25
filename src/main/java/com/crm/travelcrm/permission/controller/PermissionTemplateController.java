@@ -53,6 +53,17 @@ public class PermissionTemplateController {
                 .body(ApiResponse.success("Template created successfully", created, 201));
     }
 
+    @PutMapping("/{value}")
+    @PreAuthorize("hasAuthority('USER_UPDATE')")
+    public ResponseEntity<ApiResponse<PermissionTemplateDTO>> update(
+            @PathVariable String value,
+            @Valid @RequestBody CreateTemplateRequest request,
+            @AuthenticationPrincipal User currentUser) {
+
+        PermissionTemplateDTO updated = templateService.update(value, request, currentUser.getTenantId());
+        return ResponseEntity.ok(ApiResponse.success("Template updated successfully", updated));
+    }
+
     @DeleteMapping("/{value}")
     @PreAuthorize("hasAuthority('USER_UPDATE')")
     public ResponseEntity<ApiResponse<Void>> delete(

@@ -13,6 +13,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -31,11 +32,13 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/reminders")
 @RequiredArgsConstructor
+@PreAuthorize("hasAuthority('REMINDER_READ')")   // class default; mutating methods override below
 public class ReminderController {
 
     private final ReminderService reminderService;
 
     @PostMapping
+    @PreAuthorize("hasAuthority('REMINDER_CREATE')")
     public ResponseEntity<ReminderResponseDto> create(
             @Valid @RequestBody CreateReminderRequestDto request) {
         return ResponseEntity.status(HttpStatus.CREATED).body(reminderService.create(request));
@@ -84,40 +87,47 @@ public class ReminderController {
     }
 
     @PutMapping("/{id}")
+    @PreAuthorize("hasAuthority('REMINDER_UPDATE')")
     public ResponseEntity<ReminderResponseDto> update(
             @PathVariable Long id, @Valid @RequestBody UpdateReminderRequestDto request) {
         return ResponseEntity.ok(reminderService.update(id, request));
     }
 
     @DeleteMapping("/{id}")
+    @PreAuthorize("hasAuthority('REMINDER_DELETE')")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
         reminderService.delete(id);
         return ResponseEntity.noContent().build();
     }
 
     @RequestMapping(value = "/{id}/complete", method = {RequestMethod.PATCH, RequestMethod.PUT})
+    @PreAuthorize("hasAuthority('REMINDER_UPDATE')")
     public ResponseEntity<ReminderResponseDto> markComplete(@PathVariable Long id) {
         return ResponseEntity.ok(reminderService.markComplete(id));
     }
 
     @RequestMapping(value = "/{id}/dismiss", method = {RequestMethod.PATCH, RequestMethod.PUT})
+    @PreAuthorize("hasAuthority('REMINDER_UPDATE')")
     public ResponseEntity<ReminderResponseDto> dismiss(@PathVariable Long id) {
         return ResponseEntity.ok(reminderService.dismiss(id));
     }
 
     @PatchMapping("/{id}/snooze")
+    @PreAuthorize("hasAuthority('REMINDER_UPDATE')")
     public ResponseEntity<ReminderResponseDto> snooze(
             @PathVariable Long id, @Valid @RequestBody SnoozeReminderRequest request) {
         return ResponseEntity.ok(reminderService.snooze(id, request.getSnoozedUntil()));
     }
 
     @PostMapping("/{id}/logs")
+    @PreAuthorize("hasAuthority('REMINDER_UPDATE')")
     public ResponseEntity<ReminderResponseDto> addLog(
             @PathVariable Long id, @Valid @RequestBody AddLogRequest request) {
         return ResponseEntity.ok(reminderService.addLog(id, request.getLog()));
     }
 
     @PatchMapping("/complete-all-overdue")
+    @PreAuthorize("hasAuthority('REMINDER_UPDATE')")
     public ResponseEntity<Integer> completeAllOverdue() {
         return ResponseEntity.ok(reminderService.completeAllOverdue());
     }

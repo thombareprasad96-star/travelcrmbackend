@@ -31,7 +31,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/quotations")
 @RequiredArgsConstructor
-@PreAuthorize("hasAuthority('CRM_FULL')")
+@PreAuthorize("hasAuthority('QUOTATION_READ')")   // class default; mutating methods override below
 public class QuotationController {
 
     private final QuotationService quotationService;
@@ -39,6 +39,7 @@ public class QuotationController {
 
     // ── Create ──────────────────────────────────────────────────────────────--
     @PostMapping
+    @PreAuthorize("hasAuthority('QUOTATION_CREATE')")
     public ResponseEntity<ApiResponse<QuotationResponseDto>> create(
             @Valid @RequestBody QuotationRequestDto request) {
         log.info("POST /api/quotations | lead: {}", request.getLeadId());
@@ -49,6 +50,7 @@ public class QuotationController {
 
     // ── Update ──────────────────────────────────────────────────────────────--
     @PutMapping("/{publicId}")
+    @PreAuthorize("hasAuthority('QUOTATION_UPDATE')")
     public ResponseEntity<ApiResponse<QuotationResponseDto>> update(
             @PathVariable UUID publicId,
             @Valid @RequestBody QuotationRequestDto request) {
@@ -103,6 +105,7 @@ public class QuotationController {
 
     // ── Delete (soft) ─────────────────────────────────────────────────────────
     @DeleteMapping("/{publicId}")
+    @PreAuthorize("hasAuthority('QUOTATION_DELETE')")
     public ResponseEntity<ApiResponse<Void>> delete(@PathVariable UUID publicId) {
         log.info("DELETE /api/quotations/{}", publicId);
         quotationService.delete(publicId);
@@ -111,6 +114,7 @@ public class QuotationController {
 
     // ── Stage change ────────────────────────────────────────────────────────--
     @PatchMapping("/{publicId}/stage")
+    @PreAuthorize("hasAuthority('QUOTATION_UPDATE')")
     public ResponseEntity<ApiResponse<QuotationResponseDto>> updateStage(
             @PathVariable UUID publicId,
             @RequestParam String stage) {
@@ -121,6 +125,7 @@ public class QuotationController {
 
     // ── Duplicate ─────────────────────────────────────────────────────────────
     @PostMapping("/{publicId}/duplicate")
+    @PreAuthorize("hasAuthority('QUOTATION_CREATE')")
     public ResponseEntity<ApiResponse<QuotationResponseDto>> duplicate(@PathVariable UUID publicId) {
         log.info("POST /api/quotations/{}/duplicate", publicId);
         QuotationResponseDto response = quotationService.duplicate(publicId);
@@ -132,6 +137,7 @@ public class QuotationController {
     // Copies the quotation (+ all items), increments the version (status -> DRAFT),
     // renders the PDF and stores it on Cloudinary.
     @PostMapping("/{publicId}/new-version")
+    @PreAuthorize("hasAuthority('QUOTATION_CREATE')")
     public ResponseEntity<ApiResponse<QuotationResponseDto>> newVersion(@PathVariable UUID publicId) {
         log.info("POST /api/quotations/{}/new-version", publicId);
         QuotationResponseDto response = quotationService.newVersion(publicId);
@@ -159,6 +165,7 @@ public class QuotationController {
 
     // ── Send email ────────────────────────────────────────────────────────────
     @PostMapping("/{publicId}/send-email")
+    @PreAuthorize("hasAuthority('QUOTATION_UPDATE')")
     public ResponseEntity<ApiResponse<Void>> sendEmail(
             @PathVariable UUID publicId,
             @Valid @RequestBody QuotationEmailRequestDto request) {

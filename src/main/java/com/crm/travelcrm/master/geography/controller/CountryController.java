@@ -48,7 +48,7 @@ public class CountryController {
     }
 
     @PutMapping("/{countryId}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<CountryDto>> update(
             @PathVariable Long countryId,
             @Valid @RequestBody UpdateCountryRequest request) {
@@ -57,7 +57,7 @@ public class CountryController {
     }
 
     @DeleteMapping("/{countryId}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<Void> delete(@PathVariable Long countryId) {
         countryService.delete(countryId);
         return ResponseEntity.noContent().build();

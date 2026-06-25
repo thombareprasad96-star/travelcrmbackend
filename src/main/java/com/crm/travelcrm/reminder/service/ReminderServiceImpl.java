@@ -5,7 +5,7 @@ import com.crm.travelcrm.auth.repository.UserRepository;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.lead.entity.Lead;
-import com.crm.travelcrm.lead.repository.LeadRepository;
+import com.crm.travelcrm.lead.service.LeadAccessGuard;
 import com.crm.travelcrm.reminder.dto.CreateReminderRequestDto;
 import com.crm.travelcrm.reminder.dto.ReminderResponseDto;
 import com.crm.travelcrm.reminder.dto.ReminderStatsDto;
@@ -41,7 +41,7 @@ public class ReminderServiceImpl implements ReminderService {
 
     private final ReminderRepository reminderRepository;
     private final ReminderMapper reminderMapper;
-    private final LeadRepository leadRepository;
+    private final LeadAccessGuard leadAccessGuard;
     private final UserRepository userRepository;
 
     private static final DateTimeFormatter CSV_TS =
@@ -271,8 +271,9 @@ public class ReminderServiceImpl implements ReminderService {
      */
     private void applyReferences(Reminder reminder, UUID leadPublicId, UUID assignToPublicId, Long tenantId) {
         if (leadPublicId != null) {
-            Lead lead = leadRepository.findByPublicIdAndTenantIdAndDeletedAtIsNull(leadPublicId, tenantId)
-                    .orElseThrow(() -> new ResourceNotFoundException("Lead not found: " + leadPublicId));
+            // Central guard: tenant + row-level scope, so a reminder can't reference (and
+            // snapshot the name of) a lead the user isn't allowed to see.
+            Lead lead = leadAccessGuard.requireVisible(leadPublicId, "LEAD_READ");
             reminder.setLeadRefId(lead.getId());
             reminder.setLeadPublicId(lead.getPublicId());
             reminder.setLeadName(lead.getCustomerName());

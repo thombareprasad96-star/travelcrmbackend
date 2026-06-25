@@ -6,7 +6,7 @@ import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.lead.entity.Lead;
 import com.crm.travelcrm.lead.entity.LeadItinerary;
-import com.crm.travelcrm.lead.repository.LeadRepository;
+import com.crm.travelcrm.lead.service.LeadAccessGuard;
 import com.crm.travelcrm.quotation.dto.QuotationEmailRequestDto;
 import com.crm.travelcrm.quotation.dto.QuotationPdfResource;
 import com.crm.travelcrm.quotation.dto.QuotationRefDto;
@@ -51,7 +51,7 @@ public class QuotationServiceImpl implements QuotationService {
     private final QuotationMapper quotationMapper;
     private final QuotationPdfService quotationPdfService;
     private final CloudinaryService cloudinaryService;
-    private final LeadRepository leadRepository;
+    private final LeadAccessGuard leadAccessGuard;
     private final JavaMailSender mailSender;
 
     @Value("${spring.mail.username:no-reply@travelcrm.local}")
@@ -83,7 +83,7 @@ public class QuotationServiceImpl implements QuotationService {
         q.setVersion("v" + versionNumber + ".0");
 
         q.setQuoteNo((int) (quotationRepository.countByTenantIdAndParentQuotationIdIsNull(tenantId) + 1));
-        linkLeadAndSnapshot(q, request.getLeadId(), tenantId);
+        linkLeadAndSnapshot(q, request.getLeadId());
 
         Quotation saved = quotationRepository.save(q);
         log.info("Quotation created | publicId: {} | tenantId: {}", saved.getPublicId(), tenantId);
@@ -106,7 +106,7 @@ public class QuotationServiceImpl implements QuotationService {
         q.setPdfUrl(null);
         // Re-link the lead only if the client sent one (keeps the existing snapshot otherwise)
         if (request.getLeadId() != null) {
-            linkLeadAndSnapshot(q, request.getLeadId(), tenantId);
+            linkLeadAndSnapshot(q, request.getLeadId());
         }
 
         Quotation saved = quotationRepository.save(q);
@@ -354,13 +354,13 @@ public class QuotationServiceImpl implements QuotationService {
      * Resolve the lead by its publicId (tenant-scoped) and snapshot the customer
      * details onto the quotation so the PDF is stable.
      */
-    private void linkLeadAndSnapshot(Quotation q, UUID leadPublicId, Long tenantId) {
+    private void linkLeadAndSnapshot(Quotation q, UUID leadPublicId) {
         if (leadPublicId == null) {
             return;
         }
-        Lead lead = leadRepository
-                .findByPublicIdAndTenantIdAndDeletedAtIsNull(leadPublicId, tenantId)
-                .orElseThrow(() -> new ResourceNotFoundException("Lead not found: " + leadPublicId));
+        // Resolve through the central guard so the Lead module's tenant + row-level scope is
+        // enforced here too — a user must not snapshot a lead they aren't allowed to see.
+        Lead lead = leadAccessGuard.requireVisible(leadPublicId, "LEAD_READ");
 
         q.setLeadId(lead.getId());
         q.setLeadPublicId(lead.getPublicId());

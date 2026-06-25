@@ -1,9 +1,12 @@
 package com.crm.travelcrm.booking.service;
 
+import com.crm.travelcrm.booking.dto.request.CancelBookingRequestDTO;
 import com.crm.travelcrm.booking.dto.request.CreateBookingRequestDTO;
+import com.crm.travelcrm.booking.dto.request.LeadConversionRequestDTO;
 import com.crm.travelcrm.booking.dto.request.PaymentUpdateRequestDTO;
 import com.crm.travelcrm.booking.dto.request.StatusUpdateRequestDTO;
 import com.crm.travelcrm.booking.dto.request.UpdateBookingRequestDTO;
+import com.crm.travelcrm.booking.enums.CancelAction;
 import com.crm.travelcrm.booking.dto.response.BookingPageSummaryResponseDTO;
 import com.crm.travelcrm.booking.dto.response.BookingResponseDTO;
 import com.crm.travelcrm.booking.dto.response.BookingStatsResponseDTO;
@@ -23,15 +26,22 @@ import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.customer.entity.Customer;
 import com.crm.travelcrm.customer.repository.CustomerRepository;
+import com.crm.travelcrm.customer.util.CustomerCodeGenerator;
+import com.crm.travelcrm.lead.entity.Lead;
+import com.crm.travelcrm.lead.enums.LeadStage;
 import com.crm.travelcrm.lead.repository.LeadRepository;
+import com.crm.travelcrm.lead.service.LeadAccessGuard;
 import com.crm.travelcrm.notification.api.NotifyEvent;
 import com.crm.travelcrm.notification.domain.enums.DeliveryChannel;
 import com.crm.travelcrm.notification.domain.enums.NotificationType;
+import com.crm.travelcrm.quotation.entity.Quotation;
+import com.crm.travelcrm.quotation.repository.QuotationRepository;
 import lombok.RequiredArgsConstructor;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.data.domain.PageRequest;
@@ -44,7 +54,10 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -62,7 +75,10 @@ public class BookingServiceImpl implements BookingService {
     private final BookingCodeGenerator bookingCodeGenerator;
     private final ApplicationEventPublisher eventPublisher;
     private final CustomerRepository   customerRepository;
+    private final CustomerCodeGenerator customerCodeGenerator;
     private final LeadRepository       leadRepository;
+    private final LeadAccessGuard      leadAccessGuard;
+    private final QuotationRepository  quotationRepository;
 
     // ── Create ───────────────────────────────────────────────────────────────
 
@@ -75,7 +91,7 @@ public class BookingServiceImpl implements BookingService {
 
         Booking booking = bookingMapper.toEntity(request);
         booking.setTenantId(tenantId);
-        booking.setBookingCode(bookingCodeGenerator.generate());
+        booking.setBookingCode(bookingCodeGenerator.generate(tenantId));
         booking.setStatus(BookingStatus.PENDING);
 
         // Validate cross-aggregate references (no DB FK) and snapshot the resolved values.
@@ -107,36 +123,105 @@ public class BookingServiceImpl implements BookingService {
         return bookingMapper.toResponse(saved);
     }
 
-    // ── Create from Lead ─────────────────────────────────────────────────────
+    // ── Convert Lead → Booking ────────────────────────────────────────────────
 
     @Override
     @Transactional
-    public BookingResponseDTO createFromLead(Long leadId) {
-        log.info("Creating booking from lead id: {}", leadId);
+    public BookingResponseDTO convertLeadToBooking(UUID leadPublicId, LeadConversionRequestDTO request) {
+        Long tenantId = requireTenantId();
+        log.info("Converting lead {} to booking", leadPublicId);
 
-        // Basic shell booking from lead — extend when Lead entity is wired
+        // Tenant + row-level scope (LEAD_UPDATE — converting mutates the lead). Returns the
+        // managed Lead so the stage flip below participates in this same transaction.
+        Lead lead = leadAccessGuard.requireVisible(leadPublicId, "LEAD_UPDATE");
+
+        // Duplicate guard — never silently create a second booking for the same lead. Re-submits
+        // and double-clicks land here and are rejected with a friendly 409 naming the existing one.
+        bookingRepository.findFirstByLeadIdAndTenantIdAndDeletedAtIsNullOrderByIdDesc(lead.getId(), tenantId)
+                .ifPresent(existing -> {
+                    throw new BusinessException(
+                            "This lead is already converted to booking " + existing.getBookingCode()
+                                    + ". Open that booking instead of creating another.",
+                            HttpStatus.CONFLICT);
+                });
+
+        // Optional source quotation — validate it belongs to this lead + tenant before linking.
+        UUID sourceQuotationPublicId = null;
+        if (request.getQuotationPublicId() != null) {
+            Quotation quotation = quotationRepository
+                    .findByPublicIdAndTenantIdAndDeletedAtIsNull(request.getQuotationPublicId(), tenantId)
+                    .orElseThrow(() -> new ResourceNotFoundException(
+                            "Quotation not found: " + request.getQuotationPublicId()));
+            boolean belongsToLead = Objects.equals(quotation.getLeadId(), lead.getId())
+                    || Objects.equals(quotation.getLeadPublicId(), lead.getPublicId());
+            if (!belongsToLead) {
+                throw new BusinessException(
+                        "The selected quotation does not belong to this lead.", HttpStatus.BAD_REQUEST);
+            }
+            sourceQuotationPublicId = quotation.getPublicId();
+        }
+
+        // Resolve or create the customer from the lead (phone is the per-tenant natural key).
+        Customer customer = resolveOrCreateCustomer(lead, request.getCustomerName(), tenantId);
+
+        // Build the booking, carrying over the reviewed details + source back-links.
         Booking booking = Booking.builder()
-                .tenantId(requireTenantId())
-                .bookingCode(bookingCodeGenerator.generate())
-                .leadId(leadId)
+                .tenantId(tenantId)
+                .bookingCode(bookingCodeGenerator.generate(tenantId))
+                .customerId(customer.getId())
+                .customerNameSnapshot(request.getCustomerName())
+                .destinationSnapshot(request.getDestination())
+                .leadId(lead.getId())
+                .sourceLeadPublicId(lead.getPublicId())
+                .sourceQuotationPublicId(sourceQuotationPublicId)
                 .status(BookingStatus.PENDING)
-                .customerAmount(BigDecimal.ZERO)
-                .vendorCost(BigDecimal.ZERO)
-                .paidAmount(BigDecimal.ZERO)
-                .gst(BigDecimal.ZERO)
-                .tcs(BigDecimal.ZERO)
-                .totalPayable(BigDecimal.ZERO)
-                .netProfit(BigDecimal.ZERO)
-                .paymentStatus(PaymentStatus.UNPAID)
-                .bookingDate(LocalDate.now())
-                .travelDate(LocalDate.now().plusDays(1))
-                .customerNameSnapshot("TBD")
-                .destinationSnapshot("TDB")
+                .bookingDate(request.getBookingDate() != null ? request.getBookingDate() : LocalDate.now())
+                .travelDate(request.getTravelDate())
+                // customerAmount / vendorCost are stored as-is; the helper derives gst/tcs/total/profit.
+                .customerAmount(request.getCustomerAmount())
+                .vendorCost(request.getVendorCost())
+                .services(request.getServices() != null
+                        ? new ArrayList<>(request.getServices())
+                        : new ArrayList<>())
                 .build();
 
+        BigDecimal paid = request.getPaidAmount() != null ? request.getPaidAmount() : BigDecimal.ZERO;
+        calculateAndApplyFinancials(booking, request.getCustomerAmount(), request.getVendorCost(), paid);
+
         Booking saved = bookingRepository.save(booking);
-        log.info("Booking created from lead. Code: {}", saved.getBookingCode());
+
+        // Flip the lead to CONVERTED — keep it for history, stamp the back-link to the booking.
+        lead.setLeadStage(LeadStage.CONVERTED);
+        lead.setConvertedAt(LocalDateTime.now());
+        lead.setConvertedBookingPublicId(saved.getPublicId());
+        leadRepository.save(lead);
+
+        log.info("Lead {} converted to booking {} (tenant {})",
+                leadPublicId, saved.getBookingCode(), tenantId);
+
+        publishBookingEvent(NotificationType.BOOKING_CREATED, saved,
+                "Lead converted: " + saved.getBookingCode(),
+                lead.getCustomerName() + " was converted to booking " + saved.getBookingCode());
+
         return bookingMapper.toResponse(saved);
+    }
+
+    /** Find the tenant customer by the lead's phone, or create a fresh one snapshotting the lead. */
+    private Customer resolveOrCreateCustomer(Lead lead, String name, Long tenantId) {
+        return customerRepository.findByPhoneAndTenantIdAndDeletedAtIsNull(lead.getPhone(), tenantId)
+                .orElseGet(() -> {
+                    Customer customer = Customer.builder()
+                            .tenantId(tenantId)
+                            .customerCode(customerCodeGenerator.generate(tenantId))
+                            .name(name != null && !name.isBlank() ? name : lead.getCustomerName())
+                            .phone(lead.getPhone())
+                            .email(lead.getEmail())
+                            .build();
+                    Customer created = customerRepository.save(customer);
+                    log.info("Created customer {} from lead {} during conversion",
+                            created.getCustomerCode(), lead.getPublicId());
+                    return created;
+                });
     }
 
     // ── Get by ID ────────────────────────────────────────────────────────────
@@ -224,6 +309,101 @@ public class BookingServiceImpl implements BookingService {
                 "Booking " + saved.getStatus() + ": " + saved.getBookingCode(),
                 "Booking " + saved.getBookingCode() + " status changed to " + saved.getStatus());
         return bookingMapper.toResponse(saved);
+    }
+
+    // ── Cancel (with explicit lead handling) ──────────────────────────────────
+
+    @Override
+    @Transactional
+    public BookingResponseDTO cancel(UUID publicId, CancelBookingRequestDTO request) {
+        Long tenantId = requireTenantId();
+        Booking booking = findActiveByPublicId(publicId);
+
+        // A completed journey is locked: its lead must not revert and its history must not be erased.
+        if (booking.getStatus() == BookingStatus.COMPLETED) {
+            throw new BusinessException(
+                    "A completed booking cannot be cancelled.", HttpStatus.CONFLICT);
+        }
+        if (booking.getStatus() == BookingStatus.CANCELLED) {
+            throw new BusinessException("This booking is already cancelled.", HttpStatus.CONFLICT);
+        }
+
+        if (request.getAction() == CancelAction.PERMANENT_DELETE_LEAD) {
+            // High-privilege gate on top of the endpoint's BOOKING_CANCEL. Friendly 403 if missing.
+            requireAuthority("LEAD_PERMANENT_DELETE",
+                    "You don't have permission to permanently delete a lead. Please contact your administrator.");
+            permanentlyDeleteLead(booking, tenantId);
+        } else {
+            moveBackToLead(booking, tenantId);
+        }
+
+        // The booking is ALWAYS retained — only its status changes. Snapshots (customer name /
+        // destination) already live on the row, so a lead-less cancelled booking stays meaningful.
+        booking.setStatus(BookingStatus.CANCELLED);
+        Booking saved = bookingRepository.save(booking);
+
+        publishBookingEvent(NotificationType.BOOKING_CANCELLED, saved,
+                "Booking cancelled: " + saved.getBookingCode(),
+                "Booking " + saved.getBookingCode() + " was cancelled ("
+                        + (request.getAction() == CancelAction.PERMANENT_DELETE_LEAD
+                            ? "lead permanently deleted" : "moved back to lead") + ")");
+        log.info("Booking {} cancelled via {} (tenant {})",
+                saved.getBookingCode(), request.getAction(), tenantId);
+        return bookingMapper.toResponse(saved);
+    }
+
+    /** MOVE_TO_LEAD: re-activate the source lead (REOPENED), keeping the booking↔lead link. */
+    private void moveBackToLead(Booking booking, Long tenantId) {
+        Long leadId = booking.getLeadId();
+        if (leadId == null) {
+            log.info("Cancel/MOVE_TO_LEAD: booking {} has no associated lead — cancelling only",
+                    booking.getBookingCode());
+            return;
+        }
+        leadRepository.findByIdAndTenantIdAndDeletedAtIsNull(leadId, tenantId).ifPresent(lead -> {
+            lead.setLeadStage(LeadStage.REOPENED);
+            lead.setConvertedAt(null);
+            lead.setConvertedBookingPublicId(null);
+            leadRepository.save(lead);
+            log.info("Lead {} reopened after cancelling booking {}",
+                    lead.getPublicId(), booking.getBookingCode());
+        });
+    }
+
+    /**
+     * PERMANENT_DELETE_LEAD: hard-delete the lead and explicitly soft-delete its quotations
+     * (never silently orphaned), then null the booking's lead link so the retained cancelled
+     * booking never dangles. Itinerary (the lead's own children) is removed by JPA cascade.
+     */
+    private void permanentlyDeleteLead(Booking booking, Long tenantId) {
+        Long leadId = booking.getLeadId();
+        // Detach the retained booking from the lead first — it keeps its own snapshots + financials.
+        booking.setLeadId(null);
+        booking.setSourceLeadPublicId(null);
+        if (leadId == null) return;
+
+        String by = currentUserEmail();
+        List<Quotation> quotations =
+                quotationRepository.findAllByLeadIdAndTenantIdAndDeletedAtIsNull(leadId, tenantId);
+        quotations.forEach(q -> q.softDelete(by));
+        quotationRepository.saveAll(quotations);
+
+        leadRepository.findByIdAndTenantIdAndDeletedAtIsNull(leadId, tenantId)
+                .ifPresent(lead -> {
+                    leadRepository.delete(lead);   // cascades itinerary (orphanRemoval)
+                    log.warn("Lead {} permanently deleted while cancelling booking {} ({} quotation(s) soft-deleted)",
+                            lead.getPublicId(), booking.getBookingCode(), quotations.size());
+                });
+    }
+
+    /** Programmatic authority check for conditional gating within a single endpoint. */
+    private void requireAuthority(String authority, String denyMessage) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        boolean has = auth != null && auth.getAuthorities().stream()
+                .anyMatch(a -> authority.equals(a.getAuthority()));
+        if (!has) {
+            throw new BusinessException(denyMessage, HttpStatus.FORBIDDEN);
+        }
     }
 
     // ── Update Payment ───────────────────────────────────────────────────────

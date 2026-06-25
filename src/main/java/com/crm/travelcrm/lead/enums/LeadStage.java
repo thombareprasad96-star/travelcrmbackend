@@ -11,6 +11,8 @@ public enum LeadStage {
     QUALIFIED("Qualified"),
     PROPOSAL_SENT("Proposal Sent"),
     CONVERTED("Converted"),
+    // Re-activated after a booking conversion was cancelled ("move back to lead").
+    REOPENED("Reopened"),
     LOST("Lost");
 
     private final String displayName;

@@ -45,7 +45,7 @@ public class CustomerController {
     // ── List (paginated) ─────────────────────────────────────────────────────────
 
     @GetMapping
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('CUSTOMER_READ')")
     public ResponseEntity<PagedApiResponse<CustomerResponse>> getAll(
             @RequestParam(defaultValue = "0")         int page,
             @RequestParam(defaultValue = "20")        int size,
@@ -58,21 +58,21 @@ public class CustomerController {
     // ── Search / filter / stats / export (literal paths first) ──────────────────
 
     @GetMapping("/search")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('CUSTOMER_READ')")
     public ResponseEntity<ApiResponse<CustomerResponse>> searchByPhone(@RequestParam String phone) {
         return ResponseEntity.ok(
                 ApiResponse.success("Customer found", customerService.searchByPhone(phone)));
     }
 
     @GetMapping("/search-name")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('CUSTOMER_READ')")
     public ResponseEntity<ApiResponse<List<CustomerResponse>>> searchByName(@RequestParam String name) {
         return ResponseEntity.ok(
                 ApiResponse.success("Customers fetched", customerService.searchByName(name)));
     }
 
     @GetMapping("/filter")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('CUSTOMER_READ')")
     public ResponseEntity<ApiResponse<List<CustomerResponse>>> filter(
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String type,
@@ -82,14 +82,14 @@ public class CustomerController {
     }
 
     @GetMapping("/stats")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('CUSTOMER_READ')")
     public ResponseEntity<ApiResponse<CustomerStatsResponse>> getStats() {
         return ResponseEntity.ok(
                 ApiResponse.success("Customer stats fetched", customerService.getStats()));
     }
 
     @GetMapping("/export")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('CUSTOMER_READ')")
     public ResponseEntity<byte[]> exportCsv() {
         byte[] csvData = customerService.exportCsv();
 
@@ -104,14 +104,14 @@ public class CustomerController {
     // ── Item reads ──────────────────────────────────────────────────────────────
 
     @GetMapping("/{id}")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('CUSTOMER_READ')")
     public ResponseEntity<ApiResponse<CustomerResponse>> getById(@PathVariable UUID id) {
         return ResponseEntity.ok(
                 ApiResponse.success("Customer fetched", customerService.getById(id)));
     }
 
     @GetMapping("/{id}/bookings")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('CUSTOMER_READ')")
     public ResponseEntity<ApiResponse<List<CustomerBookingResponse>>> getBookingHistory(
             @PathVariable UUID id) {
         return ResponseEntity.ok(
@@ -121,7 +121,7 @@ public class CustomerController {
     // ── Mutations ───────────────────────────────────────────────────────────────
 
     @PostMapping
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAuthority('CUSTOMER_CREATE')")
     public ResponseEntity<ApiResponse<CustomerResponse>> create(
             @Valid @RequestBody CreateCustomerRequest request) {
 
@@ -132,7 +132,7 @@ public class CustomerController {
     }
 
     @PutMapping("/{id}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAuthority('CUSTOMER_UPDATE')")
     public ResponseEntity<ApiResponse<CustomerResponse>> update(
             @PathVariable UUID id,
             @Valid @RequestBody UpdateCustomerRequest request) {
@@ -142,7 +142,7 @@ public class CustomerController {
     }
 
     @PatchMapping("/{id}/status")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAuthority('CUSTOMER_UPDATE')")
     public ResponseEntity<ApiResponse<CustomerResponse>> updateStatus(
             @PathVariable UUID id,
             @Valid @RequestBody StatusUpdateRequest request) {
@@ -152,7 +152,7 @@ public class CustomerController {
     }
 
     @PatchMapping("/{id}/tier")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAuthority('CUSTOMER_UPDATE')")
     public ResponseEntity<ApiResponse<CustomerResponse>> updateTier(
             @PathVariable UUID id,
             @Valid @RequestBody TierUpdateRequest request) {
@@ -162,7 +162,7 @@ public class CustomerController {
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAuthority('CUSTOMER_DELETE')")
     public ResponseEntity<ApiResponse<Void>> delete(@PathVariable UUID id) {
         customerService.delete(id);
         return ResponseEntity.ok(ApiResponse.success("Customer deleted successfully"));

@@ -30,6 +30,8 @@ public interface BookingMapper {
     @Mapping(target = "customerNameSnapshot",   ignore = true)  // resolved by service
     @Mapping(target = "destinationId",          ignore = true)  // resolved by service
     @Mapping(target = "destinationSnapshot",    ignore = true)  // resolved by service
+    @Mapping(target = "sourceLeadPublicId",     ignore = true)  // set by conversion flow only
+    @Mapping(target = "sourceQuotationPublicId", ignore = true) // set by conversion flow only
     @Mapping(target = "gst",                    ignore = true)  // calculated by service
     @Mapping(target = "tcs",                    ignore = true)  // calculated by service
     @Mapping(target = "totalPayable",           ignore = true)  // calculated by service
@@ -62,6 +64,8 @@ public interface BookingMapper {
     @Mapping(target = "destinationId",          ignore = true)  // resolved by service if destination changed
     @Mapping(target = "destinationSnapshot",    ignore = true)
     @Mapping(target = "leadId",                 ignore = true)  // never changeable
+    @Mapping(target = "sourceLeadPublicId",     ignore = true)  // never changeable after creation
+    @Mapping(target = "sourceQuotationPublicId", ignore = true) // never changeable after creation
     @Mapping(target = "gst",                    ignore = true)  // recalculated by service
     @Mapping(target = "tcs",                    ignore = true)  // recalculated by service
     @Mapping(target = "totalPayable",           ignore = true)  // recalculated by service

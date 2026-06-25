@@ -32,6 +32,13 @@ public interface BookingRepository extends JpaRepository<Booking, Long>,
 
     boolean existsByBookingCode(String bookingCode);
 
+    // ── Lead → Booking conversion guards (tenant-scoped) ──────────────────────
+    // Duplicate guard: a lead must not be silently converted into a second booking.
+    boolean existsByLeadIdAndTenantIdAndDeletedAtIsNull(Long leadId, Long tenantId);
+
+    // The existing active booking a lead was already converted into (newest first).
+    Optional<Booking> findFirstByLeadIdAndTenantIdAndDeletedAtIsNullOrderByIdDesc(Long leadId, Long tenantId);
+
     // ── Stats queries ────────────────────────────────────────────────────────
 
     long countByDeletedAtIsNull();

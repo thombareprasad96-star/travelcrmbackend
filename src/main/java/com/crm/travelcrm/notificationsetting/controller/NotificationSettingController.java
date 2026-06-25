@@ -28,7 +28,7 @@ public class NotificationSettingController {
 
     // Body is the raw stage array (matches notificationSettingsService.updateAll).
     @PutMapping
-    @PreAuthorize("hasAuthority('USER_UPDATE')")
+    @PreAuthorize("hasAuthority('SETTINGS_MANAGE')")
     public ResponseEntity<List<NotificationStageDto>> update(
             @RequestBody List<NotificationStageDto> stages) {
         return ResponseEntity.ok(service.save(stages));

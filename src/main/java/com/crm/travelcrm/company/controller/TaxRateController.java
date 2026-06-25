@@ -24,7 +24,7 @@ public class TaxRateController {
     private final TaxRateService taxRateService;
 
     @GetMapping
-    @PreAuthorize("hasAuthority('CRM_FULL')")
+    @PreAuthorize("isAuthenticated()")
     public ResponseEntity<ApiResponse<List<TaxRateDTO>>> getAll(
             @AuthenticationPrincipal User currentUser) {
         return ResponseEntity.ok(ApiResponse.success(
@@ -32,7 +32,7 @@ public class TaxRateController {
     }
 
     @GetMapping("/active")
-    @PreAuthorize("hasAuthority('CRM_FULL')")
+    @PreAuthorize("isAuthenticated()")
     public ResponseEntity<ApiResponse<List<TaxRateDTO>>> getActive(
             @AuthenticationPrincipal User currentUser) {
         return ResponseEntity.ok(ApiResponse.success(
@@ -40,7 +40,7 @@ public class TaxRateController {
     }
 
     @PostMapping
-    @PreAuthorize("hasAuthority('USER_UPDATE')")
+    @PreAuthorize("hasAuthority('SETTINGS_MANAGE')")
     public ResponseEntity<ApiResponse<TaxRateDTO>> create(
             @Valid @RequestBody TaxRateCreateRequest request,
             @AuthenticationPrincipal User currentUser) {
@@ -50,7 +50,7 @@ public class TaxRateController {
     }
 
     @DeleteMapping("/{publicId}")
-    @PreAuthorize("hasAuthority('USER_UPDATE')")
+    @PreAuthorize("hasAuthority('SETTINGS_MANAGE')")
     public ResponseEntity<ApiResponse<Void>> delete(
             @PathVariable UUID publicId,
             @AuthenticationPrincipal User currentUser) {

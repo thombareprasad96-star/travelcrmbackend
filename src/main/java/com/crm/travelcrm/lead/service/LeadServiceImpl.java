@@ -19,6 +19,7 @@ import com.crm.travelcrm.lead.mapper.LeadMapper;
 import com.crm.travelcrm.lead.repository.LeadRepository;
 import com.crm.travelcrm.notification.api.NotifyEvent;
 import com.crm.travelcrm.notification.domain.enums.DeliveryChannel;
+import com.crm.travelcrm.permission.service.ScopeResolver;
 import com.crm.travelcrm.quotation.dto.QuotationRefDto;
 import com.crm.travelcrm.quotation.service.QuotationService;
 import lombok.RequiredArgsConstructor;
@@ -50,6 +51,8 @@ public class LeadServiceImpl implements LeadService {
     private final ApplicationEventPublisher eventPublisher;
     private final UserRepository userRepository;
     private final QuotationService quotationService;
+    private final ScopeResolver scopeResolver;
+    private final LeadAccessGuard leadAccessGuard;
 
     // ── Create ────────────────────────────────────────────────────────────────
 
@@ -88,8 +91,17 @@ public class LeadServiceImpl implements LeadService {
 
         Pageable pageable = PageRequest.of(page, size, sort);
 
-        // Scoped to tenant + excludes soft-deleted records
-        Page<Lead> leadPage = leadRepository.findAllByTenantIdAndDeletedAtIsNull(tenantId, pageable);
+        // Tenant + soft-delete, then row-level scope (own / team / all) for this user.
+        Set<Long> visibleIds = scopeResolver.visibleUserIds(currentUser(), "LEAD_READ");
+        Page<Lead> leadPage;
+        if (visibleIds == null) {                 // ALL — no owner restriction
+            leadPage = leadRepository.findAllByTenantIdAndDeletedAtIsNull(tenantId, pageable);
+        } else if (visibleIds.isEmpty()) {        // NONE — sees nothing
+            leadPage = Page.empty(pageable);
+        } else {                                  // OWN / TEAM — owner_id IN (visibleIds)
+            leadPage = leadRepository.findAllByTenantIdAndDeletedAtIsNullAndAssignedUser_IdIn(
+                    tenantId, visibleIds, pageable);
+        }
 
         List<LeadResponseDto> dtos = leadPage.getContent().stream()
                 .map(leadMapper::toResponse)
@@ -103,13 +115,8 @@ public class LeadServiceImpl implements LeadService {
     @Override
     @Transactional(readOnly = true)
     public LeadResponseDto getLeadById(UUID publicId) {
-        Long tenantId = currentTenantId();
-
-        // Tenant-scoped fetch by publicId — never expose the internal Long id
-        Lead lead = leadRepository
-                .findByPublicIdAndTenantIdAndDeletedAtIsNull(publicId, tenantId)
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "Lead not found: " + publicId));
+        // Tenant + row-level scope enforced centrally — never expose the internal Long id.
+        Lead lead = leadAccessGuard.requireVisible(publicId, "LEAD_READ");
 
         LeadResponseDto dto = leadMapper.toResponse(lead);
         dto.setLatestQuotation(quotationService.getLatestRefByLead(dto.getId()));
@@ -134,6 +141,12 @@ public class LeadServiceImpl implements LeadService {
                             "Lead not found with phone: " + keyword));
         }
 
+        // Row-level scope: search must not let an own/team-scoped user pull any tenant
+        // lead by email/phone. Report not-found rather than reveal a lead outside scope.
+        if (!scopeResolver.canSee(currentUser(), "LEAD_READ", ownerId(lead))) {
+            throw new ResourceNotFoundException("Lead not found: " + keyword);
+        }
+
         return leadMapper.toResponse(lead);
     }
 
@@ -144,11 +157,8 @@ public class LeadServiceImpl implements LeadService {
     public LeadResponseDto updateLead(UUID publicId, CreateLeadRequestDto request) {
         Long tenantId = currentTenantId();
 
-        // Tenant-scoped fetch — cannot update another tenant's lead
-        Lead lead = leadRepository
-                .findByPublicIdAndTenantIdAndDeletedAtIsNull(publicId, tenantId)
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "Lead not found: " + publicId));
+        // Tenant + row-level scope (LEAD_UPDATE) enforced centrally before any mutation.
+        Lead lead = leadAccessGuard.requireVisible(publicId, "LEAD_UPDATE");
 
         // Duplicate check excluding self
         validateNoDuplicates(request, tenantId, publicId);
@@ -223,10 +233,8 @@ public class LeadServiceImpl implements LeadService {
     public void deleteLead(UUID publicId) {
         Long tenantId = currentTenantId();
 
-        Lead lead = leadRepository
-                .findByPublicIdAndTenantIdAndDeletedAtIsNull(publicId, tenantId)
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "Lead not found: " + publicId));
+        // Tenant + row-level scope (LEAD_DELETE) enforced centrally.
+        Lead lead = leadAccessGuard.requireVisible(publicId, "LEAD_DELETE");
 
         // Soft delete — uses BaseEntity.softDelete()
         lead.softDelete(currentUserEmail());
@@ -247,10 +255,18 @@ public class LeadServiceImpl implements LeadService {
     public List<LeadBoardColumnDto> getLeadBoard() {
         Long tenantId = currentTenantId();
 
-        // One query, assignee eagerly joined; grouped in memory by stage.
-        Map<LeadStage, List<Lead>> byStage = leadRepository
-                .findAllByTenantIdAndDeletedAtIsNullOrderByCreatedAtDesc(tenantId)
-                .stream()
+        // One query, assignee eagerly joined; row-level scope applied; grouped by stage.
+        Set<Long> visibleIds = scopeResolver.visibleUserIds(currentUser(), "LEAD_READ");
+        List<Lead> leads;
+        if (visibleIds == null) {
+            leads = leadRepository.findAllByTenantIdAndDeletedAtIsNullOrderByCreatedAtDesc(tenantId);
+        } else if (visibleIds.isEmpty()) {
+            leads = List.of();
+        } else {
+            leads = leadRepository.findAllByTenantIdAndDeletedAtIsNullAndAssignedUser_IdInOrderByCreatedAtDesc(
+                    tenantId, visibleIds);
+        }
+        Map<LeadStage, List<Lead>> byStage = leads.stream()
                 .collect(Collectors.groupingBy(Lead::getLeadStage));
 
         // Emit every stage in pipeline order, including empty columns, so the
@@ -297,10 +313,8 @@ public class LeadServiceImpl implements LeadService {
     public LeadResponseDto updateLeadStage(UUID publicId, LeadStage newStage) {
         Long tenantId = currentTenantId();
 
-        Lead lead = leadRepository
-                .findByPublicIdAndTenantIdAndDeletedAtIsNull(publicId, tenantId)
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "Lead not found: " + publicId));
+        // Tenant + row-level scope (LEAD_UPDATE) — a drag-and-drop stage change is a mutation.
+        Lead lead = leadAccessGuard.requireVisible(publicId, "LEAD_UPDATE");
 
         LeadStage oldStage = lead.getLeadStage();
         if (oldStage == newStage) {
@@ -337,7 +351,11 @@ public class LeadServiceImpl implements LeadService {
         Long tenantId = currentTenantId();
         // Validates the user exists in this tenant — a foreign/unknown id
         // returns 404, not a silently wrong 0
-        resolveAssignedUserForStats(userPublicId, tenantId);
+        User target = resolveAssignedUserForStats(userPublicId, tenantId);
+        // Row-level scope: an own/team-scoped user can't read another user's lead count.
+        if (!scopeResolver.canSee(currentUser(), "LEAD_READ", target.getId())) {
+            throw new ResourceNotFoundException("User not found: " + userPublicId);
+        }
         return leadRepository
                 .countByAssignedUserPublicIdAndTenantIdAndDeletedAtIsNull(userPublicId, tenantId);
     }
@@ -345,18 +363,26 @@ public class LeadServiceImpl implements LeadService {
     @Override
     @Transactional(readOnly = true)
     public List<UserWorkloadDto> getUserWorkload() {
-        return leadRepository.findUserWorkload(currentTenantId());
+        Long tenantId = currentTenantId();
+        Set<Long> visibleIds = scopeResolver.visibleUserIds(currentUser(), "LEAD_READ");
+        if (visibleIds == null)        return leadRepository.findUserWorkload(tenantId);
+        if (visibleIds.isEmpty())      return List.of();
+        return leadRepository.findUserWorkloadForUsers(tenantId, visibleIds);
     }
 
     @Override
     @Transactional(readOnly = true)
     public List<UserLeadStageCountDto> getLeadStageBreakdownPerUser() {
-        return leadRepository.countLeadsByStagePerUser(currentTenantId());
+        Long tenantId = currentTenantId();
+        Set<Long> visibleIds = scopeResolver.visibleUserIds(currentUser(), "LEAD_READ");
+        if (visibleIds == null)        return leadRepository.countLeadsByStagePerUser(tenantId);
+        if (visibleIds.isEmpty())      return List.of();
+        return leadRepository.countLeadsByStagePerUserForUsers(tenantId, visibleIds);
     }
 
     /** Existence check only — unlike assignment, inactive users are fine here. */
-    private void resolveAssignedUserForStats(UUID userPublicId, Long tenantId) {
-        userRepository
+    private User resolveAssignedUserForStats(UUID userPublicId, Long tenantId) {
+        return userRepository
                 .findByPublicIdAndTenantIdAndDeletedAtIsNull(userPublicId, tenantId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "User not found: " + userPublicId));
@@ -414,6 +440,20 @@ public class LeadServiceImpl implements LeadService {
     private Long currentUserId() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         return (auth != null && auth.getPrincipal() instanceof User u) ? u.getId() : null;
+    }
+
+    /** A lead's owner (assigned user) internal id, or null if somehow unassigned. */
+    private Long ownerId(Lead lead) {
+        return lead.getAssignedUser() != null ? lead.getAssignedUser().getId() : null;
+    }
+
+    /** The authenticated tenant user — used for row-level scope resolution. */
+    private User currentUser() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth != null && auth.getPrincipal() instanceof User u) {
+            return u;
+        }
+        throw new IllegalStateException("No tenant user in security context");
     }
 
     /**

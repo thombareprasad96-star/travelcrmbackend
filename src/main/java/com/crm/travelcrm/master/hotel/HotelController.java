@@ -59,7 +59,7 @@ public class HotelController {
     }
 
     @PostMapping
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<HotelDto>> create(@Valid @RequestBody CreateHotelRequest request) {
         HotelDto created = hotelService.create(request);
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -67,7 +67,7 @@ public class HotelController {
     }
 
     @PutMapping("/{id}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<HotelDto>> update(
             @PathVariable Long id,
             @Valid @RequestBody UpdateHotelRequest request) {
@@ -75,20 +75,20 @@ public class HotelController {
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
         hotelService.delete(id);
         return ResponseEntity.noContent().build();
     }
 
     @PatchMapping("/{id}/set-default")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<HotelDto>> setDefault(@PathVariable Long id) {
         return ResponseEntity.ok(ApiResponse.success("Hotel set as default", hotelService.setDefault(id)));
     }
 
     @PostMapping(value = "/upload-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<Map<String, String>>> uploadImage(@RequestParam("file") MultipartFile file) {
         String url = hotelService.uploadImage(file);
         return ResponseEntity.ok(ApiResponse.success("Image uploaded", Map.of("imagePath", url)));
@@ -96,7 +96,7 @@ public class HotelController {
 
     // Room type endpoints
     @PostMapping("/{hotelId}/room-types")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<RoomTypeDto>> addRoomType(
             @PathVariable Long hotelId,
             @Valid @RequestBody CreateRoomTypeRequest request) {
@@ -106,7 +106,7 @@ public class HotelController {
     }
 
     @PutMapping("/{hotelId}/room-types/{roomTypeId}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<RoomTypeDto>> updateRoomType(
             @PathVariable Long hotelId,
             @PathVariable Long roomTypeId,
@@ -115,7 +115,7 @@ public class HotelController {
     }
 
     @DeleteMapping("/{hotelId}/room-types/{roomTypeId}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<Void> deleteRoomType(
             @PathVariable Long hotelId,
             @PathVariable Long roomTypeId) {
@@ -124,7 +124,7 @@ public class HotelController {
     }
 
     @PostMapping(value = "/{hotelId}/room-types/{roomTypeId}/images", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<String>> uploadRoomImages(
             @PathVariable Long hotelId,
             @PathVariable Long roomTypeId,
@@ -134,7 +134,7 @@ public class HotelController {
 
     // Meal plan endpoints
     @PostMapping("/{hotelId}/meal-plans")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<MealPlanDto>> addMealPlan(
             @PathVariable Long hotelId,
             @Valid @RequestBody CreateMealPlanRequest request) {
@@ -144,7 +144,7 @@ public class HotelController {
     }
 
     @PutMapping("/{hotelId}/meal-plans/{mealPlanId}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<MealPlanDto>> updateMealPlan(
             @PathVariable Long hotelId,
             @PathVariable Long mealPlanId,
@@ -153,7 +153,7 @@ public class HotelController {
     }
 
     @DeleteMapping("/{hotelId}/meal-plans/{mealPlanId}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<Void> deleteMealPlan(
             @PathVariable Long hotelId,
             @PathVariable Long mealPlanId) {

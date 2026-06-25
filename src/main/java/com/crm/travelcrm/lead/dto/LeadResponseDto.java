@@ -44,6 +44,13 @@ public class LeadResponseDto {
     /** Ref to this lead's newest quotation (null when none) — drives the "View/Download vs Create" UI. */
     private QuotationRefDto latestQuotation;
 
+    // ── Conversion state (Lead → Booking) ─────────────────────────────────────
+    // Non-null once the lead has been converted. The UI uses convertedBookingPublicId
+    // to relabel the "Convert to Booking" action to "View Booking" and prevent a
+    // second accidental conversion.
+    private LocalDateTime convertedAt;
+    private UUID convertedBookingPublicId;
+
     @Data
     @Builder
     public static class ItineraryItem {

@@ -71,9 +71,17 @@ public class User extends BaseEntity implements UserDetails {
 
     // ── UserDetails ──────────────────────────────────────────────────────────
 
+    // Effective authorities resolved at load time = legacy role authorities +
+    // fine-grained Permission keys (the user's saved map, or the role default).
+    // @Transient: never persisted. Set by UserDetailsServiceImpl on every load; when
+    // left unset (e.g. login token issuance) getAuthorities() falls back to role-only.
+    @Transient
+    @JsonIgnore
+    private transient Collection<? extends GrantedAuthority> effectiveAuthorities;
+
     @Override
     public Collection<? extends GrantedAuthority> getAuthorities() {
-        return role.authorities();
+        return effectiveAuthorities != null ? effectiveAuthorities : role.authorities();
     }
 
     @Override public String getUsername()              { return email; }

@@ -38,7 +38,7 @@ public class CityController {
     }
 
     @PostMapping("/api/cities")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<CityDto>> createFlat(
             @Valid @RequestBody CreateCityRequest request) {
         CityDto created = cityService.createFlat(request);
@@ -47,7 +47,7 @@ public class CityController {
     }
 
     @PutMapping("/api/cities/{cityId}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<CityDto>> updateFlat(
             @PathVariable Long cityId,
             @Valid @RequestBody UpdateCityRequest request) {
@@ -56,7 +56,7 @@ public class CityController {
     }
 
     @DeleteMapping("/api/cities/{cityId}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<Void> deleteFlat(@PathVariable Long cityId) {
         cityService.delete(cityId);
         return ResponseEntity.noContent().build();
@@ -83,7 +83,7 @@ public class CityController {
     }
 
     @PostMapping("/api/v1/countries/{countryId}/cities")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<CityDto>> createUnderCountry(
             @PathVariable Long countryId,
             @Valid @RequestBody CreateCityRequest request) {
@@ -108,7 +108,7 @@ public class CityController {
     }
 
     @PostMapping("/api/v1/destinations/{destinationId}/cities")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<CityDto>> create(
             @PathVariable Long destinationId,
             @Valid @RequestBody CreateCityRequest request) {
@@ -124,7 +124,7 @@ public class CityController {
     }
 
     @PutMapping("/api/v1/cities/{cityId}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<CityDto>> update(
             @PathVariable Long cityId,
             @Valid @RequestBody UpdateCityRequest request) {
@@ -133,7 +133,7 @@ public class CityController {
     }
 
     @DeleteMapping("/api/v1/cities/{cityId}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<Void> delete(@PathVariable Long cityId) {
         cityService.delete(cityId);
         return ResponseEntity.noContent().build();

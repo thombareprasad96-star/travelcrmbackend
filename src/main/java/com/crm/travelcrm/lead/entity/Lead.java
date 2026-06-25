@@ -13,8 +13,10 @@ import org.hibernate.annotations.BatchSize;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 @Entity
 @Table(
@@ -114,6 +116,16 @@ public class Lead extends BaseTenantEntity {
 
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
+
+    // ── Conversion traceability (Lead → Booking) ──────────────────────────────
+    // Stamped when the lead is converted to a booking. The lead is NEVER deleted on
+    // conversion — it stays for history with its stage flipped to CONVERTED and these
+    // two columns pointing at the resulting booking (by its publicId, never the Long id).
+    @Column(name = "converted_at")
+    private LocalDateTime convertedAt;
+
+    @Column(name = "converted_booking_public_id")
+    private UUID convertedBookingPublicId;
 
     @OneToMany(mappedBy = "lead", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     @BatchSize(size = 50)

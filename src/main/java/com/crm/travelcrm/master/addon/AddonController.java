@@ -44,7 +44,7 @@ public class AddonController {
     }
 
     @PostMapping
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<AddonDto>> create(@Valid @RequestBody CreateAddonRequest request) {
         AddonDto created = addonService.create(request);
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -52,7 +52,7 @@ public class AddonController {
     }
 
     @PutMapping("/{id}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<AddonDto>> update(
             @PathVariable Long id,
             @Valid @RequestBody UpdateAddonRequest request) {
@@ -60,7 +60,7 @@ public class AddonController {
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'CRM_FULL')")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
         addonService.delete(id);
         return ResponseEntity.noContent().build();

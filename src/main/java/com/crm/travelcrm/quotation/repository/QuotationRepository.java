@@ -36,6 +36,10 @@ public interface QuotationRepository
 
     long countByLeadPublicIdAndTenantIdAndDeletedAtIsNull(UUID leadPublicId, Long tenantId);
 
+    // Live quotations for a lead by internal leadId — loaded as entities so the cancel-booking
+    // "permanent delete lead" path can soft-delete them explicitly (never silently orphaned).
+    List<Quotation> findAllByLeadIdAndTenantIdAndDeletedAtIsNull(Long leadId, Long tenantId);
+
     // ── Latest quotation for a lead ─────────────────────────────────────────────
     // "Latest" = newest row by createdAt (versioning is new-row, so the newest row is
     // the newest version), id DESC as a deterministic tiebreaker. Tenant-scoped.

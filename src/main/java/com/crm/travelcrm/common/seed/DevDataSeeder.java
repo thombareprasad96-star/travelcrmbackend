@@ -91,6 +91,7 @@ public class DevDataSeeder implements CommandLineRunner {
     private static final int N = 5;
     private static final String PWD = "Password@123";
 
+
     private final PasswordEncoder passwordEncoder;
     private final SuperAdminRepository superAdminRepository;
     private final TenantRepository tenantRepository;
@@ -378,7 +379,8 @@ public class DevDataSeeder implements CommandLineRunner {
 
     private void seedVendors() {
         if (vendorRepository.count() > 0) return;
-        String[] names = { "Skyline Tours", "Coastal DMC", "Peak Adventures", "Urban Stays", "Globe Transfers" };
+        String[] names = { "Skyline Tours", "Coastal " +
+                "DMC", "Peak Adventures", "Urban Stays", "Globe Transfers" };
         for (int i = 0; i < N; i++) {
             vendorRepository.save(Vendor.builder()
                     .vendorCode("VEN1000" + (i + 1)).vendorName(names[i])
