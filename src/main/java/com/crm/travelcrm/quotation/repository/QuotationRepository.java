@@ -88,6 +88,20 @@ public interface QuotationRepository
                            @Param("deletedAt") LocalDateTime deletedAt,
                            @Param("deletedBy") String deletedBy);
 
+    // ── Cascade restore (driven by LeadRestoredEvent) ─────────────────────────
+    // Symmetric with softDeleteByLeadId: when a trashed lead is restored, bring its quotations
+    // back too. Only touches rows still in Trash (deletedAt IS NOT NULL); tenant id is in the
+    // WHERE clause so it is safe regardless of the Hibernate tenant filter.
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            UPDATE Quotation q
+               SET q.deletedAt = NULL, q.deletedBy = NULL
+             WHERE q.leadId = :leadId
+               AND q.tenantId = :tenantId
+               AND q.deletedAt IS NOT NULL
+            """)
+    int restoreByLeadId(@Param("leadId") Long leadId, @Param("tenantId") Long tenantId);
+
     // ── Versioning ────────────────────────────────────────────────────────────
     // Highest version number across a family (the root plus all of its versions),
     // tenant-scoped, ignoring soft-deleted rows. Returns 0 when none match.

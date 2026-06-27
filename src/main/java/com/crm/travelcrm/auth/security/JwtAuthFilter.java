@@ -29,6 +29,13 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                                     FilterChain chain)
             throws ServletException, IOException {
 
+        // The traveler portal has its own realm + filter chain. Never authenticate a portal request
+        // through the staff context — this guarantees a staff token cannot act on /api/portal/**.
+        if (request.getRequestURI().startsWith("/api/portal/")) {
+            chain.doFilter(request, response);
+            return;
+        }
+
         String authHeader = request.getHeader("Authorization");
 
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {

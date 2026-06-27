@@ -44,6 +44,24 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.CONFLICT, "CONFLICT", ex.getMessage());
     }
 
+    /**
+     * Create collided only with a soft-deleted (trashed) record. Returns a 409 whose
+     * {@code errors} payload carries the trashed record's type + publicId so the UI can
+     * offer Restore instead of a dead "already exists" error. Keeps the standard
+     * {@code ApiResponse} envelope shape the frontend already unwraps.
+     */
+    @ExceptionHandler(RestoreAvailableException.class)
+    public ResponseEntity<com.crm.travelcrm.common.dto.ApiResponse<Void>> handleRestoreAvailable(
+            RestoreAvailableException ex) {
+        log.info("Restore-available match on create: {} {}", ex.getEntityType(), ex.getPublicId());
+        Map<String, Object> restore = new HashMap<>();
+        restore.put("restoreAvailable", true);
+        restore.put("entityType", ex.getEntityType());
+        restore.put("publicId", ex.getPublicId());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(com.crm.travelcrm.common.dto.ApiResponse.failure(ex.getMessage(), restore, 409));
+    }
+
     @ExceptionHandler(ResourceNotFoundException.class)
     public ResponseEntity<ErrorResponse> handleResourceNotFound(ResourceNotFoundException ex) {
         log.warn("Resource not found: {}", ex.getMessage());

@@ -52,6 +52,21 @@ public interface CustomerRepository
     boolean existsByPhoneAndTenantIdAndDeletedAtIsNullAndPublicIdNot(
             String phone, Long tenantId, UUID publicId);
 
+    // ── Trashed-only duplicate lookup (create-time "restore available" detection) ──
+    // Phone is the per-tenant natural key. An active duplicate errors normally; a match that
+    // lives ONLY in Trash returns the record so the API can offer Restore instead. Intercepts
+    // before insert so the DB unique constraint (uk_customer_tenant_phone) never throws raw.
+    Optional<Customer> findFirstByPhoneAndTenantIdAndDeletedAtIsNotNullOrderByDeletedAtDesc(
+            String phone, Long tenantId);
+
+    // ── Traveler-portal login resolution (DELIBERATELY cross-tenant) ──────────────
+    // Used only by TravelerAuthService at OTP request/verify, BEFORE any tenant is known — the
+    // identity (and thus the tenant) is resolved FROM the phone/email. The matched customer's
+    // tenantId then scopes everything after. Never use these on authenticated, tenant-scoped paths.
+    Optional<Customer> findFirstByPhoneAndDeletedAtIsNullOrderByIdAsc(String phone);
+
+    Optional<Customer> findFirstByEmailAndDeletedAtIsNullOrderByIdAsc(String email);
+
     // ── Code generation support ────────────────────────────────────────────────
 
     Optional<Customer> findTopByTenantIdOrderByIdDesc(Long tenantId);

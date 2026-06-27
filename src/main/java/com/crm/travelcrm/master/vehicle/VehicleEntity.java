@@ -5,6 +5,7 @@ import com.crm.travelcrm.master.geography.entity.City;
 import jakarta.persistence.*;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
+import org.hibernate.annotations.Filter;
 
 @Entity
 @Table(
@@ -23,6 +24,8 @@ import lombok.experimental.SuperBuilder;
 // only renames its column to the existing "vehicle_id" so the schema is unchanged.
 // Tenant isolation, public_id, audit columns and soft-delete all come from BaseTenantEntity.
 @AttributeOverride(name = "id", column = @Column(name = "vehicle_id"))
+// Hide trashed rows from every read (see softDeleteFilter on BaseTenantEntity).
+@Filter(name = "softDeleteFilter", condition = "deleted_at is null")
 public class VehicleEntity extends BaseTenantEntity {
 
     @Column(name = "name", nullable = false, length = 150)

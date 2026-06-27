@@ -10,6 +10,7 @@ import com.crm.travelcrm.master.geography.dto.response.CityDto;
 import com.crm.travelcrm.master.geography.entity.City;
 import com.crm.travelcrm.master.geography.entity.Country;
 import com.crm.travelcrm.master.geography.entity.Destination;
+import com.crm.travelcrm.master.MasterReferenceGuard;
 import com.crm.travelcrm.master.geography.mapper.CityMapper;
 import com.crm.travelcrm.master.geography.repository.CityRepository;
 import com.crm.travelcrm.master.geography.repository.CountryRepository;
@@ -34,6 +35,7 @@ public class CityServiceImpl implements CityService {
     private final CountryRepository countryRepository;
     private final DestinationRepository destinationRepository;
     private final CityMapper cityMapper;
+    private final MasterReferenceGuard masterReferenceGuard;
 
     @Override
     @Transactional(readOnly = true)
@@ -184,8 +186,12 @@ public class CityServiceImpl implements CityService {
     @Transactional
     public void delete(Long cityId) {
         City city = findOrThrow(cityId);
-        cityRepository.delete(city); // cascades to hotels/vehicles/airlines/cruises once those exist
-        log.info("City deleted | id: {} | tenantId: {}", cityId, city.getTenantId());
+        // Block if any active hotel/sightseeing/transport/add-on still uses this city; otherwise
+        // move it to Trash (recoverable) instead of a hard delete.
+        masterReferenceGuard.assertCityDeletable(cityId, city.getTenantId());
+        city.softDelete(GeographySupport.currentUsername());
+        cityRepository.save(city);
+        log.info("City moved to Trash | id: {} | tenantId: {}", cityId, city.getTenantId());
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

@@ -80,8 +80,11 @@ public class AirlineServiceImpl implements AirlineService {
     @Transactional
     public void delete(Long id) {
         Airline airline = findOrThrow(id);
-        airlineRepository.delete(airline);
-        log.info("Airline deleted | id: {}", id);
+        // Leaf master — bookings/quotations reference it only by name snapshot (no FK), so it
+        // moves to Trash freely and existing records keep resolving. Recoverable until purge.
+        airline.softDelete(GeographySupport.currentUsername());
+        airlineRepository.save(airline);
+        log.info("Airline moved to Trash | id: {}", id);
     }
 
     private Airline findOrThrow(Long id) {

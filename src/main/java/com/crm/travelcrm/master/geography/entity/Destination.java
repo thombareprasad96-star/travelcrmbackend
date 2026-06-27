@@ -5,6 +5,7 @@ import jakarta.persistence.*;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.BatchSize;
+import org.hibernate.annotations.Filter;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -33,6 +34,8 @@ import java.util.List;
 // only renames its column to the existing "destination_id" so the schema is unchanged.
 // (Removed the duplicate local @Id field that shadowed the inherited identifier.)
 @AttributeOverride(name = "id", column = @Column(name = "destination_id"))
+// Hide trashed rows from every read (see softDeleteFilter on BaseTenantEntity).
+@Filter(name = "softDeleteFilter", condition = "deleted_at is null")
 public class Destination extends BaseTenantEntity {
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)

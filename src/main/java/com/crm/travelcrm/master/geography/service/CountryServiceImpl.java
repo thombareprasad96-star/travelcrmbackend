@@ -9,6 +9,7 @@ import com.crm.travelcrm.master.geography.dto.request.UpdateCountryRequest;
 import com.crm.travelcrm.master.geography.dto.response.CountryDto;
 import com.crm.travelcrm.master.geography.entity.Country;
 import com.crm.travelcrm.master.geography.mapper.CountryMapper;
+import com.crm.travelcrm.master.MasterReferenceGuard;
 import com.crm.travelcrm.master.geography.repository.CountryRepository;
 import com.crm.travelcrm.master.geography.support.GeographySupport;
 import lombok.RequiredArgsConstructor;
@@ -27,6 +28,7 @@ public class CountryServiceImpl implements CountryService {
 
     private final CountryRepository countryRepository;
     private final CountryMapper countryMapper;
+    private final MasterReferenceGuard masterReferenceGuard;
 
     @Override
     @Transactional(readOnly = true)
@@ -101,9 +103,12 @@ public class CountryServiceImpl implements CountryService {
     @Transactional
     public void delete(Long countryId) {
         Country country = findOrThrow(countryId);
-        // Hard delete — JPA cascades to destinations → cities (and their children).
-        countryRepository.delete(country);
-        log.info("Country deleted | id: {} | tenantId: {}", countryId, country.getTenantId());
+        // Block if any active destination/city still sits under it; otherwise move to Trash
+        // (recoverable). No more cascading hard delete — only the 30-day purge removes it.
+        masterReferenceGuard.assertCountryDeletable(countryId, country.getTenantId());
+        country.softDelete(GeographySupport.currentUsername());
+        countryRepository.save(country);
+        log.info("Country moved to Trash | id: {} | tenantId: {}", countryId, country.getTenantId());
     }
 
     private Country findOrThrow(Long countryId) {

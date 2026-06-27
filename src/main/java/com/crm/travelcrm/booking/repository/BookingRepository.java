@@ -32,6 +32,16 @@ public interface BookingRepository extends JpaRepository<Booking, Long>,
 
     boolean existsByBookingCode(String bookingCode);
 
+    // Customer-removal guard on cancel: count this customer's OTHER active (non-trashed) bookings,
+    // excluding the one being cancelled. Zero ⇒ the derived customer can be moved to Trash too;
+    // >0 ⇒ it's a repeat customer, so it is kept.
+    long countByCustomerIdAndTenantIdAndDeletedAtIsNullAndIdNot(
+            Long customerId, Long tenantId, Long id);
+
+    // Referential-integrity guard for master data: is any active (non-trashed) booking still
+    // pointing at this destination (Booking.destinationId is a logical FK to destination master)?
+    boolean existsByDestinationIdAndTenantIdAndDeletedAtIsNull(Long destinationId, Long tenantId);
+
     // ── Lead → Booking conversion guards (tenant-scoped) ──────────────────────
     // Duplicate guard: a lead must not be silently converted into a second booking.
     boolean existsByLeadIdAndTenantIdAndDeletedAtIsNull(Long leadId, Long tenantId);
@@ -72,6 +82,9 @@ public interface BookingRepository extends JpaRepository<Booking, Long>,
 
     /** One ordered history row per active booking for a customer. */
     List<Booking> findAllByCustomerIdAndDeletedAtIsNullOrderByBookingDateDesc(Long customerId);
+
+    // ── Traveler portal: object-level ownership (a traveler sees ONLY their own customer) ──
+    Optional<Booking> findByPublicIdAndCustomerIdAndDeletedAtIsNull(UUID publicId, Long customerId);
 
     /**
      * Grouped booking metrics for a batch of customers, scoped to the tenant.

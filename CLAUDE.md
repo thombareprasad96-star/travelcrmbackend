@@ -86,7 +86,9 @@ master/
   dropdown/       MasterDropdownController — unified /api/masters/dropdown/** endpoints
 tenent/           Tenant lifecycle management (note: package is spelled "tenent")
 notification/     Plug-and-play notification module (see full section below)
-otp/              OTP strategy pattern (Email/SMS/WhatsApp) — implementation commented out
+otp/              Shared plug-and-play OTP module — generate/store/verify/deliver (see OTP module)
+portal/           Customer-facing Traveler Portal — SEPARATE auth realm (see Traveler Portal)
+trash/            Universal soft-delete → Trash → 30-day auto-purge (see Trash convention notes)
 common/           BaseEntity, BaseTenantEntity, TenantContext, ApiResponse wrappers, GlobalExceptionHandler
 ```
 
@@ -107,9 +109,36 @@ When MapStruct tries to auto-map a `String` field to an `@Entity` field, add `@M
 
 `Booking` is annotated `@Audited`. Envers creates `bookings_aud` and `revinfo` audit tables automatically. Use `@NotAudited` on fields that should be excluded (e.g., `@ElementCollection` services list).
 
-### OTP module
+### OTP module (`otp/`)
 
-`OtpServiceImpl` is fully implemented but commented out. It uses a Strategy pattern (`EmailOtpStrategy`, `SmsOtpStrategy`, `WhatsAppOtpStrategy`) routed via `OtpStrategyFactory`. OTP keys are namespaced in Redis via `OtpRedisKeyBuilder`. Twilio integration for SMS/WhatsApp is wired but credentials in `application.properties` are placeholders.
+Shared, **plug-and-play** OTP module (the old commented-out Redis/Twilio strategy code was removed). One facade — `OtpService`:
+
+```java
+otpService.request(OtpPurpose.PORTAL_LOGIN, identifier, OtpChannel.AUTO);   // generate+store(hashed)+deliver
+OtpResult r = otpService.verify(OtpPurpose.PORTAL_LOGIN, identifier, code); // SUCCESS/INVALID/EXPIRED/TOO_MANY_ATTEMPTS/NOT_FOUND
+```
+
+SOLID collaborators, each independently swappable:
+- `OtpGenerator` ← `NumericOtpGenerator` (default).
+- `OtpStore` (SPI) ← `InMemoryOtpStore` (default, single-node). For multi-node add a Redis/DB-backed `OtpStore` bean marked `@Primary`.
+- `OtpDeliverySender` strategy (`Sms`/`Email`/`WhatsApp`, **logging stubs**) routed by `OtpSenderResolver` (a factory; `AUTO` ⇒ EMAIL if the destination has `@`, else SMS). Wire a real provider by dropping in a bean — nothing else changes.
+
+Codes are **hashed** in the store (BCrypt), attempt-capped, cooldown-guarded and one-time-use. Config: `app.otp.*` (`length`, `ttl-seconds`, `max-attempts`, `resend-cooldown-seconds`). Reuse for any new flow by adding an `OtpPurpose` constant.
+
+### Traveler Portal (`portal/`) — customer-facing realm
+
+A self-service portal for the **end customer** (a traveler), a **strictly separate auth realm from staff** — never put a traveler into the staff `User`/`Role` world.
+
+- **Namespace** `/api/portal/**` with its own `SecurityFilterChain` (`PortalSecurityConfig`, `@Order(1)`); the staff chain is `@Order(2)` and its `JwtAuthFilter` early-skips `/api/portal/**`.
+- **Distinct JWT** — `PortalJwtUtil` signs with `portal.jwt.secret` (never `jwt.secret`) and stamps `typ=TRAVELER`/`aud=portal`. A staff token fails signature validation on the portal chain and vice-versa, so tokens can never cross realms.
+- **Identity** — `TravelerAccount` (extends `BaseTenantEntity`) links to a `Customer` by internal `customerId`; provisioned lazily on first OTP request from an existing customer (no self-registration). Login is **OTP to the registered phone/email** via the shared `otp/` module — no passwords.
+- **Principal** — `TravelerPrincipal` (a `Principal`, NOT a `User`) is set in the context; read it via `CurrentTraveler.require()`. Every portal query scopes by `principal.customerId()` — **object-level ownership; a foreign `publicId` returns 404, never data**.
+- **Traveler-safe DTOs only** — hand-written mappers whitelist fields; never `vendorCost`, `netProfit`, internal notes, or another customer's data.
+- **PII documents** — `TravelerDocument` bytes are stored in Postgres (`bytea`), **never a public CDN URL**; retrieval is only through the authenticated, ownership-checked `GET /api/portal/documents/{publicId}/file`. List + the reminder job use projections so blobs never load.
+- **Payment** — `PortalPaymentInitiation` SPI with a `@ConditionalOnMissingBean` stub (returns `UNAVAILABLE`); a real gateway bean takes over with no portal changes.
+- **Document-expiry reminders** — `DocumentExpiryReminderScheduler` runs per-tenant (set `TenantContext`, clear in `finally`), idempotent via a per-document threshold marker (`app`: `portal.document.expiry-reminder-days=60,30,7`). Delivery is `DocumentExpiryReminderSender`; the `@Primary` impl raises a `NotifyEvent` to tenant admins/managers (logging stub is the fallback).
+
+Endpoints: `POST /api/portal/auth/request-otp|verify-otp`; `GET /api/portal/bookings[/{id}[/payment]]`; `POST|GET|DELETE /api/portal/documents` + `GET /{id}/file`; `POST /api/portal/payments/bookings/{id}/intent`.
 
 ---
 

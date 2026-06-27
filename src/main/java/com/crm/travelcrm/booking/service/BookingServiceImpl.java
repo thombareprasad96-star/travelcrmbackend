@@ -22,6 +22,7 @@ import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.dto.PagedApiResponse;
 import com.crm.travelcrm.common.dto.PaginationMeta;
+import com.crm.travelcrm.common.event.LeadSoftDeletedEvent;
 import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.customer.entity.Customer;
@@ -328,11 +329,15 @@ public class BookingServiceImpl implements BookingService {
             throw new BusinessException("This booking is already cancelled.", HttpStatus.CONFLICT);
         }
 
+        // Derived-customer cleanup runs first — while the customer link is still intact and
+        // before the lead cascade (below) may clear the persistence context.
+        handleDerivedCustomerOnCancel(booking, tenantId);
+
         if (request.getAction() == CancelAction.PERMANENT_DELETE_LEAD) {
             // High-privilege gate on top of the endpoint's BOOKING_CANCEL. Friendly 403 if missing.
             requireAuthority("LEAD_PERMANENT_DELETE",
-                    "You don't have permission to permanently delete a lead. Please contact your administrator.");
-            permanentlyDeleteLead(booking, tenantId);
+                    "You don't have permission to remove this lead. Please contact your administrator.");
+            trashLeadOnCancel(booking, tenantId);
         } else {
             moveBackToLead(booking, tenantId);
         }
@@ -346,7 +351,7 @@ public class BookingServiceImpl implements BookingService {
                 "Booking cancelled: " + saved.getBookingCode(),
                 "Booking " + saved.getBookingCode() + " was cancelled ("
                         + (request.getAction() == CancelAction.PERMANENT_DELETE_LEAD
-                            ? "lead permanently deleted" : "moved back to lead") + ")");
+                            ? "lead moved to Trash" : "moved back to lead") + ")");
         log.info("Booking {} cancelled via {} (tenant {})",
                 saved.getBookingCode(), request.getAction(), tenantId);
         return bookingMapper.toResponse(saved);
@@ -371,29 +376,57 @@ public class BookingServiceImpl implements BookingService {
     }
 
     /**
-     * PERMANENT_DELETE_LEAD: hard-delete the lead and explicitly soft-delete its quotations
-     * (never silently orphaned), then null the booking's lead link so the retained cancelled
-     * booking never dangles. Itinerary (the lead's own children) is removed by JPA cascade.
+     * PERMANENT_DELETE_LEAD: soft-delete (Trash) the associated lead instead of the old hard
+     * delete — fully recoverable. The lead's quotations cascade-trash via {@link LeadSoftDeletedEvent}
+     * (the same path as a normal lead delete), so nothing is silently orphaned and the logic lives in
+     * one place. The booking keeps its lead link, so restoring the lead from Trash reconnects them;
+     * the retained cancelled booking stays meaningful via its own customer/destination snapshots.
+     *
+     * <p>"Permanent" is now a label, not a hard delete: only Trash delete-now and the 30-day
+     * auto-purge ever remove a lead physically.</p>
      */
-    private void permanentlyDeleteLead(Booking booking, Long tenantId) {
+    private void trashLeadOnCancel(Booking booking, Long tenantId) {
         Long leadId = booking.getLeadId();
-        // Detach the retained booking from the lead first — it keeps its own snapshots + financials.
-        booking.setLeadId(null);
-        booking.setSourceLeadPublicId(null);
-        if (leadId == null) return;
+        if (leadId == null) {
+            log.info("Cancel/remove-lead: booking {} has no associated lead — cancelling only",
+                    booking.getBookingCode());
+            return;
+        }
+        leadRepository.findByIdAndTenantIdAndDeletedAtIsNull(leadId, tenantId).ifPresent(lead -> {
+            lead.softDelete(currentUserEmail());
+            leadRepository.save(lead);
+            // Cascade-trash the lead's quotations through the shared event (no manual loop here).
+            eventPublisher.publishEvent(new LeadSoftDeletedEvent(lead.getId(), tenantId));
+            log.warn("Lead {} moved to Trash while cancelling booking {} (recoverable)",
+                    lead.getPublicId(), booking.getBookingCode());
+        });
+    }
 
-        String by = currentUserEmail();
-        List<Quotation> quotations =
-                quotationRepository.findAllByLeadIdAndTenantIdAndDeletedAtIsNull(leadId, tenantId);
-        quotations.forEach(q -> q.softDelete(by));
-        quotationRepository.saveAll(quotations);
+    /**
+     * Customer-removal guard for cancel. The customer derived from this booking is moved to Trash
+     * (soft-deleted) ONLY when it has no other active (non-trashed) booking; otherwise it is a
+     * repeat customer and is preserved — the cancelled booking simply stays in its history (the
+     * {@code customer_id} column is NOT NULL, so the link is kept rather than nulled). Always
+     * recoverable, never a hard delete. A COMPLETED booking can't reach here (it can't be
+     * cancelled), so any customer with completed-journey history is inherently protected.
+     */
+    private void handleDerivedCustomerOnCancel(Booking booking, Long tenantId) {
+        Long customerId = booking.getCustomerId();
+        if (customerId == null) return;
 
-        leadRepository.findByIdAndTenantIdAndDeletedAtIsNull(leadId, tenantId)
-                .ifPresent(lead -> {
-                    leadRepository.delete(lead);   // cascades itinerary (orphanRemoval)
-                    log.warn("Lead {} permanently deleted while cancelling booking {} ({} quotation(s) soft-deleted)",
-                            lead.getPublicId(), booking.getBookingCode(), quotations.size());
-                });
+        long otherActive = bookingRepository
+                .countByCustomerIdAndTenantIdAndDeletedAtIsNullAndIdNot(customerId, tenantId, booking.getId());
+        if (otherActive > 0) {
+            log.info("Cancel: customer {} retained ({} other active booking(s)); booking {} kept linked",
+                    customerId, otherActive, booking.getBookingCode());
+            return;
+        }
+        customerRepository.findByIdAndTenantIdAndDeletedAtIsNull(customerId, tenantId).ifPresent(customer -> {
+            customer.softDelete(currentUserEmail());
+            customerRepository.save(customer);
+            log.info("Cancel: derived customer {} moved to Trash (no other active bookings)",
+                    customer.getCustomerCode());
+        });
     }
 
     /** Programmatic authority check for conditional gating within a single endpoint. */

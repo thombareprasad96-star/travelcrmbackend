@@ -10,6 +10,7 @@ import com.crm.travelcrm.master.geography.dto.response.DestinationDto;
 import com.crm.travelcrm.master.geography.dto.response.DestinationListResponseDTO;
 import com.crm.travelcrm.master.geography.entity.Country;
 import com.crm.travelcrm.master.geography.entity.Destination;
+import com.crm.travelcrm.master.MasterReferenceGuard;
 import com.crm.travelcrm.master.geography.mapper.DestinationMapper;
 import com.crm.travelcrm.master.geography.repository.CityRepository;
 import com.crm.travelcrm.master.geography.repository.CountryRepository;
@@ -34,6 +35,7 @@ public class DestinationServiceImpl implements DestinationService {
     private final CountryRepository     countryRepository;
     private final CityRepository        cityRepository;      // to detach cities on destination delete
     private final DestinationMapper     destinationMapper;   // injected Spring bean — NOT static
+    private final MasterReferenceGuard  masterReferenceGuard;
 
     // ── List ─────────────────────────────────────────────────────────────────
 
@@ -165,12 +167,16 @@ public class DestinationServiceImpl implements DestinationService {
     @Transactional
     public void delete(Long destinationId) {
         Destination destination = findOrThrow(destinationId);
-        // Cities are owned by the country, not the destination — detach (set
-        // destination_id = null) rather than delete them, then remove the destination.
-        int detached = cityRepository.detachFromDestination(destination.getTenantId(), destinationId);
-        destinationRepository.delete(destination);
-        log.info("Destination deleted | id={} | tenantId={} | citiesDetached={}",
-                destinationId, destination.getTenantId(), detached);
+        Long tenantId = destination.getTenantId();
+        // Block if an active booking still references this destination; cities are an optional
+        // link (destination_id nullable), so they are detached rather than blocked. Then move the
+        // destination to Trash (recoverable) instead of the old hard delete.
+        masterReferenceGuard.assertDestinationDeletable(destinationId, tenantId);
+        int detached = cityRepository.detachFromDestination(tenantId, destinationId);
+        destination.softDelete(GeographySupport.currentUsername());
+        destinationRepository.save(destination);
+        log.info("Destination moved to Trash | id={} | tenantId={} | citiesDetached={}",
+                destinationId, tenantId, detached);
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────

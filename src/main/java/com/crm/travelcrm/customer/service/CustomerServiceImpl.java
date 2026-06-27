@@ -6,6 +6,7 @@ import com.crm.travelcrm.booking.repository.BookingRepository;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.dto.PagedApiResponse;
 import com.crm.travelcrm.common.dto.PaginationMeta;
+import com.crm.travelcrm.common.exception.RestoreAvailableException;
 import com.crm.travelcrm.customer.dto.request.CreateCustomerRequest;
 import com.crm.travelcrm.customer.dto.request.StatusUpdateRequest;
 import com.crm.travelcrm.customer.dto.request.TierUpdateRequest;
@@ -97,6 +98,16 @@ public class CustomerServiceImpl implements CustomerService {
             throw new DuplicateCustomerException(
                     "A customer already exists with phone: " + request.getPhone());
         }
+        // Active duplicate errored above; a phone that lives ONLY in Trash becomes a
+        // structured "restore available" 409 so the UI can offer Restore instead.
+        customerRepository
+                .findFirstByPhoneAndTenantIdAndDeletedAtIsNotNullOrderByDeletedAtDesc(phone, tenantId)
+                .ifPresent(trashed -> {
+                    throw new RestoreAvailableException(
+                            "A customer with phone " + request.getPhone()
+                                    + " is in Trash. Restore it instead of creating a duplicate.",
+                            "CUSTOMER", trashed.getPublicId());
+                });
 
         Customer customer = customerMapper.toEntity(request);
         customer.setPhone(phone);

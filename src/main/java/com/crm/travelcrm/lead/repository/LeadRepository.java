@@ -76,6 +76,17 @@ public interface LeadRepository extends JpaRepository<Lead, Long> {
     boolean existsByPhoneAndTenantIdAndDeletedAtIsNullAndPublicIdNot(
             String phone, Long tenantId, UUID publicId);
 
+    // ── Trashed-only duplicate lookup (create-time "restore available" detection) ──
+    // An ACTIVE duplicate is a hard "already exists" error; a match that lives ONLY in Trash
+    // returns the trashed record so the API can offer Restore instead. Intercepts before insert,
+    // so the DB unique constraint (uk_lead_tenant_email / uk_lead_tenant_phone) never throws a
+    // raw error. Newest-first in case the same email/phone was trashed more than once.
+    Optional<Lead> findFirstByEmailAndTenantIdAndDeletedAtIsNotNullOrderByDeletedAtDesc(
+            String email, Long tenantId);
+
+    Optional<Lead> findFirstByPhoneAndTenantIdAndDeletedAtIsNotNullOrderByDeletedAtDesc(
+            String phone, Long tenantId);
+
     // ── Statistics ────────────────────────────────────────────────────────────
     // All aggregation runs in the database. Never load leads into memory to
     // count them, and never traverse a User→leads collection.

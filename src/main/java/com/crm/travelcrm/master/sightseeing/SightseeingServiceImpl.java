@@ -107,8 +107,10 @@ public class SightseeingServiceImpl implements SightseeingService {
     @Transactional
     public void delete(Long id) {
         Sightseeing entity = findOrThrow(id);
-        sightseeingRepository.delete(entity);
-        log.info("Sightseeing deleted | id: {}", id);
+        // Leaf master — referenced by quotations only via name snapshot (no FK). Recoverable.
+        entity.softDelete(GeographySupport.currentUsername());
+        sightseeingRepository.save(entity);
+        log.info("Sightseeing moved to Trash | id: {}", id);
     }
 
     @Override

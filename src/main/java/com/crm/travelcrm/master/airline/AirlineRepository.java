@@ -26,4 +26,7 @@ public interface AirlineRepository extends JpaRepository<Airline, Long> {
             @Param("tenantId") Long tenantId,
             @Param("cityId") Long cityId,
             Pageable pageable);
+
+    // Referential guard: any (non-trashed, via softDeleteFilter) airline still in this city?
+    boolean existsByTenantIdAndCity_Id(Long tenantId, Long cityId);
 }

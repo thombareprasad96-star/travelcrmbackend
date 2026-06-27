@@ -73,6 +73,9 @@ public interface DestinationRepository extends JpaRepository<Destination, Long> 
             @Param("id") Long id,
             @Param("tenantId") Long tenantId);
 
+    // ── Referential guard: any (non-trashed, via softDeleteFilter) destination under a country ──
+    boolean existsByTenantIdAndCountryId(Long tenantId, Long countryId);
+
     // ── Duplicate guard (name unique per tenant) ──────────────────────────────
 
     boolean existsByTenantIdAndName(Long tenantId, String name);

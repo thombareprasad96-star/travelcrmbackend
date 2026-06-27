@@ -10,9 +10,11 @@ public enum CancelAction {
     MOVE_TO_LEAD,
 
     /**
-     * Cancel the booking and HARD-delete the associated lead (irreversible). The booking is
-     * retained with its customer/destination snapshot and its lead link nulled, so it never
-     * dangles. High-privilege only ({@code LEAD_PERMANENT_DELETE}).
+     * Cancel the booking and move the associated lead to Trash (recoverable soft-delete) — its
+     * quotations cascade-trash with it. The booking is retained with its snapshots and keeps its
+     * lead link, so restoring the lead from Trash reconnects them. High-privilege only
+     * ({@code LEAD_PERMANENT_DELETE}). Despite the name, this is no longer a hard delete: only
+     * Trash delete-now and the 30-day auto-purge ever remove the lead physically.
      */
     PERMANENT_DELETE_LEAD
 }

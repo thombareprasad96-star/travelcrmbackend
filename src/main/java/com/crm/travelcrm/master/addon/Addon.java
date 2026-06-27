@@ -5,6 +5,7 @@ import com.crm.travelcrm.master.geography.entity.City;
 import jakarta.persistence.*;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
+import org.hibernate.annotations.Filter;
 
 import java.math.BigDecimal;
 
@@ -21,6 +22,8 @@ import java.math.BigDecimal;
 @NoArgsConstructor
 @AllArgsConstructor
 @SuperBuilder
+// Hide trashed rows from every read (see softDeleteFilter on BaseTenantEntity).
+@Filter(name = "softDeleteFilter", condition = "deleted_at is null")
 public class Addon extends BaseTenantEntity {
 
     @ManyToOne(fetch = FetchType.LAZY)

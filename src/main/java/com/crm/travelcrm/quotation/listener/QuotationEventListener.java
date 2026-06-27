@@ -1,5 +1,6 @@
 package com.crm.travelcrm.quotation.listener;
 
+import com.crm.travelcrm.common.event.LeadRestoredEvent;
 import com.crm.travelcrm.common.event.LeadSoftDeletedEvent;
 import com.crm.travelcrm.quotation.repository.QuotationRepository;
 import lombok.RequiredArgsConstructor;
@@ -38,6 +39,20 @@ public class QuotationEventListener {
                 currentUserEmail());
 
         log.info("Cascade soft-deleted {} quotation(s) for lead id {} | tenantId: {}",
+                affected, event.leadId(), event.tenantId());
+    }
+
+    /**
+     * Cascades a lead restore onto its quotations — symmetric with {@link #onLeadSoftDeleted}.
+     * Restoring a lead from Trash brings every quotation that was trashed with it back into the
+     * lead's normal views. Predictable and recoverable: a lead and its quotations move through
+     * Trash together; anything mistakenly co-restored is still independently re-trashable.
+     */
+    @EventListener
+    @Transactional
+    public void onLeadRestored(LeadRestoredEvent event) {
+        int affected = quotationRepository.restoreByLeadId(event.leadId(), event.tenantId());
+        log.info("Cascade restored {} quotation(s) for lead id {} | tenantId: {}",
                 affected, event.leadId(), event.tenantId());
     }
 

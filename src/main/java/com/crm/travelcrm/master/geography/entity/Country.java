@@ -5,6 +5,7 @@ import jakarta.persistence.*;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.BatchSize;
+import org.hibernate.annotations.Filter;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -41,6 +42,8 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 @SuperBuilder
+// Hide trashed rows from every read (see softDeleteFilter on BaseTenantEntity).
+@Filter(name = "softDeleteFilter", condition = "deleted_at is null")
 public class Country extends BaseTenantEntity {
 
     @Column(name = "name", nullable = false, length = 120)
@@ -60,16 +63,18 @@ public class Country extends BaseTenantEntity {
     @Column(name = "timezone", length = 64)
     private String timezone;
 
-    @OneToMany(mappedBy = "country", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    // Read-only back-reference (no cascade / orphanRemoval). Under the soft-delete model a country
+    // is never hard-cascaded into its children: MasterReferenceGuard blocks trashing a country that
+    // still has active destinations/cities, and the Trash purge removes children-before-parents on
+    // their own retention clock. A destructive cascade here would let the country purge silently
+    // hard-delete a child that had been restored under a still-trashed country.
+    @OneToMany(mappedBy = "country", fetch = FetchType.LAZY)
     @BatchSize(size = 50)
     @Builder.Default
     private List<Destination> destinations = new ArrayList<>();
 
-    /**
-     * Cities that belong directly to this country (regardless of whether they are
-     * also linked to a destination). Deleting a country hard-deletes its cities.
-     */
-    @OneToMany(mappedBy = "country", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    /** Cities that belong directly to this country. Read-only back-reference (see above). */
+    @OneToMany(mappedBy = "country", fetch = FetchType.LAZY)
     @BatchSize(size = 50)
     @Builder.Default
     private List<City> cities = new ArrayList<>();

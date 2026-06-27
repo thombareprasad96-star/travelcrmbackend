@@ -20,13 +20,21 @@ public class TenantFilterAspect {
     private EntityManager entityManager;
 
     @Before("@annotation(org.springframework.transaction.annotation.Transactional)")
-    public void enableTenantFilter() {
+    public void enableFilters() {
+        Session session = entityManager.unwrap(Session.class);
+
+        // Soft-delete filter: hide trashed rows for entities that opt in (master data). Enabled
+        // unconditionally (it has no parameters and doesn't depend on tenant) so it covers
+        // SuperAdmin/global-master reads too. The Trash module disables it to list/restore/purge
+        // trashed rows. A no-op for entities that don't apply @Filter("softDeleteFilter").
+        if (session.getEnabledFilter("softDeleteFilter") == null) {
+            session.enableFilter("softDeleteFilter");
+        }
+
         Long tenantId = TenantContext.getTenantId();
         if (tenantId == null) {
             return;
         }
-
-        Session session = entityManager.unwrap(Session.class);
         if (session.getEnabledFilter("tenantFilter") == null) {
             session.enableFilter("tenantFilter").setParameter("tenantId", tenantId);
         }

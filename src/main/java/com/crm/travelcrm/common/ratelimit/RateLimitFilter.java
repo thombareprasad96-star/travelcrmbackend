@@ -53,7 +53,9 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !request.getRequestURI().startsWith("/api/auth/");
+        String uri = request.getRequestURI();
+        // Rate-limit the staff auth endpoints AND the traveler-portal OTP endpoints.
+        return !(uri.startsWith("/api/auth/") || uri.startsWith("/api/portal/auth/"));
     }
 
 

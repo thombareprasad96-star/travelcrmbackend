@@ -14,6 +14,7 @@ import com.crm.travelcrm.lead.entity.LeadItinerary;
 import com.crm.travelcrm.lead.enums.LeadStage;
 import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
+import com.crm.travelcrm.common.exception.RestoreAvailableException;
 import com.crm.travelcrm.lead.exception.DuplicateLeadException;
 import com.crm.travelcrm.lead.mapper.LeadMapper;
 import com.crm.travelcrm.lead.repository.LeadRepository;
@@ -64,6 +65,9 @@ public class LeadServiceImpl implements LeadService {
         log.info("Creating lead for email: {} | tenantId: {}", request.getEmail(), tenantId);
 
         validateNoDuplicates(request, tenantId, null);
+        // Active duplicates errored above; a match that lives ONLY in Trash becomes a
+        // structured "restore available" response instead of a dead "already exists".
+        checkTrashedForRestore(request, tenantId);
 
         Lead lead = leadMapper.toEntity(request);
         // tenantId is set here so it's available immediately in this transaction;
@@ -484,6 +488,37 @@ public class LeadServiceImpl implements LeadService {
 
             if (phoneTaken) throw new DuplicateLeadException(
                     "Lead already exists with phone: " + request.getPhone());
+        }
+    }
+
+    /**
+     * Create-time restore detection. The submitted email/phone collides with no ACTIVE lead
+     * (already verified by {@link #validateNoDuplicates}) but matches a soft-deleted one — so
+     * instead of erroring, surface the trashed record's {@code publicId} as a "restore available"
+     * 409. Runs only on create. Email is checked first (mirrors the duplicate-check order).
+     */
+    private void checkTrashedForRestore(CreateLeadRequestDto request, Long tenantId) {
+        if (request.getEmail() != null) {
+            leadRepository
+                    .findFirstByEmailAndTenantIdAndDeletedAtIsNotNullOrderByDeletedAtDesc(
+                            request.getEmail().toLowerCase(), tenantId)
+                    .ifPresent(trashed -> {
+                        throw new RestoreAvailableException(
+                                "A lead with email " + request.getEmail()
+                                        + " is in Trash. Restore it instead of creating a duplicate.",
+                                "LEAD", trashed.getPublicId());
+                    });
+        }
+        if (request.getPhone() != null) {
+            leadRepository
+                    .findFirstByPhoneAndTenantIdAndDeletedAtIsNotNullOrderByDeletedAtDesc(
+                            request.getPhone(), tenantId)
+                    .ifPresent(trashed -> {
+                        throw new RestoreAvailableException(
+                                "A lead with phone " + request.getPhone()
+                                        + " is in Trash. Restore it instead of creating a duplicate.",
+                                "LEAD", trashed.getPublicId());
+                    });
         }
     }
 

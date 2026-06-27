@@ -30,9 +30,11 @@ public enum Permission {
     LEAD_CREATE    ("Leads",          "Create lead"),
     LEAD_UPDATE    ("Leads",          "Edit lead"),
     LEAD_DELETE    ("Leads",          "Delete lead"),
-    // High-privilege, irreversible: hard-deletes a lead (used by the cancel-booking flow).
-    // Not in any role default — only TENANT_ADMIN holds it (via the resolver bypass) until granted.
-    LEAD_PERMANENT_DELETE ("Leads",   "Permanently delete lead (irreversible)"),
+    // High-privilege gate for the "remove lead" option when cancelling a booking. Despite the
+    // name it now moves the lead to Trash (recoverable), not a hard delete — only Trash delete-now
+    // and the 30-day auto-purge remove it physically. Not in any role default; only TENANT_ADMIN
+    // holds it (via the resolver bypass) until granted.
+    LEAD_PERMANENT_DELETE ("Leads",   "Remove lead when cancelling a booking (moves to Trash)"),
 
     // ── Bookings ────────────────────────────────────────────────────────────
     BOOKING_READ   ("Bookings",       "View bookings"),
@@ -77,6 +79,13 @@ public enum Permission {
 
     // ── Reports ─────────────────────────────────────────────────────────────
     REPORT_VIEW ("Reports",           "View reports"),
+
+    // ── Trash / Recycle Bin ──────────────────────────────────────────────────
+    // View trashed records, restore them, and (most-restricted) permanently delete now.
+    TRASH_VIEW    ("Trash",           "View trashed records"),
+    TRASH_RESTORE ("Trash",           "Restore trashed records"),
+    // Irreversible hard delete before the auto-purge window — TENANT_ADMIN only by default.
+    TRASH_DELETE  ("Trash",           "Permanently delete a trashed record (irreversible)"),
 
     // ── Settings ────────────────────────────────────────────────────────────
     SETTINGS_MANAGE ("Settings",      "Manage company settings");
@@ -126,7 +135,8 @@ public enum Permission {
                     QUOTATION_READ, QUOTATION_CREATE, QUOTATION_UPDATE, QUOTATION_DELETE,
                     VENDOR_READ, VENDOR_CREATE, VENDOR_UPDATE,
                     REMINDER_READ, REMINDER_CREATE, REMINDER_UPDATE, REMINDER_DELETE,
-                    MASTER_READ, MASTER_MANAGE, REPORT_VIEW, USER_READ);
+                    MASTER_READ, MASTER_MANAGE, REPORT_VIEW, USER_READ,
+                    TRASH_VIEW, TRASH_RESTORE);
 
             case TRAVEL_AGENT -> EnumSet.of(
                     LEAD_READ, LEAD_CREATE, LEAD_UPDATE,
@@ -135,7 +145,8 @@ public enum Permission {
                     QUOTATION_READ, QUOTATION_CREATE, QUOTATION_UPDATE,
                     VENDOR_READ,
                     REMINDER_READ, REMINDER_CREATE, REMINDER_UPDATE,
-                    MASTER_READ, REPORT_VIEW);
+                    MASTER_READ, REPORT_VIEW,
+                    TRASH_VIEW);
 
             // STAFF is deny-by-default: a new STAFF user holds NO permissions until a
             // TENANT_ADMIN explicitly grants them. The empty set is the role fallback used

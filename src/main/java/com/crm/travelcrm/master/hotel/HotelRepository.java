@@ -39,6 +39,9 @@ public interface HotelRepository extends JpaRepository<Hotel, Long> {
 
     boolean existsByTenantIdAndNameAndCityIdAndIdNot(Long tenantId, String name, Long cityId, Long id);
 
+    // Referential guard: any (non-trashed, via softDeleteFilter) hotel still in this city?
+    boolean existsByTenantIdAndCity_Id(Long tenantId, Long cityId);
+
     // ── Dropdown ──────────────────────────────────────────────────────────────
 
     @Query("SELECT h FROM Hotel h WHERE h.tenantId = :tenantId ORDER BY h.name ASC")

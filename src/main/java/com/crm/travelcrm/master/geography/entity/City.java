@@ -4,6 +4,7 @@ import com.crm.travelcrm.common.entity.BaseTenantEntity;
 import jakarta.persistence.*;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
+import org.hibernate.annotations.Filter;
 
 /**
  *
@@ -43,6 +44,8 @@ import lombok.experimental.SuperBuilder;
 @NoArgsConstructor
 @AllArgsConstructor
 @SuperBuilder
+// Hide trashed rows from every read (see softDeleteFilter on BaseTenantEntity).
+@Filter(name = "softDeleteFilter", condition = "deleted_at is null")
 public class City extends BaseTenantEntity {
 
     /** Required parent — every city belongs to exactly one country. */

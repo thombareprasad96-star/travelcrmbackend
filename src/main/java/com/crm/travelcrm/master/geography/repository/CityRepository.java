@@ -43,6 +43,10 @@ public interface CityRepository extends JpaRepository<City, Long> {
     /** Dropdown: all cities under a specific destination for this tenant, ordered by name. */
     List<City> findByTenantIdAndDestinationIdOrderByNameAsc(Long tenantId, Long destinationId);
 
+    // ── Referential guard (non-trashed children, via softDeleteFilter) ────────
+    boolean existsByTenantIdAndCountryId(Long tenantId, Long countryId);
+    boolean existsByTenantIdAndDestinationId(Long tenantId, Long destinationId);
+
     // ── Duplicate guard (name unique per tenant + country) ────────────────────
     boolean existsByTenantIdAndCountryIdAndName(Long tenantId, Long countryId, String name);
     boolean existsByTenantIdAndCountryIdAndNameAndIdNot(

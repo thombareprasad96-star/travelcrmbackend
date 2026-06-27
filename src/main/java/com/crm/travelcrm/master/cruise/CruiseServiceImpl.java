@@ -95,8 +95,10 @@ public class CruiseServiceImpl implements CruiseService {
     @Transactional
     public void delete(Long id) {
         Cruise cruise = findOrThrow(id);
-        cruiseRepository.delete(cruise);
-        log.info("Cruise deleted | id: {}", id);
+        // Leaf master — referenced by quotations only via name snapshot (no FK). Recoverable.
+        cruise.softDelete(GeographySupport.currentUsername());
+        cruiseRepository.save(cruise);
+        log.info("Cruise moved to Trash | id: {}", id);
     }
 
     @Override

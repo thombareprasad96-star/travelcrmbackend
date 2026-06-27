@@ -2,6 +2,8 @@ package com.crm.travelcrm.master.geography.support;
 
 import com.crm.travelcrm.common.context.TenantContext;
 import org.springframework.data.domain.Sort;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.util.StringUtils;
 
 /**
@@ -21,6 +23,12 @@ public final class GeographySupport {
                     "TenantContext is empty. Ensure JwtAuthFilter ran and the JWT carries a tenantId claim.");
         }
         return tenantId;
+    }
+
+    /** Logged-in username for the soft-delete audit trail; {@code "system"} if unauthenticated. */
+    public static String currentUsername() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        return auth != null ? auth.getName() : "system";
     }
 
     /** Build a {@link Sort}; defaults to {@code createdAt} and descending order. */

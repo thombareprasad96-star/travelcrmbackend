@@ -66,6 +66,7 @@ public class SecurityConfig {
     // ─── Security Filter Chain ───────────────────────────────────────────────
 
     @Bean
+    @org.springframework.core.annotation.Order(2)   // after the portal chain (@Order(1)); catch-all
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         return http
                 .csrf(AbstractHttpConfigurer::disable)

@@ -68,4 +68,7 @@ public interface SightseeingRepository extends JpaRepository<Sightseeing, Long> 
     List<Sightseeing> findByTenantIdAndDestinationIdForDropdown(
             @Param("tenantId") Long tenantId,
             @Param("destinationId") Long destinationId);
+
+    // Referential guard: any (non-trashed, via softDeleteFilter) sightseeing still in this city?
+    boolean existsByTenantIdAndCity_Id(Long tenantId, Long cityId);
 }

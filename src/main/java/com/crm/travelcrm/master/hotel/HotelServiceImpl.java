@@ -127,8 +127,11 @@ public class HotelServiceImpl implements HotelService {
     @Transactional
     public void delete(Long hotelId) {
         Hotel hotel = findOrThrow(hotelId);
-        hotelRepository.delete(hotel);
-        log.info("Hotel deleted | id: {}", hotelId);
+        // Leaf master — bookings/quotations reference it only by name snapshot (no FK), so it
+        // moves to Trash freely and existing records keep resolving. Recoverable until purge.
+        hotel.softDelete(GeographySupport.currentUsername());
+        hotelRepository.save(hotel);
+        log.info("Hotel moved to Trash | id: {}", hotelId);
     }
 
     @Override

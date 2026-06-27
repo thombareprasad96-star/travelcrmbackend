@@ -37,4 +37,7 @@ public interface VehicleRepository extends JpaRepository<VehicleEntity, Long> {
 
     @Query("SELECT v FROM VehicleEntity v WHERE (v.tenantId IS NULL OR v.tenantId = :tenantId) ORDER BY v.name ASC")
     List<VehicleEntity> findAllVisibleToOrderByNameAsc(@Param("tenantId") Long tenantId);
+
+    // Referential guard: any (non-trashed, via softDeleteFilter) tenant vehicle still in this city?
+    boolean existsByTenantIdAndCity_Id(Long tenantId, Long cityId);
 }

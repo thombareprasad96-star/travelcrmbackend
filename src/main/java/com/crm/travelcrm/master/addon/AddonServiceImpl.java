@@ -84,8 +84,10 @@ public class AddonServiceImpl implements AddonService {
     @Transactional
     public void delete(Long id) {
         Addon addon = findOrThrow(id);
-        addonRepository.delete(addon);
-        log.info("Addon deleted | id: {}", id);
+        // Leaf master — referenced by quotations only via name snapshot (no FK). Recoverable.
+        addon.softDelete(GeographySupport.currentUsername());
+        addonRepository.save(addon);
+        log.info("Addon moved to Trash | id: {}", id);
     }
 
     private Addon findOrThrow(Long id) {

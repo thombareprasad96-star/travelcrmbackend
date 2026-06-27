@@ -4,6 +4,7 @@ import com.crm.travelcrm.common.cloudinary.CloudinaryService;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
+import com.crm.travelcrm.master.geography.support.GeographySupport;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.*;
 import org.springframework.http.HttpStatus;
@@ -63,7 +64,9 @@ public class VehicleServiceImpl implements VehicleService {
     @Transactional
     public void deleteVehicle(UUID publicId) {
         VehicleEntity entity = getEditableVehicle(publicId);
-        vehicleRepository.delete(entity);
+        // Leaf master — referenced by quotations only via name snapshot (no FK). Recoverable.
+        entity.softDelete(GeographySupport.currentUsername());
+        vehicleRepository.save(entity);
     }
 
     @Override
