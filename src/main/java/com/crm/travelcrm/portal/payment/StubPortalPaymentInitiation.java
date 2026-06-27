@@ -2,18 +2,14 @@ package com.crm.travelcrm.portal.payment;
 
 import com.crm.travelcrm.portal.payment.dto.PaymentIntentResponse;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.stereotype.Component;
 
 /**
  * Default payment hook used until a real Payments module exists. Returns {@code UNAVAILABLE} (never
- * pretends a charge happened) so the endpoint + contract are usable by the FE now. {@code
- * @ConditionalOnMissingBean} means a real {@link PortalPaymentInitiation} bean automatically takes
- * over with zero other changes.
+ * pretends a charge happened) so the endpoint + contract are usable by the FE now. It is registered
+ * as the fallback {@link PortalPaymentInitiation} by {@link PortalPaymentConfig} via
+ * {@code @ConditionalOnMissingBean}, so a real gateway bean automatically takes over with no other changes.
  */
 @Slf4j
-@Component
-@ConditionalOnMissingBean
 public class StubPortalPaymentInitiation implements PortalPaymentInitiation {
 
     @Override

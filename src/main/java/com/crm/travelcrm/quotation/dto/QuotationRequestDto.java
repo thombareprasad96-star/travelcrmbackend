@@ -118,7 +118,7 @@ public class QuotationRequestDto {
         private Integer stars;
         private BigDecimal pricePerRoom;
         private Integer rooms;
-        private String imageUrl;
+        private String imagePath;
     }
 
     // ── Sightseeing ─────────────────────────────────────────────────────────--
@@ -147,7 +147,7 @@ public class QuotationRequestDto {
         private String description;
         private List<String> meals;
         private String transfer;
-        private String imageUrl;
+        private String imagePath;
     }
 
     // ── Cruise ──────────────────────────────────────────────────────────────--

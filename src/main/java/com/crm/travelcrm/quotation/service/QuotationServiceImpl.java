@@ -469,7 +469,7 @@ public class QuotationServiceImpl implements QuotationService {
                     .name(h.getName()).city(h.getCity()).checkIn(h.getCheckIn()).checkOut(h.getCheckOut())
                     .roomType(h.getRoomType()).mealPlan(h.getMealPlan()).refundable(h.getRefundable())
                     .stars(h.getStars())
-                    .pricePerRoom(h.getPricePerRoom()).rooms(h.getRooms()).imageUrl(h.getImageUrl())
+                    .pricePerRoom(h.getPricePerRoom()).rooms(h.getRooms()).imagePath(h.getImagePath())
                     .build());
         }
 
@@ -485,7 +485,7 @@ public class QuotationServiceImpl implements QuotationService {
             for (QuotationSightseeingActivity a : d.getActivities()) {
                 QuotationSightseeingActivity na = QuotationSightseeingActivity.builder()
                         .attraction(a.getAttraction()).startTime(a.getStartTime())
-                        .description(a.getDescription()).transfer(a.getTransfer()).imageUrl(a.getImageUrl())
+                        .description(a.getDescription()).transfer(a.getTransfer()).imagePath(a.getImagePath())
                         .build();
                 na.getMeals().addAll(a.getMeals());
                 nd.addActivity(na);

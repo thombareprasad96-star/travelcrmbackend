@@ -4,388 +4,499 @@
     <title th:text="${q.title}">Quotation</title>
     <!--
     ============================================================================
-      PREMIUM MULTI-PAGE QUOTATION TEMPLATE  (Flying Saucer + OpenPDF / Thymeleaf)
-    ============================================================================
+      PREMIUM QUOTATION TEMPLATE  (Flying Saucer + OpenPDF / Thymeleaf)
+      >>> COLORFUL EDITION  +  FULL-PAGE IMAGE cover/thank-you
+          + RUNNING HEADER & FOOTER on content pages only <<<
 
-      >>> READ FIRST: two things must be set up server-side <<<
+      HEADER  : banner image (headerImageUrl) with logo left / company center
+                → appears on ALL content pages, NOT on cover & thank-you
+      FOOTER  : 3-column strip
+                Left   = CONTACT       (phone · whatsapp · email)
+                Center = OUR ACHIEVEMENT (google reviews · years exp)
+                Right  = LEGAL INFO    (GST · website)
+                → appears on ALL content pages, NOT on cover & thank-you
 
-      (A) EMBED A UNICODE FONT (for  ₹  ★  ☎  ✉  ⌘  • etc.)
-          Default Helvetica = WinAnsi only, so those glyphs render as boxes.
-          In your ITextRenderer setup, register DejaVu Sans (free, covers all of them):
+      HOW IT WORKS (Flying Saucer paged-media):
+        @page content  →  @top-center    { element(pageHeader) }
+                          @bottom-center { element(pageFooter) }
+        @page cover / thankyou → @top/bottom-center { content:"" }  (suppress)
+        .page-header   { position: running(pageHeader); }
+        .page-footer   { position: running(pageFooter); }
+        Every content <div> gets  style="page: content; …"
 
-              ITextRenderer renderer = new ITextRenderer();
-              String base = "classpath:/fonts/";   // adjust path
-              renderer.getFontResolver().addFont(base + "DejaVuSans.ttf",
-                      BaseFont.IDENTITY_H, BaseFont.EMBEDDED);
-              renderer.getFontResolver().addFont(base + "DejaVuSans-Bold.ttf",
-                      BaseFont.IDENTITY_H, BaseFont.EMBEDDED);
+      IMAGE PATH (one place to change):
+        .travel-bg { background-image: url('file:///C:/...travel.png') }
+        → dev/IDE: works. packaged JAR: use relative pdf/travel.png + classpath base-URL.
 
-          The CSS below already sets  font-family: "DejaVu Sans", ...
-
-      (B) NAMED PAGES + position must be supported (they are in current OpenPDF FS).
-          If your FS version is very old and named pages misbehave, the cover &
-          thank-you full-bleed pages may need their margins tweaked.
-
-    ----------------------------------------------------------------------------
-      MODEL CONTRACT  — bound strictly to QuotationResponseDto (no extra view model)
-    ----------------------------------------------------------------------------
-      brandColor                          primary brand colour (deep colour works best)
-      companyName, companyTagline, companyLogoUrl
-      companyPhone, companyEmail, companyWebsite, companyAddress
-      generatedOn
-      fmt.{date,orElse,travellers,inr,plain}
-      q.title, q.version, q.coverImageUrl
-      customer.{name,phone,email,adults,children,infants,destination,travelDate}
-      totals.{grandTotal}
-      q.hotel.{included,title,hotels[],notes}
-            hotel: {imageUrl,name,city,checkIn,checkOut,roomType,mealPlan,refundable}
-      q.flight.{included,title,journey,segments[]}      (rendered if present)
-            segment: {airline,flightNo,travelClass,from,to,duration,depDate,depTime,arrDate,arrTime,cabin,checkin}
-      q.sightseeing.{included,title,days[]}  — drives the day-wise itinerary
-            day: {day(int), date, activities[]}
-            activity: {attraction, startTime, description, meals[], transfer, imageUrl}
-      q.cruise.{included,cruises[]}                     (rendered if present)
-            cruise: {name,cabin,nights,depPort,arrPort,depDate}
-      q.vehicle.{included,vehicles[]}
-            vehicle: {type,pickup,drop,startDate,endDate,qty,notes}
-      q.addons.{included,items[]}                       (rendered if present)
-            addon: {serviceType,description,quantity}
-      q.inclusions[], q.exclusions[], q.paymentPolicies[], q.cancellationPolicies[]
-
-      Optional context vars (safe when unset → null): headerImageUrl,
-      consultantName/Phone/Email, companyWhatsapp/Gst/GoogleReviews/YearsExperience
+      VARIABLES:
+        brandColor, companyName, companyTagline, companyLogoUrl
+        companyPhone, companyEmail, companyWebsite, companyAddress
+        companyWhatsapp, companyGst, companyGoogleReviews, companyYearsExperience
+        generatedOn, headerImageUrl
+        consultantName/Phone/Email
+        fmt.{date,orElse,travellers,inr,plain}
+        q / customer / totals  (unchanged)
     ============================================================================
     -->
     <style th:inline="none">
-        /* ---- FS-SAFE ONLY: tables/inline-block for layout, no flex/grid/calc/var()/box-shadow/gradient ---- */
+        /* ---- FLYING SAUCER SAFE: tables + inline-block; border-radius ok;
+                NO flex / grid / calc() / var() / box-shadow / linear-gradient / transform ---- */
 
-        /* generic content pages */
+        /* ====================================================================
+           ===  MARGIN CONTROL PANEL  — saare page margins yahin se change karo  ===
+           --------------------------------------------------------------------
+           Har page type ka margin ALAG hai -> alag-alag adjust kar sakte ho.
+
+             [A] COVER (page 1)   : margin 0  -> image POORE page, FULL WIDTH
+             [B] THANKYOU (last)  : margin 0  -> image POORE page, FULL WIDTH
+             [C] CONTENT (beech)  : top    = HEADER ke liye jagah
+                                    bottom = FOOTER ke liye jagah
+                                    left/right = 0  -> header & footer FULL WIDTH
+                                    (text ki side spacing alag se .cpad padding se)
+             [D] DEFAULT          : fallback (normally use nahi hota)
+
+           HEADER height = 22mm  (banner table height, niche HTML me)
+           FOOTER height = 20mm  (.page-footer height, niche CSS me)
+           NOTE: header height badlo -> [C] margin-top bhi utna badhao
+                 footer height badlo -> [C] margin-bottom bhi utna badhao
+           ==================================================================== */
+
+        /* ---- [D] DEFAULT page (fallback only) ---- */
+        /* IMPORTANT: margin 0 here. A non-zero default LEAKS into cover/thankyou in
+           Flying Saucer and shifts the full-page image left -> right-side white strip. */
         @page {
             size: A4;
-            margin: 17mm 13mm 15mm 13mm;
-            @bottom-right { content: "Page " counter(page) " of " counter(pages); font-size: 8px; color: #94a3b8; }
+            margin-top: 0mm;        /* upar  - 0 (default leak avoid) */
+            margin-right: 0mm;      /* right - 0 */
+            margin-bottom: 0mm;     /* niche - 0 */
+            margin-left: 0mm;       /* left  - 0 */
         }
-        /* full-bleed cover */
-        @page cover    { size: A4; margin: 0; @bottom-right { content: ""; } }
-        /* full-bleed dark thank-you */
-        @page thankyou { size: A4; margin: 0; @bottom-right { content: ""; } }
 
-        * { box-sizing: border-box; }
-        body {
-            font-family: "DejaVu Sans", Helvetica, Arial, sans-serif;
-            font-size: 10px; line-height: 1.5; color: #1f2937; margin: 0; padding: 0;
+        /* ---- [C] CONTENT pages (page2, flights, hotels, itinerary, services, policies) ---- */
+        @page content {
+            size: A4;
+            margin-top: 28mm;       /* <-- HEADER space (header 22mm + ~6mm gap). content niche karne ko BADHAO */
+            margin-right: 0mm;      /* <-- 0 = header/footer RIGHT edge tak FULL WIDTH */
+            margin-bottom: 24mm;    /* <-- FOOTER space (footer 20mm + ~4mm gap). content upar karne ko BADHAO */
+            margin-left: 0mm;       /* <-- 0 = header/footer LEFT edge tak FULL WIDTH */
+            @top-center    { content: element(pageHeader); }
+            @bottom-center { content: element(pageFooter); }
         }
+
+        /* ---- [A] COVER = first page : FULL WIDTH image, no header/footer ---- */
+        @page cover {
+            size: A4;
+            margin-top: 0mm;        /* upar  - 0 = image top edge tak */
+            margin-right: 0mm;      /* right - 0 = image right edge tak */
+            margin-bottom: 0mm;     /* niche - 0 = image bottom edge tak */
+            margin-left: 0mm;       /* left  - 0 = image left edge tak */
+            @top-center    { content: ""; }
+            @bottom-center { content: ""; }
+        }
+
+        /* ---- [B] THANKYOU = last page : FULL WIDTH image, no header/footer ---- */
+        @page thankyou {
+            size: A4;
+            margin-top: 0mm;        /* upar  - 0 = image top edge tak */
+            margin-right: 0mm;      /* right - 0 = image right edge tak */
+            margin-bottom: 0mm;     /* niche - 0 = image bottom edge tak */
+            margin-left: 0mm;       /* left  - 0 = image left edge tak */
+            @top-center    { content: ""; }
+            @bottom-center { content: ""; }
+        }
+
+        /* content text ki LEFT/RIGHT spacing (kyunki @page content ke side margins 0 hain) */
+        /* yahan 13mm change karke content ko ander/bahar kar sakte ho */
+        .cpad { padding-left: 13mm; padding-right: 13mm; }
+
+        /* ============ BASE ============ */
+        * { box-sizing: border-box; }
+        body { font-family: "DejaVu Sans", Helvetica, Arial, sans-serif;
+            font-size: 10.5px; line-height: 1.55; color: #243040; margin: 0; padding: 0; }
         .serif { font-family: "DejaVu Serif", Georgia, "Times New Roman", serif; }
         table  { border-collapse: collapse; width: 100%; }
         td, th { vertical-align: top; }
-
         .r { text-align: right; } .c { text-align: center; }
-        .muted { color: #64748b; } .faint { color: #94a3b8; }
-        .small { font-size: 8.5px; } .tiny { font-size: 7.5px; }
-        .eyebrow { font-size: 7.5px; font-weight: bold; letter-spacing: 1px; text-transform: uppercase; }
+        .muted { color: #64748b; } .faint { color: #98a2b3; }
+        .small { font-size: 9px; } .tiny { font-size: 7.5px; }
+
+        /* ============ FULL-PAGE IMAGE (cover + thank-you) ============ */
+        /* >>> change picture / path HERE — one place <<< */
+        /* FIX: background-size 100% 100% = image EXACTLY fills page edge-to-edge (no white strip).
+           (cover/contain shift the image and leave a right/left gap in Flying Saucer)            */
+        .travel-bg { background-image: url('file:///C:/travelcrmbackend/src/main/resources/templates/pdf/banner.png');
+            background-size: 100% 100%;                  /* <-- exact fill, no gap. (cover -> strip) */
+            background-position: center;
+            background-repeat: no-repeat;
+            background-color: #0b2540; }                 /* fallback color if image missing */
+        .page-wash { height: 297mm; background-color: rgba(11,30,52,0.42); }  /* dark wash so text readable on photo */
+        .glass     { background-color: rgba(0,0,0,0); border-radius: 6px; }
+
+        /* ============ RUNNING HEADER (content pages only) ============ */
+        /* KEY FIX: background-image on <tr> so ALL columns get the image full-width */
+        .page-header {
+            position: running(pageHeader);
+            width: 210mm;          /* <-- A4 full width (edge-to-edge header). page width = 210mm */
+            display: block;
+        }
+
+        /* ============ RUNNING FOOTER (content pages only) ============ */
+        .page-footer {
+            position: running(pageFooter);
+            width: 210mm;          /* <-- A4 full width (edge-to-edge footer) */
+            height: 20mm;          /* <-- FOOTER height. badlo to @page content margin-bottom bhi badhao */
+            border-top: 1.5px solid #225b95;
+            background-color: #f8fafc;
+        }
+        .pf-table { width: 210mm; height: 20mm; }
+        .pf-table td { vertical-align: middle; padding: 0 4mm; font-size: 8px; color: #334155; }
+        .pf-head { font-size: 6.5px; font-weight: bold; letter-spacing: 1.2px;
+            text-transform: uppercase; color: #225b95; margin-bottom: 3px; }
+        .pf-val  { font-size: 8.5px; color: #243040; margin-top: 2px; }
+        .pf-sep  { border-left: 1px solid #dde3ed; }
+        .pf-center { text-align: center; }
+        .pf-right  { text-align: right; }
+        .pf-stat   { display: inline-block; margin: 0 6px; text-align: center; }
+        .pf-stat .n{ font-size: 12px; font-weight: bold; color: #225b95; }
+        .pf-stat .l{ font-size: 6.5px; color: #547596; }
 
         /* ============ COVER ============ */
-        .coverpage   { page: cover; }
-        .cover-hero  { width: 100%; height: 138mm; display: block; }
-        .cover-panel { height: 159mm; }
-        .cover-cell  { padding: 0 18mm; text-align: center; }
-        .logo-box    { display: inline-block; background-color: #ffffff; border-radius: 12px;
-            padding: 11px 16px; margin-top: -52px; }
-        .logo-box img{ height: 54px; }
-        .logo-box .nm{ font-size: 20px; font-weight: bold; }
-        .cover-title { font-size: 30px; font-weight: bold; color: #ffffff; margin-top: 16px; letter-spacing: 0.3px; }
-        .cover-dest  { font-size: 11px; color: #ffffff; letter-spacing: 2.5px; text-transform: uppercase; margin-top: 8px; }
-        .cover-rule  { width: 70px; height: 2px; background-color: #f59e0b; margin: 14px auto 0 auto; }
-        .svc-eyebrow { font-size: 9px; color: #ffffff; letter-spacing: 3px; margin-top: 18px; }
-        .svc-circle  { display: inline-block; width: 46px; height: 46px; border-radius: 23px;
-            border: 2px solid #ffffff; text-align: center; margin: 0 14px; }
-        .svc-circle .i { font-size: 17px; font-weight: bold; color: #ffffff; line-height: 46px; }
-        .svc-label   { font-size: 8.5px; font-weight: bold; color: #ffffff; letter-spacing: 0.5px; }
-        .cover-bar   { padding: 9px 18mm; }
-        .cover-bar td{ color: #ffffff; font-size: 9px; }
+        .coverpage   { page: cover; width: 210mm; }   /* explicit full width -> image no left-shift */
+        .cover-ov    { width: 210mm; height: 297mm; text-align: center; padding-top: 50mm; }
+        .logo-box    { display: inline-block; background-color: #ffffff; border-radius: 13px; padding: 12px 19px; }
+        .logo-box img{ height: 50px; }
+        .logo-box .nm{ font-size: 22px; font-weight: bold; letter-spacing: 0.4px; color: #0b2540; }
+        .cover-frame { border: 0; margin: 20px 13mm 0 13mm; padding: 24px 9mm 22px 9mm; }
+        .cover-kicker{ font-size: 9px; font-weight: bold; letter-spacing: 5px; color: rgba(255,255,255,0.92); text-transform: uppercase; }
+        .cover-title { font-size: 33px; font-weight: bold; color: #ffffff; margin-top: 10px; letter-spacing: 0.3px; line-height: 1.15; }
+        .cover-dest  { font-size: 11px; color: rgba(255,255,255,0.92); letter-spacing: 3px; text-transform: uppercase; margin-top: 11px; }
+        .cover-rule  { width: 64px; height: 3px; background-color: #3d8fc7; margin: 15px auto 0 auto; }
+        .cover-diam  { width: 8px; height: 8px; background-color: #3d8fc7; margin: -4px auto 0 auto; }
+        .svc-eyebrow { font-size: 8.5px; color: rgba(255,255,255,0.92); letter-spacing: 3.5px; margin-top: 22px; text-transform: uppercase; }
+        .svc-circle  { display: inline-block; width: 52px; height: 52px; border-radius: 26px; text-align: center; margin: 0 13px; background-color: rgba(61,143,199,0.25); border: 2px solid #3d8fc7; }
+        .svc-circle .i { font-size: 19px; font-weight: bold; color: #ffffff; line-height: 52px; }
+        .svc-label   { font-size: 8.5px; font-weight: bold; color: #ffffff; letter-spacing: 1px; text-transform: uppercase; }
+        .cover-meta  { font-size: 9px; color: rgba(255,255,255,0.9); letter-spacing: 1px; margin-top: 20px; }
+        .cover-cont  { width: 100%; margin-top: 18px; padding-top: 13px; border-top: 1px solid rgba(255,255,255,0.25); }
+        .cover-cont td{ color: #ffffff; font-size: 9px; letter-spacing: 0.4px; }
+        .cover-cont .k{ color: rgba(255,255,255,0.75); }
 
-        /* ============ RUNNING BANNER ============ */
-        .banner      { width: 100%; padding: 9px 0; text-align: center; border-bottom: 1px solid #eef2f6; margin-bottom: 14px; }
-        .banner-name { font-size: 17px; font-weight: bold; letter-spacing: 3px; }
+        /* ============ SECTION HEADINGS ============ */
+        .sec        { border-left: 4px solid #f59e0b; padding: 2px 0 2px 15px; margin-bottom: 16px; }
+        .sec-eyebrow{ font-size: 7.5px; font-weight: bold; letter-spacing: 2.4px; text-transform: uppercase; color: #94a3b8; }
+        .sec-title  { font-size: 19px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.8px; margin-top: 3px; }
 
-        /* ============ HEADINGS ============ */
-        .sec        { margin-bottom: 10px; }
-        .sec-title  { font-size: 17px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.6px; }
-        .sec-rule   { width: 116px; height: 3px; background-color: #f59e0b; margin-top: 6px; }
+        /* ============ GREETING ============ */
+        .greet { border-left: 4px solid; padding: 3px 0 3px 16px; }
+        .greet p { margin: 0 0 8px 0; color: #334155; }
+        .greet .hi { font-size: 14px; font-weight: bold; color: #0f172a; }
 
-        /* ============ CARDS ============ */
-        .card { border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px 18px; margin-top: 14px; }
-        .card-top { border-top: 3px solid; }            /* colour set inline */
-        .cardhead td { padding: 0 0 12px 0; }
-        .card-h   { font-size: 17px; font-weight: bold; }
-        .badge-dark { display: inline-block; padding: 5px 13px; border-radius: 14px; color: #ffffff;
-            font-size: 9px; font-weight: bold; letter-spacing: 0.4px; }
+        /* ============ OVERVIEW TILES ============ */
+        .ovg td  { padding: 6px; }
+        .ovc     { width: 33%; }
+        .otile   { border: 1px solid #eef1f6; border-left-width: 4px; border-left-style: solid; border-radius: 11px; padding: 12px 13px; }
+        .ot-lab  { font-size: 7.5px; font-weight: bold; letter-spacing: 1px; text-transform: uppercase; }
+        .ot-val  { font-size: 13px; font-weight: bold; color: #0f172a; margin-top: 4px; }
 
-        /* greeting */
-        .greet { border-left: 4px solid; padding: 4px 0 4px 14px; }   /* colour inline */
-        .greet p { margin: 0 0 7px 0; }
-
-        /* overview grid */
-        .ov td   { padding: 9px 12px 9px 0; width: 33%; border-bottom: 1px solid #f1f5f9; }
-        .ov tr:last-child td { border-bottom: none; }
-        .ov .lab { font-size: 7.5px; font-weight: bold; letter-spacing: 0.8px; text-transform: uppercase; }
-        .ov .val { font-size: 11.5px; font-weight: bold; color: #0f172a; margin-top: 3px; }
-
-        /* investment summary */
-        .inv td   { vertical-align: middle; }
-        .inv-left { width: 52%; padding-right: 14px; }
-        .inv-per  { font-size: 11px; color: #334155; }
-        .inv-per b{ font-size: 13px; color: #0f172a; }
-        .inv-panel{ border-radius: 12px; padding: 16px 18px; color: #ffffff; }
-        .inv-panel .l { font-size: 8.5px; letter-spacing: 1px; color: #e6edf6; text-transform: uppercase; }
-        .inv-panel .a { font-size: 25px; font-weight: bold; margin-top: 3px; }
-        .inv-panel .s { font-size: 8.5px; color: #e6edf6; margin-top: 2px; }
+        /* ============ INVESTMENT ============ */
+        .invhero { border-radius: 14px; margin-top: 15px; overflow: hidden; }
+        .ih-top  { height: 5px; background-color: #f59e0b; }
+        .ih-pad  { padding: 19px 21px; }
+        .ih-pad td { vertical-align: middle; }
+        .ih-lab  { font-size: 8.5px; letter-spacing: 1.5px; color: rgba(255,255,255,0.85); text-transform: uppercase; }
+        .ih-amt  { font-size: 32px; font-weight: bold; color: #ffffff; margin-top: 4px; letter-spacing: 0.3px; }
+        .ih-sub  { font-size: 8.5px; color: rgba(255,255,255,0.82); margin-top: 3px; }
+        .ih-chip { display: inline-block; border: 1px solid rgba(255,255,255,0.45); border-radius: 11px; padding: 10px 16px; text-align: right; }
+        .ih-chip .l { font-size: 8px; letter-spacing: 1px; color: rgba(255,255,255,0.85); text-transform: uppercase; }
+        .ih-chip .v { font-size: 15px; font-weight: bold; color: #ffffff; margin-top: 2px; }
 
         /* ============ HOTELS ============ */
-        .hotel     { border: 1px solid #e8edf3; border-radius: 12px; margin-top: 12px; page-break-inside: avoid; }
-        .h-img     { width: 156px; padding: 10px; }
-        .h-img img { width: 142px; height: 100px; border-radius: 9px; }
-        .h-body    { padding: 12px 14px 14px 4px; }
-        .h-name    { font-size: 13px; font-weight: bold; color: #0f172a; }
-        .star      { color: #f59e0b; font-size: 12px; }
-        .city-pill { display: inline-block; padding: 3px 11px; border-radius: 6px; color: #ffffff;
-            font-size: 8.5px; font-weight: bold; margin-top: 6px; }
-        .h-grid td { width: 25%; padding: 6px 6px 0 0; }
-        .h-box     { background-color: #eef3f9; border-radius: 8px; padding: 8px 10px; }
-        .h-box .k  { font-size: 7px; font-weight: bold; letter-spacing: 0.5px; color: #64748b; text-transform: uppercase; }
-        .h-box .v  { font-size: 9.5px; font-weight: bold; color: #0f172a; margin-top: 2px; }
-        .h-box .v2 { font-size: 8px; color: #64748b; margin-top: 1px; }
-        .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 7.5px; font-weight: bold; }
-        .badge-ok { background-color: #dcfce7; color: #166534; }
-        .badge-no { background-color: #ffe4e6; color: #9f1239; }
+        .hotel     { border: 1px solid #eef1f6; border-radius: 14px; margin-top: 13px; overflow: hidden; page-break-inside: avoid; }
+        .h-ribbon  { display: inline-block; padding: 4px 15px; border-radius: 0 0 12px 0; color: #ffffff; font-size: 8px; font-weight: bold; letter-spacing: 1px; text-transform: uppercase; }
+        .h-img     { width: 158px; padding: 0 11px 11px 11px; }
+        .h-img img { width: 136px; height: 98px; border-radius: 10px; }
+        .h-body    { padding: 6px 15px 14px 3px; }
+        .h-name    { font-size: 13.5px; font-weight: bold; color: #0f172a; }
+        .star      { color: #f59e0b; font-size: 11.5px; letter-spacing: 1px; }
+        .city-pill { display: inline-block; padding: 3px 12px; border-radius: 7px; color: #ffffff; font-size: 8px; font-weight: bold; letter-spacing: 0.6px; text-transform: uppercase; margin-top: 7px; }
+        .h-grid td { width: 25%; padding: 7px 7px 0 0; }
+        .h-box     { border: 1px solid #eef2f7; border-radius: 9px; padding: 8px 10px; }
+        .h-box .k  { font-size: 6.5px; font-weight: bold; letter-spacing: 0.6px; color: #8a96a8; text-transform: uppercase; }
+        .h-box .v  { font-size: 10px; font-weight: bold; color: #0f172a; margin-top: 3px; }
+        .badge { display: inline-block; padding: 2px 9px; border-radius: 11px; font-size: 7px; font-weight: bold; letter-spacing: 0.4px; text-transform: uppercase; }
+        .badge-ok { background-color: #dcfce7; color: #15803d; }
+        .badge-no { background-color: #ffe4e6; color: #be123c; }
 
         /* ============ ITINERARY ============ */
-        .day-card { border: 1px solid #e8edf3; border-radius: 12px; padding: 12px; page-break-inside: avoid; }
-        .day-img  { width: 178px; padding-right: 14px; }
-        .day-img img { width: 164px; height: 118px; border-radius: 10px; }
-        .day-meta td { vertical-align: top; }
-        .day-num-l { font-size: 8px; font-weight: bold; letter-spacing: 1px; color: #94a3b8; text-transform: uppercase; }
-        .day-num   { font-size: 34px; font-weight: bold; line-height: 1; }
-        .day-div   { width: 1px; background-color: #e2e8f0; }
-        .day-title { font-size: 15px; font-weight: bold; color: #0f172a; }
-        .day-date  { font-size: 9.5px; color: #64748b; margin-top: 3px; padding-bottom: 8px; border-bottom: 1px solid #eef2f6; }
-        .day-info  { font-size: 9.5px; margin-top: 9px; }
-        .day-info .lab { font-weight: bold; color: #334155; }
-        .mdot { display: inline-block; width: 8px; height: 8px; border-radius: 4px; margin: 0 5px 0 8px; }
-        .tpill { display: inline-block; padding: 4px 11px; border-radius: 11px; background-color: #eef3f9;
-            color: #334155; font-size: 8.5px; font-weight: bold; margin-top: 8px; }
+        .day-block { page-break-inside: avoid; margin-top: 13px; }
+        .day-card { border: 1px solid #eef1f6; border-radius: 14px; padding: 13px 15px; }
+        .day-meta td { vertical-align: middle; }
+        .day-disc  { width: 58px; height: 58px; border-radius: 29px; border: 2px solid #f59e0b; text-align: center; }
+        .day-disc .n { font-size: 23px; font-weight: bold; color: #ffffff; line-height: 54px; }
+        .day-div   { width: 1px; background-color: #e6ebf1; }
+        .day-klab  { font-size: 7.5px; font-weight: bold; letter-spacing: 1.5px; color: #94a3b8; text-transform: uppercase; }
+        .day-title { font-size: 16px; font-weight: bold; color: #0f172a; margin-top: 2px; }
+        .day-date  { font-size: 9.5px; color: #64748b; margin-top: 4px; letter-spacing: 0.3px; }
+        .day-desc  { margin-top: 11px; padding-left: 17px; border-left: 3px solid; }
+        .tl-dot    { display: inline-block; width: 12px; height: 12px; border-radius: 6px; border: 2px solid; background-color: #ffffff; margin-right: 8px; }
+        .tl-place  { font-size: 12.5px; font-weight: bold; color: #0f172a; }
+        .tl-line   { font-size: 10px; color: #475569; margin-top: 4px; }
+        .day-info  { font-size: 9.5px; margin-top: 6px; }
+        .day-info .lab { font-weight: bold; color: #334155; letter-spacing: 0.3px; }
+        .mdot { display: inline-block; width: 7px; height: 7px; border-radius: 4px; margin: 0 5px 0 8px; }
+        .tpill { display: inline-block; padding: 4px 12px; border-radius: 12px; font-size: 8px; font-weight: bold; letter-spacing: 0.4px; margin-top: 8px; }
 
-        .day-desc { margin-top: 12px; padding-left: 16px; border-left: 2px solid; }   /* colour inline */
-        .tl-dot   { display: inline-block; width: 11px; height: 11px; border-radius: 6px; border: 2px solid;
-            background-color: #ffffff; margin-right: 7px; }                    /* colour inline */
-        .tl-place { font-size: 12px; font-weight: bold; color: #0f172a; }
-        .tl-route { font-size: 10px; font-weight: bold; color: #334155; margin-top: 7px; }
-        .tl-line  { font-size: 9.5px; margin-top: 5px; }
-        .sq { display: inline-block; width: 4px; height: 4px; border-radius: 1px; margin-right: 8px; margin-bottom: 2px; }
-        .night { font-size: 9.5px; font-weight: bold; margin-top: 9px; }
-
-        /* ============ GENERIC SERVICE CARD (flight/cruise/addon) ============ */
-        .svc-card { border: 1px solid #e8edf3; border-radius: 10px; margin-top: 10px; padding: 10px 13px; page-break-inside: avoid; }
-        .svc-card td { padding: 3px 4px; font-size: 9.5px; }
-        .lbl { color: #94a3b8; font-size: 7.5px; font-weight: bold; letter-spacing: 0.5px; text-transform: uppercase; width: 78px; }
-        .veh-card { border: 1px solid #e8edf3; border-radius: 12px; margin-top: 12px; page-break-inside: avoid; }
-        .veh-ribbon { display: inline-block; padding: 5px 14px; border-radius: 0 0 10px 0; color: #ffffff;
-            font-size: 8.5px; font-weight: bold; letter-spacing: 0.6px; }
-        .veh-img { width: 176px; padding: 12px; }
-        .veh-img img { width: 162px; height: 104px; border-radius: 9px; }
-        .veh-name { font-size: 15px; font-weight: bold; color: #0f172a; }
-
-        /* ============ TESTIMONIALS ============ */
-        .tcard { border: 1px solid #e8edf3; border-radius: 12px; padding: 16px 18px; margin-top: 12px; page-break-inside: avoid; }
-        .tav   { width: 56px; }
-        .tav-c { width: 48px; height: 48px; border-radius: 24px; color: #ffffff; text-align: center; }
-        .tav-c .i { font-size: 20px; font-weight: bold; line-height: 48px; }
-        .t-name { font-size: 12px; font-weight: bold; color: #0f172a; }
-        .t-trip { font-size: 9px; margin-top: 2px; }
-        .t-text { font-size: 10px; color: #334155; margin-top: 10px; }
+        /* ============ SERVICE CARDS ============ */
+        .svc-card { border: 1px solid #eef1f6; border-radius: 11px; margin-top: 11px; padding: 11px 14px; page-break-inside: avoid; }
+        .svc-card td { padding: 4px 5px; font-size: 10px; color: #334155; }
+        .lbl { color: #98a2b3; font-size: 7px; font-weight: bold; letter-spacing: 0.6px; text-transform: uppercase; width: 76px; }
+        .veh-card { border: 1px solid #eef1f6; border-radius: 14px; margin-top: 13px; page-break-inside: avoid; overflow: hidden; }
+        .veh-ribbon { display: inline-block; padding: 5px 15px; border-radius: 0 0 12px 0; color: #ffffff; font-size: 8px; font-weight: bold; letter-spacing: 1px; text-transform: uppercase; }
+        .veh-name { font-size: 15.5px; font-weight: bold; color: #0f172a; }
 
         /* ============ POLICIES ============ */
-        .pol { border-radius: 12px; padding: 0; margin-top: 14px; overflow: hidden; }
-        .pol-head { padding: 12px 16px; }
-        .pol-num  { display: inline-block; width: 26px; height: 26px; border-radius: 13px; color: #ffffff;
-            text-align: center; margin-right: 11px; }
-        .pol-num .i { font-size: 11px; font-weight: bold; line-height: 26px; }
-        .pol-title{ font-size: 14px; font-weight: bold; letter-spacing: 0.5px; }
-        .pol-body { padding: 10px 16px 14px 16px; }
-        .pol-line { font-size: 10px; color: #334155; margin-bottom: 4px; }
-        .pol-in   { border-left: 4px solid #16a34a; }
-        .pol-ex   { border-left: 4px solid #dc2626; }
-        .bg-in    { background-color: #ecfdf5; } .bg-ex { background-color: #fef2f2; }
-        .green { color: #16a34a; } .red { color: #dc2626; }
+        .pol-2col { margin-top: 15px; }
+        .pol-2col td { vertical-align: top; }
+        .pol-2col .pol { margin-top: 0; }
+        .pol { border-radius: 14px; margin-top: 15px; overflow: hidden; }
+        .pol-head td { padding: 12px 15px; vertical-align: middle; }
+        .pol-chip { display: inline-block; width: 26px; height: 26px; border-radius: 13px; color: #ffffff; text-align: center; margin-right: 10px; }
+        .pol-chip .i { font-size: 12px; font-weight: bold; line-height: 26px; }
+        .pol-title{ font-size: 13px; font-weight: bold; letter-spacing: 0.8px; text-transform: uppercase; }
+        .pol-count{ display: inline-block; border-radius: 11px; padding: 2px 9px; font-size: 8px; font-weight: bold; }
+        .pol-body { padding: 11px 15px 13px 15px; }
+        .pol-line { font-size: 10px; color: #334155; margin-bottom: 5px; }
+        .pol-dot  { font-size: 8px; margin-right: 8px; }
+        .pol-in   { border: 1px solid #bbe9cd; }
+        .pol-ex   { border: 1px solid #f6cdd3; }
+        .bg-in    { background-color: #ecfdf3; } .bg-ex { background-color: #fef2f3; }
+        .green { color: #15803d; } .red { color: #be123c; }
+        .chip-in { background-color: #cdf2db; color: #15803d; }
+        .chip-ex { background-color: #fbd9de; color: #be123c; }
 
-        /* ============ THANK YOU (dark, full bleed) ============ */
-        .typage  { page: thankyou; }
-        .ty-wrap { height: 297mm; padding: 22mm 20mm; }
-        .ty-rule { width: 130px; height: 3px; background-color: #f59e0b; margin: 0 auto; }
-        .ty-big  { font-size: 44px; font-weight: bold; color: #f59e0b; text-align: center; letter-spacing: 2px; margin-top: 22px; }
-        .ty-sub  { font-size: 13px; color: #e6edf6; text-align: center; margin-top: 4px; }
-        .ty-diam { width: 9px; height: 9px; background-color: #f59e0b; margin: 16px auto; }
-        .ty-msg  { font-size: 10.5px; color: #cbd5e1; text-align: center; margin: 0 14mm; line-height: 1.6; }
-        .ty-cards { margin-top: 26px; }
-        .ty-cards td { padding: 8px; width: 50%; }
-        .ty-c { border-radius: 10px; padding: 13px 15px; border-left: 4px solid;
-            background-color: rgba(255,255,255,0.06); }
-        .ty-c .ico { font-size: 15px; }
-        .ty-c .lab { font-size: 8px; font-weight: bold; letter-spacing: 0.8px; text-transform: uppercase; }
-        .ty-c .val { font-size: 11px; color: #ffffff; margin-top: 2px; }
-        .ty-addr { text-align: center; color: #cbd5e1; font-size: 9.5px; margin-top: 18px; }
-        .ty-stats { border: 1.5px solid #f59e0b; border-radius: 12px; margin-top: 20px; }
-        .ty-stats td { padding: 16px 10px; text-align: center; width: 33%; border-right: 1px solid rgba(245,158,11,0.4); }
+        /* ============ THANK YOU ============ */
+        .typage   { page: thankyou; width: 210mm; }   /* explicit full width -> image no left-shift */
+        .ty-ov    { width: 210mm; height: 297mm; padding: 14mm 14mm; }
+        .ty-frame { width: 100%; border: 0; height: 264mm; padding: 12mm 11mm; }
+        .ty-kicker { font-size: 9.5px; font-weight: bold; letter-spacing: 5px; color: rgba(255,255,255,0.92); text-transform: uppercase; text-align: center; }
+        .ty-rule { width: 116px; height: 3px; background-color: #3d8fc7; margin: 14px auto 0 auto; border-radius: 2px; }
+        .ty-big  { font-size: 48px; font-weight: bold; color: #ffffff; text-align: center; letter-spacing: 3px; margin-top: 22px; }
+        .ty-sub  { font-size: 13.5px; color: rgba(255,255,255,0.92); text-align: center; margin-top: 5px; }
+        .ty-diam { width: 9px; height: 9px; background-color: #3d8fc7; margin: 18px auto; }
+        .ty-msg  { font-size: 10.5px; color: rgba(255,255,255,0.92); text-align: center; margin: 0 6mm; line-height: 1.7; }
+        .ty-cards { width: 100%; margin-top: 24px; }
+        .ty-cards td { padding: 7px; width: 50%; }
+        .ty-c { border-radius: 11px; padding: 13px 16px; border-left: 4px solid #3d8fc7; background-color: rgba(61,143,199,0.18); }
+        .ty-c .ico { font-size: 16px; }
+        .ty-c .lab { font-size: 8px; font-weight: bold; letter-spacing: 1px; text-transform: uppercase; }
+        .ty-c .val { font-size: 11.5px; color: #ffffff; margin-top: 3px; }
+        .ty-addr { text-align: center; color: rgba(255,255,255,0.9); font-size: 9.5px; margin-top: 18px; letter-spacing: 0.4px; }
+        .ty-stats { width: 100%; border: 1.5px solid #3d8fc7; border-radius: 14px; margin-top: 20px; background-color: rgba(61,143,199,0.15); }
+        .ty-stats td { padding: 16px 10px; text-align: center; width: 33%; border-right: 1px solid rgba(255,255,255,0.35); }
         .ty-stats td:last-child { border-right: none; }
-        .ty-stats .n { font-size: 21px; font-weight: bold; color: #f59e0b; }
-        .ty-stats .l { font-size: 8.5px; color: #cbd5e1; margin-top: 3px; }
-        .ty-foot-rule { width: 100%; height: 2px; background-color: #f59e0b; margin: 22px 0 12px 0; }
-        .ty-foot-name { font-size: 14px; font-weight: bold; color: #f59e0b; text-align: center; letter-spacing: 1px; }
-        .ty-foot-sub  { font-size: 9px; color: #cbd5e1; text-align: center; margin-top: 2px; }
+        .ty-stats .n { font-size: 23px; font-weight: bold; color: #ffffff; }
+        .ty-stats .l { font-size: 8.5px; color: rgba(255,255,255,0.85); margin-top: 4px; letter-spacing: 0.4px; }
+        .ty-foot-rule { width: 100%; height: 2px; background-color: #3d8fc7; margin: 22px 0 13px 0; }
+        .ty-foot-name { font-size: 14.5px; font-weight: bold; color: #ffffff; text-align: center; letter-spacing: 2px; }
+        .ty-foot-sub  { font-size: 9px; color: rgba(255,255,255,0.8); text-align: center; margin-top: 3px; letter-spacing: 0.5px; }
     </style>
 </head>
-<body>
+<body th:with="acc=${ {'#2563eb','#0d9488','#7c3aed','#ea580c','#e11d48','#0891b2'} },accSoft=${ {'#eef3ff','#e7faf5','#f4efff','#fff3eb','#fdeef2','#e9fafe'} }">
 
-<!-- ╔══════════════════════════════════════════════╗
-     ║  PAGE 1 — COVER                                ║
-     ╚══════════════════════════════════════════════╝ -->
-<div class="coverpage">
-    <img class="cover-hero" th:if="${q.coverImageUrl != null and !q.coverImageUrl.isEmpty()}" th:src="${q.coverImageUrl}" />
-    <img class="cover-hero" th:unless="${q.coverImageUrl != null and !q.coverImageUrl.isEmpty()}"
-         th:style="'background-color:' + ${brandColor} + ';'" />
-
-    <table class="cover-panel" th:style="'background-color:' + ${brandColor} + ';'">
-        <tr>
-            <td class="cover-cell" style="vertical-align: top;">
-                <div class="logo-box">
-                    <img th:if="${companyLogoUrl != null and !companyLogoUrl.isEmpty()}" th:src="${companyLogoUrl}" />
-                    <span class="nm" th:unless="${companyLogoUrl != null and !companyLogoUrl.isEmpty()}"
-                          th:style="'color:' + ${brandColor} + ';'" th:text="${companyName}">Company</span>
-                </div>
-
-                <div class="cover-title" th:text="${q.title}">Package for Guest</div>
-                <div class="cover-dest" th:if="${customer != null and customer.destination != null}"
-                     th:text="${customer.destination}">DESTINATIONS</div>
-                <div class="cover-rule"></div>
-
-                <div class="svc-eyebrow">SERVICES INCLUDE</div>
-                <div style="margin-top: 10px;">
-                    <span th:if="${q.hotel != null and q.hotel.included}">
-                        <span class="svc-circle"><span class="i">H</span></span>
-                    </span>
-                    <span th:if="${q.sightseeing != null and q.sightseeing.included}">
-                        <span class="svc-circle"><span class="i">T</span></span>
-                    </span>
-                    <span th:if="${q.vehicle != null and q.vehicle.included}">
-                        <span class="svc-circle"><span class="i">V</span></span>
-                    </span>
-                    <div style="margin-top: 7px;">
-                        <span class="svc-label" th:if="${q.hotel != null and q.hotel.included}" style="margin: 0 22px;">Hotels</span>
-                        <span class="svc-label" th:if="${q.sightseeing != null and q.sightseeing.included}" style="margin: 0 22px;">Tours</span>
-                        <span class="svc-label" th:if="${q.vehicle != null and q.vehicle.included}" style="margin: 0 22px;">Transport</span>
-                    </div>
-                </div>
+<!-- ============================================================
+     RUNNING HEADER — position:running(pageHeader)
+     Appears ONLY on @page content via @top-center{element(pageHeader)}
+     NOT on cover (@page cover) or thank-you (@page thankyou)
+     ============================================================ -->
+<div class="page-header" style="width:210mm; display:block;">
+    <table style="width:210mm; height:22mm; table-layout:fixed; border-collapse:collapse;"
+           th:style="'background-image:url(file:///C:/travelcrmbackend/src/main/resources/templates/pdf/banner.png); background-size:cover; background-position:center; width:210mm; height:22mm; table-layout:fixed; border-collapse:collapse;'">
+        <tr style="height:22mm;">
+            <!-- LEFT: logo or company name (white text on image) -->
+            <td style="width:22%; vertical-align:middle; padding:0 5mm 0 13mm; height:22mm;">
+                <img th:if="${companyLogoUrl != null and !companyLogoUrl.isEmpty()}" th:src="${companyLogoUrl}" style="height:34px;" />
+                <span th:unless="${companyLogoUrl != null and !companyLogoUrl.isEmpty()}"
+                      style="font-size:13px; font-weight:bold; color:#ffffff; letter-spacing:0.5px;"
+                      th:text="${companyName}">Company</span>
+            </td>
+            <!-- CENTER: company name + tagline (white text on image) -->
+            <td style="width:56%; vertical-align:middle; padding:0 5mm; height:22mm; text-align:center;">
+                <div style="font-size:11px; font-weight:bold; color:#ffffff; letter-spacing:3px;"
+                     th:text="${companyName}">Company Name</div>
+                <div style="font-size:7.5px; color:rgba(255,255,255,0.9); margin-top:2px; letter-spacing:1px;"
+                     th:text="${fmt.orElse(companyTagline,'Your Trusted Travel Partner')}">Tagline</div>
+            </td>
+            <!-- RIGHT: quote ref + date (white text on image) -->
+            <td style="width:22%; vertical-align:middle; padding:0 13mm 0 5mm; height:22mm; text-align:right;">
+                <div style="font-size:7.5px; color:#ffffff; letter-spacing:0.5px;"
+                     th:if="${q.quoteNo != null}"
+                     th:text="|Ref #${#numbers.formatInteger(q.quoteNo,5)}|">Ref</div>
+                <div style="font-size:7px; color:rgba(255,255,255,0.85); margin-top:2px;"
+                     th:if="${generatedOn != null}"
+                     th:text="${generatedOn}">Date</div>
             </td>
         </tr>
+        <!-- blue accent line -->
         <tr>
-            <td style="vertical-align: bottom;">
-                <table class="cover-bar" th:style="'background-color: rgba(0,0,0,0.18);'">
-                    <tr>
-                        <td>Consultant: <span th:text="${consultantName != null ? consultantName : companyName}">-</span></td>
-                        <td class="c">Phone: <span th:text="${consultantPhone != null ? consultantPhone : companyPhone}">-</span></td>
-                        <td class="r">Email: <span th:text="${consultantEmail != null ? consultantEmail : companyEmail}">-</span></td>
-                    </tr>
-                </table>
+            <td colspan="3" style="height:3px; background-color:#225b95; padding:0;"></td>
+        </tr>
+    </table>
+</div>
+
+<!-- ============================================================
+     RUNNING FOOTER — position:running(pageFooter)
+     Appears ONLY on @page content via @bottom-center{element(pageFooter)}
+     NOT on cover or thank-you
+     ============================================================ -->
+<div class="page-footer" style="width:210mm; display:block;">
+    <table class="pf-table" style="width:210mm;">
+        <tr>
+            <!-- LEFT: CONTACT -->
+            <td style="width:34%; padding-left:13mm;">
+                <div class="pf-head">&#9742; Contact Us</div>
+                <div class="pf-val" th:text="${fmt.orElse(companyPhone,'-')}">Phone</div>
+                <div class="pf-val" th:if="${companyWhatsapp != null}" th:text="|WA: ${companyWhatsapp}|">WA</div>
+                <div class="pf-val" th:text="${fmt.orElse(companyEmail,'-')}">Email</div>
+            </td>
+            <!-- CENTER: OUR ACHIEVEMENT -->
+            <td class="pf-sep pf-center" style="width:32%;">
+                <div class="pf-head">&#9733; Our Achievement</div>
+                <div style="margin-top:3px;">
+                    <span class="pf-stat">
+                        <div class="n" th:text="${companyGoogleReviews != null ? companyGoogleReviews : '—'}">—</div>
+                        <div class="l">Google Reviews</div>
+                    </span>
+                    <span class="pf-stat">
+                        <div class="n" th:text="${companyYearsExperience != null} ? |${companyYearsExperience}+| : '—'">—</div>
+                        <div class="l">Yrs Experience</div>
+                    </span>
+                </div>
+            </td>
+            <!-- RIGHT: LEGAL INFO -->
+            <td class="pf-sep pf-right" style="width:34%; padding-right:13mm;">
+                <div class="pf-head">&#9679; Legal Info</div>
+                <div class="pf-val" th:if="${companyGst != null}" th:text="|GST: ${companyGst}|">GST</div>
+                <div class="pf-val" th:text="${fmt.orElse(companyWebsite,'-')}">Website</div>
             </td>
         </tr>
     </table>
 </div>
 
-<!-- ╔══════════════════════════════════════════════╗
-     ║  PAGE 2 — GREETING + OVERVIEW + INVESTMENT     ║
-     ╚══════════════════════════════════════════════╝ -->
-<div style="page-break-before: always;">
-    <div class="banner" th:style="${headerImageUrl != null and !headerImageUrl.isEmpty()} ? |background-image:url(${headerImageUrl}); background-size:cover;| : ''">
-        <span class="banner-name serif" style="font-style: italic;" th:style="'color:' + ${brandColor} + ';'" th:text="${companyName}">Company</span>
+<!-- ============ PAGE 1 — COVER (full-page image, NO header/footer) ============ -->
+<div class="coverpage travel-bg">
+    <div class="cover-ov page-wash">
+        <div class="logo-box">
+            <img th:if="${companyLogoUrl != null and !companyLogoUrl.isEmpty()}" th:src="${companyLogoUrl}" />
+            <span class="nm" th:unless="${companyLogoUrl != null and !companyLogoUrl.isEmpty()}"
+                  th:style="'color:' + ${brandColor} + ';'" th:text="${companyName}">Company</span>
+        </div>
+        <div class="cover-frame glass">
+            <div class="cover-kicker">Travel Proposal</div>
+            <div class="cover-title" th:text="${q.title}">Package for Guest</div>
+            <div class="cover-dest" th:if="${customer != null and customer.destination != null}"
+                 th:text="${customer.destination}">DESTINATIONS</div>
+            <div class="cover-rule"></div>
+            <div class="cover-diam"></div>
+            <div class="svc-eyebrow">Services Include</div>
+            <div style="margin-top: 12px;">
+                <span th:if="${q.hotel != null and q.hotel.included}">
+                    <span class="svc-circle"><span class="i">H</span></span>
+                </span>
+                <span th:if="${q.sightseeing != null and q.sightseeing.included}">
+                    <span class="svc-circle"><span class="i">T</span></span>
+                </span>
+                <span th:if="${q.vehicle != null and q.vehicle.included}">
+                    <span class="svc-circle"><span class="i">V</span></span>
+                </span>
+                <div style="margin-top: 9px;">
+                    <span class="svc-label" th:if="${q.hotel != null and q.hotel.included}"
+                          style="margin: 0 23px;">Hotels</span>
+                    <span class="svc-label" th:if="${q.sightseeing != null and q.sightseeing.included}"
+                          style="margin: 0 23px;">Tours</span>
+                    <span class="svc-label" th:if="${q.vehicle != null and q.vehicle.included}"
+                          style="margin: 0 23px;">Transport</span>
+                </div>
+            </div>
+            <div class="cover-meta" th:if="${q.quoteNo != null or generatedOn != null}">
+                <span th:if="${q.quoteNo != null}"
+                      th:text="|Ref &#183; #${#numbers.formatInteger(q.quoteNo, 5)}|"></span>
+                <span th:if="${q.quoteNo != null and generatedOn != null}">&#160;&#160;|&#160;&#160;</span>
+                <span th:if="${generatedOn != null}" th:text="|Prepared on ${generatedOn}|"></span>
+            </div>
+            <table class="cover-cont">
+                <tr>
+                    <td><span class="k">Consultant:</span>
+                        <span th:text="${consultantName != null ? consultantName : companyName}">-</span></td>
+                    <td class="c"><span class="k">Phone:</span>
+                        <span th:text="${consultantPhone != null ? consultantPhone : companyPhone}">-</span></td>
+                    <td class="r"><span class="k">Email:</span>
+                        <span th:text="${consultantEmail != null ? consultantEmail : companyEmail}">-</span></td>
+                </tr>
+            </table>
+        </div>
     </div>
+</div>
 
-    <div class="c serif" style="font-style: italic; font-size: 13px; color: #475569; margin-bottom: 14px;"
+<!-- ============ PAGE 2 — GREETING + OVERVIEW + INVESTMENT ============ -->
+<!-- page:content → running header+footer appear here -->
+<div style="page: content; page-break-before: always; width:100%; padding-left:13mm; padding-right:13mm;">
+    <div class="c serif" style="font-style: italic; font-size: 13.5px; color: #475569; margin-bottom: 18px;"
          th:text="|A personalized travel experience exclusively designed for ${customer != null ? customer.name : 'you'}|">
-        A personalized travel experience
-    </div>
+        A personalized travel experience</div>
 
-    <!-- greeting -->
-    <div class="greet" th:style="'border-color:' + ${brandColor} + ';'">
-        <p th:text="|Dear ${customer != null ? customer.name : 'Guest'},|">Dear Guest,</p>
+    <div class="greet" th:style="'border-color:#2563eb;'">
+        <p class="hi" th:text="|Dear ${customer != null ? customer.name : 'Guest'},|">Dear Guest,</p>
         <p th:text="|Greetings from ${companyName}.|">Greetings.</p>
         <p>Our sales team has put together this quote for your upcoming trip. Please go through it and let us know if you
             need any changes in any of the services provided. You can reach out to us anytime using the contact details below.</p>
     </div>
 
-    <!-- trip overview -->
-    <div class="card card-top" th:style="'border-top-color:' + ${brandColor} + ';'">
-        <table class="cardhead">
-            <tr>
-                <td><span class="card-h">Trip Overview</span></td>
-                <td class="r" th:if="${q.quoteNo != null}">
-                    <span class="badge-dark" th:style="'background-color:' + ${brandColor} + ';'"
-                          th:text="|#${#numbers.formatInteger(q.quoteNo, 5)}|">#00000</span>
-                </td>
-            </tr>
-        </table>
-        <table class="ov">
-            <tr>
-                <td>
-                    <div class="lab" th:style="'color:' + ${brandColor} + ';'">Destination</div>
-                    <div class="val" th:text="${fmt.orElse(customer != null ? customer.destination : null, '-')}">-</div>
-                </td>
-                <td>
-                    <div class="lab" th:style="'color:' + ${brandColor} + ';'">Guest</div>
-                    <div class="val" th:text="${fmt.orElse(customer != null ? customer.name : null, '-')}">-</div>
-                </td>
-                <td>
-                    <div class="lab" th:style="'color:' + ${brandColor} + ';'">Duration</div>
-                    <div class="val" th:text="${q.nights != null and q.days != null} ? |${q.nights} Nights / ${q.days} Days| : (${q.days != null} ? |${q.days} Days| : '-')">-</div>
-                </td>
-            </tr>
-            <tr>
-                <td>
-                    <div class="lab" th:style="'color:' + ${brandColor} + ';'">Travel Date</div>
-                    <div class="val" th:text="${customer != null ? fmt.date(customer.travelDate) : '-'}">-</div>
-                </td>
-                <td>
-                    <div class="lab" th:style="'color:' + ${brandColor} + ';'">Travelers</div>
-                    <div class="val" th:text="${customer != null ? fmt.travellers(customer.adults, customer.children, customer.infants) : '-'}">-</div>
-                </td>
-                <td>
-                    <div class="lab" th:style="'color:' + ${brandColor} + ';'">Rooms</div>
-                    <div class="val" th:text="${q.rooms != null} ? |${q.rooms} Room(s)| : '-'">-</div>
-                </td>
-            </tr>
-        </table>
+    <div class="sec" style="margin-top: 20px; border-left-color:#2563eb;">
+        <div class="sec-eyebrow">Your Trip At A Glance</div>
+        <div class="sec-title" style="color:#2563eb;">Trip Overview</div>
     </div>
+    <table class="ovg">
+        <tr>
+            <td class="ovc"><div class="otile" style="border-left-color:#2563eb; background-color:#eef3ff;">
+                <div class="ot-lab" style="color:#2563eb;">Destination</div>
+                <div class="ot-val" th:text="${fmt.orElse(customer != null ? customer.destination : null, '-')}">-</div></div></td>
+            <td class="ovc"><div class="otile" style="border-left-color:#7c3aed; background-color:#f4efff;">
+                <div class="ot-lab" style="color:#7c3aed;">Guest</div>
+                <div class="ot-val" th:text="${fmt.orElse(customer != null ? customer.name : null, '-')}">-</div></div></td>
+            <td class="ovc"><div class="otile" style="border-left-color:#0d9488; background-color:#e7faf5;">
+                <div class="ot-lab" style="color:#0d9488;">Duration</div>
+                <div class="ot-val" th:text="${q.nights != null and q.days != null} ? |${q.nights} Nights / ${q.days} Days| : (${q.days != null} ? |${q.days} Days| : '-')">-</div></div></td>
+        </tr>
+        <tr>
+            <td class="ovc"><div class="otile" style="border-left-color:#ea580c; background-color:#fff3eb;">
+                <div class="ot-lab" style="color:#ea580c;">Travel Date</div>
+                <div class="ot-val" th:text="${customer != null ? fmt.date(customer.travelDate) : '-'}">-</div></div></td>
+            <td class="ovc"><div class="otile" style="border-left-color:#e11d48; background-color:#fdeef2;">
+                <div class="ot-lab" style="color:#e11d48;">Travelers</div>
+                <div class="ot-val" th:text="${customer != null ? fmt.travellers(customer.adults, customer.children, customer.infants) : '-'}">-</div></div></td>
+            <td class="ovc"><div class="otile" style="border-left-color:#0891b2; background-color:#e9fafe;">
+                <div class="ot-lab" style="color:#0891b2;">Rooms</div>
+                <div class="ot-val" th:text="${q.rooms != null} ? |${q.rooms} Room(s)| : '-'">-</div></div></td>
+        </tr>
+    </table>
 
-    <!-- investment summary -->
-    <div class="card card-top" th:style="'border-top-color:' + ${brandColor} + ';'">
-        <table class="cardhead">
+    <div class="sec" style="margin-top: 22px; border-left-color:#059669;">
+        <div class="sec-eyebrow">Pricing</div>
+        <div class="sec-title" style="color:#059669;">Investment Summary</div>
+    </div>
+    <div class="invhero" th:style="'background-color:' + ${brandColor} + ';'">
+        <div class="ih-top"></div>
+        <table class="ih-pad">
             <tr>
-                <td><span class="card-h">Investment Summary</span></td>
-                <td class="r"><span class="badge-dark" th:style="'background-color:' + ${brandColor} + ';'">INR</span></td>
-            </tr>
-        </table>
-        <table class="inv">
-            <tr>
-                <td class="inv-left">
-                    <div class="inv-per" th:if="${totals.perAdult != null and customer != null and customer.adults != null}">
-                        Per Adult (x<span th:text="${customer.adults}">1</span>) &#160; <b th:text="${fmt.inr(totals.perAdult)}">Rs. 0</b>
-                    </div>
-                    <div class="muted small" th:unless="${totals.perAdult != null}">Total package price for your group</div>
-                </td>
                 <td>
-                    <div class="inv-panel" th:style="'background-color:' + ${brandColor} + ';'">
-                        <div class="l">Total Package</div>
-                        <div class="a" th:text="${fmt.inr(totals.grandTotal)}">Rs. 0</div>
-                        <div class="s">Inclusive of all taxes</div>
+                    <div class="ih-lab">Total Package Cost</div>
+                    <div class="ih-amt" th:text="${fmt.inr(totals.grandTotal)}">Rs. 0</div>
+                    <div class="ih-sub">Inclusive of all applicable taxes</div>
+                </td>
+                <td class="r" th:if="${totals.perAdult != null and customer != null and customer.adults != null}">
+                    <div class="ih-chip">
+                        <div class="l">Per Adult &#160;(x<span th:text="${customer.adults}">1</span>)</div>
+                        <div class="v" th:text="${fmt.inr(totals.perAdult)}">Rs. 0</div>
                     </div>
                 </td>
             </tr>
@@ -393,16 +504,11 @@
     </div>
 </div>
 
-<!-- ╔══════════════════════════════════════════════╗
-     ║  FLIGHTS (only if included)                    ║
-     ╚══════════════════════════════════════════════╝ -->
-<div th:if="${q.flight != null and q.flight.included}" style="page-break-before: always;">
-    <div class="banner" th:style="${headerImageUrl != null and !headerImageUrl.isEmpty()} ? |background-image:url(${headerImageUrl}); background-size:cover;| : ''">
-        <span class="banner-name serif" style="font-style: italic;" th:style="'color:' + ${brandColor} + ';'" th:text="${companyName}">Company</span>
-    </div>
-    <div class="sec">
-        <div class="sec-title" th:style="'color:' + ${brandColor} + ';'" th:text="${fmt.orElse(q.flight.title, 'Flights')}">Flights</div>
-        <div class="sec-rule"></div>
+<!-- ============ FLIGHTS ============ -->
+<div th:if="${q.flight != null and q.flight.included}" style="page: content; page-break-before: always; width:100%; padding-left:13mm; padding-right:13mm;">
+    <div class="sec" style="border-left-color:#0891b2;">
+        <div class="sec-eyebrow">Your Journey</div>
+        <div class="sec-title" style="color:#0891b2;" th:text="${fmt.orElse(q.flight.title, 'Flights')}">Flights</div>
     </div>
     <table class="svc-card" th:each="seg : ${q.flight.segments}">
         <tr>
@@ -416,142 +522,136 @@
             <td class="lbl">Duration</td><td th:text="${seg.duration}"></td>
         </tr>
         <tr>
-            <td class="lbl">Departure</td><td><span th:text="${seg.depDate}"></span> <span th:text="${seg.depTime}"></span></td>
-            <td class="lbl">Arrival</td><td><span th:text="${seg.arrDate}"></span> <span th:text="${seg.arrTime}"></span></td>
+            <td class="lbl">Departure</td>
+            <td><span th:text="${seg.depDate}"></span> <span th:text="${seg.depTime}"></span></td>
+            <td class="lbl">Arrival</td>
+            <td><span th:text="${seg.arrDate}"></span> <span th:text="${seg.arrTime}"></span></td>
             <td class="lbl">Baggage</td>
             <td class="small">
-                <span th:if="${seg.cabin != null}" th:text="|Cabin ${seg.cabin}kg|"></span>
+                <span th:if="${seg.cabin != null}"   th:text="|Cabin ${seg.cabin}kg|"></span>
                 <span th:if="${seg.checkin != null}" th:text="| / Check-in ${seg.checkin}kg|"></span>
             </td>
         </tr>
     </table>
 </div>
 
-<!-- ╔══════════════════════════════════════════════╗
-     ║  HOTELS                                        ║
-     ╚══════════════════════════════════════════════╝ -->
-<div th:if="${q.hotel != null and q.hotel.included}" style="page-break-before: always;">
-    <div class="banner" th:style="${headerImageUrl != null and !headerImageUrl.isEmpty()} ? |background-image:url(${headerImageUrl}); background-size:cover;| : ''">
-        <span class="banner-name serif" style="font-style: italic;" th:style="'color:' + ${brandColor} + ';'" th:text="${companyName}">Company</span>
+<!-- ============ HOTELS ============ -->
+<div th:if="${q.hotel != null and q.hotel.included}" style="page: content; page-break-before: always; width:100%; padding-left:13mm; padding-right:13mm;">
+    <div class="sec" style="border-left-color:#7c3aed;">
+        <div class="sec-eyebrow">Where You'll Stay</div>
+        <div class="sec-title" style="color:#7c3aed;">Hotel Accommodations</div>
     </div>
-    <div class="sec">
-        <div class="sec-title" th:style="'color:' + ${brandColor} + ';'">Hotel Accommodations</div>
-        <div class="sec-rule"></div>
-    </div>
-
-    <table class="hotel" th:each="h : ${q.hotel.hotels}">
-        <tr>
-            <td class="h-img" th:if="${h.imageUrl != null and !h.imageUrl.isEmpty()}"><img th:src="${h.imageUrl}" /></td>
-            <td class="h-body">
-                <div class="h-name">
-                    <span th:text="${h.name}">Hotel</span>
-                    <span class="star" th:if="${h.stars != null and h.stars > 0}">
-                        <span th:each="s : ${#numbers.sequence(1, h.stars)}">&#9733;</span>
-                    </span>
-                    <span class="badge badge-ok" th:if="${h.refundable == null or h.refundable}">Refundable</span>
-                    <span class="badge badge-no" th:if="${h.refundable != null and !h.refundable}">Non-Refundable</span>
-                </div>
-                <span class="city-pill" th:style="'background-color:' + ${brandColor} + ';'" th:text="${h.city}">City</span>
-
-                <table class="h-grid">
-                    <tr>
-                        <td><div class="h-box"><div class="k">Check-In</div><div class="v" th:text="${h.checkIn}"></div></div></td>
-                        <td><div class="h-box"><div class="k">Check-Out</div><div class="v" th:text="${h.checkOut}"></div></div></td>
-                        <td><div class="h-box"><div class="k">Room Type</div><div class="v" th:text="${h.roomType}"></div></div></td>
-                        <td><div class="h-box"><div class="k">Meal Plan</div><div class="v" th:text="${h.mealPlan}"></div></div></td>
-                    </tr>
-                </table>
-            </td>
-        </tr>
-    </table>
-</div>
-
-<!-- ╔══════════════════════════════════════════════╗
-     ║  DAY-WISE ITINERARY  (one day per page)        ║
-     ╚══════════════════════════════════════════════╝ -->
-<div th:if="${q.sightseeing != null and q.sightseeing.included}">
-    <div th:each="day,iter : ${q.sightseeing.days}"
-         th:style="${iter.first} ? '' : 'page-break-before: always;'">
-
-        <div class="banner" th:style="${headerImageUrl != null and !headerImageUrl.isEmpty()} ? |background-image:url(${headerImageUrl}); background-size:cover;| : ''">
-            <span class="banner-name serif" style="font-style: italic;" th:style="'color:' + ${brandColor} + ';'" th:text="${companyName}">Company</span>
-        </div>
-
-        <div class="sec" th:if="${iter.first}">
-            <div class="sec-title" th:style="'color:' + ${brandColor} + ';'" th:text="${fmt.orElse(q.sightseeing.title, 'Day Wise Itinerary')}">Day Wise Itinerary</div>
-            <div class="sec-rule"></div>
-        </div>
-
-        <!-- top day card -->
-        <table class="day-card">
+    <div class="hotel" th:each="h,hs : ${q.hotel.hotels}"
+         th:style="'border-left: 4px solid ' + ${acc[hs.index % 6]} + ';'">
+        <span class="h-ribbon" th:style="'background-color:' + ${acc[hs.index % 6]} + ';'"
+              th:text="|Stay ${hs.count}|">Stay 1</span>
+        <table>
             <tr>
-                <td>
-                    <table class="day-meta">
+                <td class="h-img" th:if="${h.imagePath != null and !h.imagePath.isEmpty()}">
+                    <img th:src="${h.imagePath}" /></td>
+                <td class="h-body">
+                    <div class="h-name">
+                        <span th:text="${h.name}">Hotel</span>
+                        <span class="star" th:if="${h.stars != null and h.stars > 0}">
+                            <span th:each="s : ${#numbers.sequence(1, h.stars)}">&#9733;</span></span>
+                        <span class="badge badge-ok" th:if="${h.refundable == null or h.refundable}">Refundable</span>
+                        <span class="badge badge-no" th:if="${h.refundable != null and !h.refundable}">Non-Refundable</span>
+                    </div>
+                    <span class="city-pill" th:style="'background-color:' + ${acc[hs.index % 6]} + ';'"
+                          th:text="${h.city}">City</span>
+                    <table class="h-grid">
                         <tr>
-                            <td style="width: 64px;">
-                                <div class="day-num-l">Day</div>
-                                <div class="day-num" th:style="'color:' + ${brandColor} + ';'"
-                                     th:text="${day.day != null and day.day < 10} ? |0${day.day}| : ${day.day}">01</div>
-                            </td>
-                            <td class="day-div"></td>
-                            <td style="padding-left: 14px;">
-                                <div class="day-title" th:text="${day.day != null} ? |Day ${day.day} Itinerary| : 'Itinerary'">Title</div>
-                                <div class="day-date" th:if="${day.date != null and !day.date.isEmpty()}" th:text="${day.date}">Date</div>
-                            </td>
+                            <td><div class="h-box" th:style="'background-color:' + ${accSoft[hs.index % 6]} + ';'">
+                                <div class="k">Check-In</div><div class="v" th:text="${h.checkIn}"></div></div></td>
+                            <td><div class="h-box" th:style="'background-color:' + ${accSoft[hs.index % 6]} + ';'">
+                                <div class="k">Check-Out</div><div class="v" th:text="${h.checkOut}"></div></div></td>
+                            <td><div class="h-box" th:style="'background-color:' + ${accSoft[hs.index % 6]} + ';'">
+                                <div class="k">Room Type</div><div class="v" th:text="${h.roomType}"></div></div></td>
+                            <td><div class="h-box" th:style="'background-color:' + ${accSoft[hs.index % 6]} + ';'">
+                                <div class="k">Meal Plan</div><div class="v" th:text="${h.mealPlan}"></div></div></td>
                         </tr>
                     </table>
                 </td>
             </tr>
         </table>
+    </div>
+</div>
 
-        <!-- activities timeline -->
-        <div class="day-desc" th:style="'border-color:' + ${brandColor} + ';'">
-            <div th:each="act : ${day.activities}" style="margin-bottom: 12px;">
+<!-- ============ DAY-WISE ITINERARY ============ -->
+<div th:if="${q.sightseeing != null and q.sightseeing.included}" style="page: content; page-break-before: always; width:100%; padding-left:13mm; padding-right:13mm;">
+    <div class="sec" style="border-left-color:#0d9488;">
+        <div class="sec-eyebrow">Plan For Each Day</div>
+        <div class="sec-title" style="color:#0d9488;"
+             th:text="${fmt.orElse(q.sightseeing.title, 'Day Wise Itinerary')}">Day Wise Itinerary</div>
+    </div>
+    <div class="day-block" th:each="day,iter : ${q.sightseeing.days}">
+        <table class="day-card" th:style="'border-left: 4px solid ' + ${acc[iter.index % 6]} + ';'">
+            <tr><td>
+                <table class="day-meta">
+                    <tr>
+                        <td style="width: 70px;">
+                            <div class="day-disc" th:style="'background-color:' + ${acc[iter.index % 6]} + ';'">
+                                <span class="n"
+                                      th:text="${day.day != null and day.day < 10} ? |0${day.day}| : ${day.day}">01</span>
+                            </div>
+                        </td>
+                        <td class="day-div"></td>
+                        <td style="padding-left: 15px;">
+                            <div class="day-klab">Day</div>
+                            <div class="day-title"
+                                 th:text="${day.day != null} ? |Day ${day.day} Itinerary| : 'Itinerary'">Title</div>
+                            <div class="day-date"
+                                 th:if="${day.date != null and !day.date.isEmpty()}" th:text="${day.date}">Date</div>
+                        </td>
+                    </tr>
+                </table>
+            </td></tr>
+        </table>
+        <div class="day-desc" th:style="'border-color:' + ${acc[iter.index % 6]} + ';'">
+            <div th:each="act : ${day.activities}" style="margin-bottom: 11px;">
                 <div>
-                    <span class="tl-dot" th:style="'border-color:' + ${brandColor} + ';'"></span>
+                    <span class="tl-dot" th:style="'border-color:' + ${acc[iter.index % 6]} + ';'"></span>
                     <span class="tl-place" th:text="${act.attraction}">Attraction</span>
-                    <span class="small muted" th:if="${act.startTime != null and !act.startTime.isEmpty()}" th:text="|&#160;&#183;&#160;${act.startTime}|"></span>
+                    <span class="small muted"
+                          th:if="${act.startTime != null and !act.startTime.isEmpty()}"
+                          th:text="|&#160;&#183;&#160;${act.startTime}|"></span>
                 </div>
-                <div class="tl-line" th:if="${act.description != null and !act.description.isEmpty()}"
+                <div class="tl-line"
+                     th:if="${act.description != null and !act.description.isEmpty()}"
                      th:text="${fmt.plain(act.description)}">Description</div>
                 <div class="day-info" th:if="${act.meals != null and !act.meals.isEmpty()}">
                     <span class="lab">Meals</span>
                     <span th:each="m : ${act.meals}">
-                        <span class="mdot" th:style="${#strings.containsIgnoreCase(m,'breakfast')} ? 'background-color:#f59e0b;' : 'background-color:' + ${brandColor} + ';'"></span><span th:text="${m}"></span>
+                        <span class="mdot"
+                              th:style="${#strings.containsIgnoreCase(m,'breakfast')} ? 'background-color:#f59e0b;' : 'background-color:' + ${acc[iter.index % 6]} + ';'"></span>
+                        <span th:text="${m}"></span>
                     </span>
                 </div>
                 <div th:if="${act.transfer != null and !act.transfer.isEmpty()}">
-                    <span class="tpill" th:text="${act.transfer}">Transfer</span>
+                    <span class="tpill"
+                          th:style="'background-color:' + ${accSoft[iter.index % 6]} + '; color:' + ${acc[iter.index % 6]} + ';'"
+                          th:text="${act.transfer}">Transfer</span>
                 </div>
             </div>
         </div>
     </div>
 </div>
 
-<!-- ╔══════════════════════════════════════════════╗
-     ║  TRAVEL SERVICES  (vehicle / cruise / add-ons) ║
-     ╚══════════════════════════════════════════════╝ -->
+<!-- ============ TRAVEL SERVICES ============ -->
 <div th:if="${(q.vehicle != null and q.vehicle.included) or (q.cruise != null and q.cruise.included) or (q.addons != null and q.addons.included)}"
-     style="page-break-before: always;">
-    <div class="banner" th:style="${headerImageUrl != null and !headerImageUrl.isEmpty()} ? |background-image:url(${headerImageUrl}); background-size:cover;| : ''">
-        <span class="banner-name serif" style="font-style: italic;" th:style="'color:' + ${brandColor} + ';'" th:text="${companyName}">Company</span>
+     style="page: content; page-break-before: always; width:100%; padding-left:13mm; padding-right:13mm;">
+    <div class="sec" style="border-left-color:#ea580c;">
+        <div class="sec-eyebrow">Getting Around &amp; Extras</div>
+        <div class="sec-title" style="color:#ea580c;">Travel Services</div>
     </div>
-    <div class="sec">
-        <div class="sec-title" th:style="'color:' + ${brandColor} + ';'">Travel Services</div>
-        <div class="sec-rule"></div>
-    </div>
-
-    <!-- vehicles -->
-    <table class="veh-card" th:if="${q.vehicle != null and q.vehicle.included}" th:each="v : ${q.vehicle.vehicles}">
+    <table class="veh-card" th:if="${q.vehicle != null and q.vehicle.included}"
+           th:each="v : ${q.vehicle.vehicles}" style="border-left:4px solid #ea580c;">
+        <tr><td style="padding: 0;">
+            <span class="veh-ribbon" style="background-color:#ea580c;">Vehicle</span></td></tr>
         <tr>
-            <td style="padding: 0;">
-                <span class="veh-ribbon" th:style="'background-color:' + ${brandColor} + ';'">VEHICLE</span>
-            </td>
-        </tr>
-        <tr>
-            <td style="padding: 12px 14px; vertical-align: middle;">
+            <td style="padding: 12px 15px 14px 15px; vertical-align: middle;">
                 <div class="veh-name" th:text="${v.type}">Vehicle</div>
-                <table style="margin-top: 8px;">
+                <table style="margin-top: 9px;">
                     <tr>
                         <td class="lbl">Pickup</td><td class="small" th:text="${fmt.orElse(v.pickup,'-')}"></td>
                         <td class="lbl">Drop</td><td class="small" th:text="${fmt.orElse(v.drop,'-')}"></td>
@@ -561,16 +661,17 @@
                         <td class="lbl">End</td><td class="small" th:text="${fmt.orElse(v.endDate,'-')}"></td>
                     </tr>
                     <tr th:if="${v.qty != null or (v.notes != null and !v.notes.isEmpty())}">
-                        <td class="lbl">Qty</td><td class="small" th:text="${v.qty != null} ? ${v.qty} : '-'"></td>
-                        <td class="lbl">Notes</td><td class="small" th:text="${fmt.orElse(v.notes,'-')}"></td>
+                        <td class="lbl">Qty</td>
+                        <td class="small" th:text="${v.qty != null} ? ${v.qty} : '-'"></td>
+                        <td class="lbl">Notes</td>
+                        <td class="small" th:text="${fmt.orElse(v.notes,'-')}"></td>
                     </tr>
                 </table>
             </td>
         </tr>
     </table>
-
-    <!-- cruise -->
-    <table class="svc-card" th:if="${q.cruise != null and q.cruise.included}" th:each="c : ${q.cruise.cruises}">
+    <table class="svc-card" th:if="${q.cruise != null and q.cruise.included}"
+           th:each="c : ${q.cruise.cruises}" style="border-left:4px solid #0891b2;">
         <tr>
             <td class="lbl">Cruise</td><td th:text="${c.name}"></td>
             <td class="lbl">Cabin</td><td th:text="${c.cabin}"></td>
@@ -582,10 +683,9 @@
             <td class="lbl">Departure</td><td th:text="${c.depDate}"></td>
         </tr>
     </table>
-
-    <!-- add-ons -->
-    <table class="svc-card" th:if="${q.addons != null and q.addons.included}">
-        <tr style="border-bottom: 1px solid #e8edf3;">
+    <table class="svc-card" th:if="${q.addons != null and q.addons.included}"
+           style="border-left:4px solid #7c3aed;">
+        <tr style="border-bottom: 1px solid #eef1f6;">
             <td class="lbl">Service</td><td class="lbl">Description</td><td class="lbl r">Qty</td>
         </tr>
         <tr th:each="a : ${q.addons.items}">
@@ -596,129 +696,128 @@
     </table>
 </div>
 
-<!-- ╔══════════════════════════════════════════════╗
-     ║  POLICIES (inclusions / exclusions)            ║
-     ╚══════════════════════════════════════════════╝ -->
+<!-- ============ POLICIES ============ -->
 <div th:if="${(q.inclusions != null and !q.inclusions.isEmpty()) or (q.exclusions != null and !q.exclusions.isEmpty())}"
-     style="page-break-before: always;">
-    <div class="banner" th:style="${headerImageUrl != null and !headerImageUrl.isEmpty()} ? |background-image:url(${headerImageUrl}); background-size:cover;| : ''">
-        <span class="banner-name serif" style="font-style: italic;" th:style="'color:' + ${brandColor} + ';'" th:text="${companyName}">Company</span>
-    </div>
-    <div class="sec">
+     style="page: content; page-break-before: always; width:100%; padding-left:13mm; padding-right:13mm;">
+    <div class="sec" style="border-left-color:#0f172a;">
+        <div class="sec-eyebrow">Good To Know</div>
         <div class="sec-title" th:style="'color:' + ${brandColor} + ';'">Policies</div>
-        <div class="sec-rule"></div>
     </div>
-
-    <div class="pol pol-in" th:if="${q.inclusions != null and !q.inclusions.isEmpty()}">
-        <table class="pol-head bg-in">
-            <tr><td>
-                <span class="pol-num" style="background-color: #16a34a;"><span class="i">1</span></span>
-                <span class="pol-title green">INCLUSIONS</span>
-            </td></tr>
+    <table class="pol-2col">
+        <tr>
+            <td th:if="${q.inclusions != null and !q.inclusions.isEmpty()}"
+                th:style="${q.exclusions != null and !q.exclusions.isEmpty()} ? 'width:50%; padding-right:8px;' : 'width:100%;'">
+                <div class="pol pol-in">
+                    <table class="pol-head bg-in">
+                        <tr>
+                            <td><span class="pol-chip" style="background-color:#16a34a;">
+                                <span class="i">&#10003;</span></span>
+                                <span class="pol-title green">Inclusions</span></td>
+                            <td class="r"><span class="pol-count chip-in"
+                                                th:text="|${#lists.size(q.inclusions)}|">0</span></td>
+                        </tr>
+                    </table>
+                    <div class="pol-body">
+                        <div class="pol-line" th:each="inc : ${q.inclusions}">
+                            <span class="pol-dot green">&#9679;</span><span th:text="${inc}"></span></div>
+                    </div>
+                </div>
+            </td>
+            <td th:if="${q.exclusions != null and !q.exclusions.isEmpty()}"
+                th:style="${q.inclusions != null and !q.inclusions.isEmpty()} ? 'width:50%; padding-left:8px;' : 'width:100%;'">
+                <div class="pol pol-ex">
+                    <table class="pol-head bg-ex">
+                        <tr>
+                            <td><span class="pol-chip" style="background-color:#dc2626;">
+                                <span class="i">&#10007;</span></span>
+                                <span class="pol-title red">Exclusions</span></td>
+                            <td class="r"><span class="pol-count chip-ex"
+                                                th:text="|${#lists.size(q.exclusions)}|">0</span></td>
+                        </tr>
+                    </table>
+                    <div class="pol-body">
+                        <div class="pol-line" th:each="exc : ${q.exclusions}">
+                            <span class="pol-dot red">&#9679;</span><span th:text="${exc}"></span></div>
+                    </div>
+                </div>
+            </td>
+        </tr>
+    </table>
+    <div class="pol" style="border: 1px solid #eef1f6;"
+         th:if="${q.paymentPolicies != null and !q.paymentPolicies.isEmpty()}">
+        <table class="pol-head" style="background-color: #f4f7fb;">
+            <tr><td><span class="pol-title" th:style="'color:' + ${brandColor} + ';'">Payment Policy</span></td></tr>
         </table>
         <div class="pol-body">
-            <div class="pol-line" th:each="inc : ${q.inclusions}" th:text="${inc}"></div>
+            <div class="pol-line" th:each="p : ${q.paymentPolicies}">
+                <span class="pol-dot" th:style="'color:' + ${brandColor} + ';'">&#9679;</span>
+                <span th:text="${p}"></span></div>
         </div>
     </div>
-
-    <div class="pol pol-ex" th:if="${q.exclusions != null and !q.exclusions.isEmpty()}">
-        <table class="pol-head bg-ex">
-            <tr><td>
-                <span class="pol-num" style="background-color: #dc2626;"><span class="i">2</span></span>
-                <span class="pol-title red">EXCLUSIONS</span>
-            </td></tr>
+    <div class="pol" style="border: 1px solid #eef1f6;"
+         th:if="${q.cancellationPolicies != null and !q.cancellationPolicies.isEmpty()}">
+        <table class="pol-head" style="background-color: #f4f7fb;">
+            <tr><td><span class="pol-title" th:style="'color:' + ${brandColor} + ';'">Cancellation Policy</span></td></tr>
         </table>
         <div class="pol-body">
-            <div class="pol-line" th:each="exc : ${q.exclusions}" th:text="${exc}"></div>
+            <div class="pol-line" th:each="p : ${q.cancellationPolicies}">
+                <span class="pol-dot" th:style="'color:' + ${brandColor} + ';'">&#9679;</span>
+                <span th:text="${p}"></span></div>
         </div>
-    </div>
-
-    <!-- optional: payment / cancellation / booking terms in the same style -->
-    <div class="pol" style="border: 1px solid #e2e8f0;" th:if="${q.paymentPolicies != null and !q.paymentPolicies.isEmpty()}">
-        <table class="pol-head" style="background-color: #f4f7fb;">
-            <tr><td><span class="pol-title" th:style="'color:' + ${brandColor} + ';'">PAYMENT POLICY</span></td></tr>
-        </table>
-        <div class="pol-body"><div class="pol-line" th:each="p : ${q.paymentPolicies}" th:text="${p}"></div></div>
-    </div>
-    <div class="pol" style="border: 1px solid #e2e8f0;" th:if="${q.cancellationPolicies != null and !q.cancellationPolicies.isEmpty()}">
-        <table class="pol-head" style="background-color: #f4f7fb;">
-            <tr><td><span class="pol-title" th:style="'color:' + ${brandColor} + ';'">CANCELLATION POLICY</span></td></tr>
-        </table>
-        <div class="pol-body"><div class="pol-line" th:each="p : ${q.cancellationPolicies}" th:text="${p}"></div></div>
     </div>
 </div>
 
-<!-- ╔══════════════════════════════════════════════╗
-     ║  THANK YOU  (dark, full bleed)                 ║
-     ╚══════════════════════════════════════════════╝ -->
-<div class="typage" style="page-break-before: always;">
-    <div class="ty-wrap" th:style="'background-color:' + ${brandColor} + ';'">
-        <div class="ty-rule"></div>
-        <div class="ty-big">THANK YOU</div>
-        <div class="ty-sub serif" style="font-style: italic;">for choosing us as your travel partner</div>
-        <div class="ty-diam"></div>
-        <div class="ty-msg"
-             th:text="|Dear ${customer != null ? customer.name : 'Guest'}, we truly appreciate your trust in us. Our team is committed to crafting an unforgettable travel experience for you. Should you have any questions, feel free to reach out anytime.|">
-            Thank you message
+<!-- ============ THANK YOU (full-page image, NO header/footer) ============ -->
+<div class="typage travel-bg" style="page-break-before: always;">
+    <div class="ty-ov page-wash">
+        <div class="ty-frame glass">
+            <div class="ty-kicker">With Gratitude</div>
+            <div class="ty-rule"></div>
+            <div class="ty-big">THANK YOU</div>
+            <div class="ty-sub serif" style="font-style: italic;">for choosing us as your travel partner</div>
+            <div class="ty-diam"></div>
+            <div class="ty-msg"
+                 th:text="|Dear ${customer != null ? customer.name : 'Guest'}, we truly appreciate your trust in us. Our team is committed to crafting an unforgettable travel experience for you. Should you have any questions, feel free to reach out anytime.|">
+                Thank you message</div>
+            <table class="ty-cards">
+                <tr>
+                    <td><div class="ty-c" style="border-color: #3d8fc7;">
+                        <span class="ico" style="color: #3d8fc7;">&#9742;</span>
+                        <div class="lab" style="color: #7fb2d9;">Call Us</div>
+                        <div class="val" th:text="${fmt.orElse(companyPhone,'-')}">-</div></div></td>
+                    <td><div class="ty-c" style="border-color: #3d8fc7;">
+                        <span class="ico" style="color: #3d8fc7;">&#9990;</span>
+                        <div class="lab" style="color: #7fb2d9;">WhatsApp</div>
+                        <div class="val" th:text="${companyWhatsapp != null ? companyWhatsapp : companyPhone}">-</div></div></td>
+                </tr>
+                <tr>
+                    <td><div class="ty-c" style="border-color: #3d8fc7;">
+                        <span class="ico" style="color: #3d8fc7;">&#9993;</span>
+                        <div class="lab" style="color: #7fb2d9;">Email Us</div>
+                        <div class="val" th:text="${fmt.orElse(companyEmail,'-')}">-</div></div></td>
+                    <td><div class="ty-c" style="border-color: #3d8fc7;">
+                        <span class="ico" style="color: #3d8fc7;">&#8984;</span>
+                        <div class="lab" style="color: #7fb2d9;">Visit Us</div>
+                        <div class="val" th:text="${fmt.orElse(companyWebsite,'-')}">-</div></div></td>
+                </tr>
+            </table>
+            <div class="ty-addr"
+                 th:if="${companyAddress != null and !companyAddress.isEmpty()}"
+                 th:text="${companyAddress}">Address</div>
+            <table class="ty-stats">
+                <tr>
+                    <td><div class="n" th:text="${companyGoogleReviews != null ? companyGoogleReviews : '—'}">—</div>
+                        <div class="l">Google Reviews</div></td>
+                    <td><div class="n" th:text="${companyYearsExperience != null} ? |${companyYearsExperience}+| : '—'">—</div>
+                        <div class="l">Years Experience</div></td>
+                    <td><div class="n">GST</div>
+                        <div class="l" th:text="${companyGst != null ? companyGst : 'Registered Company'}">Registered</div></td>
+                </tr>
+            </table>
+            <div class="ty-foot-rule"></div>
+            <div class="ty-foot-name" th:text="${companyName}">Company</div>
+            <div class="ty-foot-sub" th:text="${fmt.orElse(companyTagline, 'Your Trusted Travel Partner')}">Tagline</div>
         </div>
-
-        <table class="ty-cards">
-            <tr>
-                <td>
-                    <div class="ty-c" style="border-color: #3b82f6;">
-                        <span class="ico" style="color: #3b82f6;">&#9742;</span>
-                        <div class="lab" style="color: #3b82f6;">Call Us</div>
-                        <div class="val" th:text="${fmt.orElse(companyPhone,'-')}">-</div>
-                    </div>
-                </td>
-                <td>
-                    <div class="ty-c" style="border-color: #22c55e;">
-                        <span class="ico" style="color: #22c55e;">&#9990;</span>
-                        <div class="lab" style="color: #22c55e;">WhatsApp</div>
-                        <div class="val" th:text="${companyWhatsapp != null ? companyWhatsapp : companyPhone}">-</div>
-                    </div>
-                </td>
-            </tr>
-            <tr>
-                <td>
-                    <div class="ty-c" style="border-color: #ef4444;">
-                        <span class="ico" style="color: #ef4444;">&#9993;</span>
-                        <div class="lab" style="color: #ef4444;">Email Us</div>
-                        <div class="val" th:text="${fmt.orElse(companyEmail,'-')}">-</div>
-                    </div>
-                </td>
-                <td>
-                    <div class="ty-c" style="border-color: #a855f7;">
-                        <span class="ico" style="color: #a855f7;">&#8984;</span>
-                        <div class="lab" style="color: #a855f7;">Visit Us</div>
-                        <div class="val" th:text="${fmt.orElse(companyWebsite,'-')}">-</div>
-                    </div>
-                </td>
-            </tr>
-        </table>
-
-        <div class="ty-addr" th:if="${companyAddress != null and !companyAddress.isEmpty()}" th:text="${companyAddress}">Address</div>
-
-        <table class="ty-stats">
-            <tr>
-                <td>
-                    <div class="n" th:text="${companyGoogleReviews != null ? companyGoogleReviews : '—'}">—</div>
-                    <div class="l">Google Reviews</div>
-                </td>
-                <td>
-                    <div class="n" th:text="${companyYearsExperience != null} ? |${companyYearsExperience}+| : '—'">—</div>
-                    <div class="l">Years Experience</div>
-                </td>
-                <td>
-                    <div class="n">GST</div>
-                    <div class="l" th:text="${companyGst != null ? companyGst : 'Registered Company'}">Registered</div>
-                </td>
-            </tr>
-        </table>
-
-        <div class="ty-foot-rule"></div>
-        <div class="ty-foot-name" th:text="${companyName}">Company</div>
-        <div class="ty-foot-sub" th:text="${fmt.orElse(companyTagline, 'Your Trusted Travel Partner')}">Tagline</div>
     </div>
 </div>
 

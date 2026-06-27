@@ -30,7 +30,7 @@ public class CityDto {
     String state;
     Double latitude;
     Double longitude;
-    String imageUrl;
+    String imagePath;
     Integer daysToStay;
 
     LocalDateTime createdAt;

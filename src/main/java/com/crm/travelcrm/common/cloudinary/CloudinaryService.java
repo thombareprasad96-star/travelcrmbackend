@@ -76,15 +76,15 @@ public class CloudinaryService {
      * e.g. "https://res.cloudinary.com/demo/image/upload/v123/destinations/goa.jpg"
      *   → "destinations/goa"
      */
-    public String extractPublicId(String imageUrl) {
-        if (imageUrl == null || imageUrl.isBlank()) {
+    public String extractPublicId(String imagePath) {
+        if (imagePath == null || imagePath.isBlank()) {
             return null;
         }
-        int uploadIndex = imageUrl.indexOf("/upload/");
+        int uploadIndex = imagePath.indexOf("/upload/");
         if (uploadIndex == -1) {
-            return imageUrl;
+            return imagePath;
         }
-        String afterUpload = imageUrl.substring(uploadIndex + 8);
+        String afterUpload = imagePath.substring(uploadIndex + 8);
         // strip optional version segment (v1234567/)
         afterUpload = afterUpload.replaceFirst("^v\\d+/", "");
         // strip file extension

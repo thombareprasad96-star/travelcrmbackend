@@ -38,7 +38,7 @@ public class UpdateCityRequest {
     private Double longitude;
 
     @Size(max = 500, message = "Image URL must not exceed 500 characters")
-    private String imageUrl;
+    private String imagePath;
 
     @Positive(message = "Days to stay must be greater than 0")
     private Integer daysToStay;

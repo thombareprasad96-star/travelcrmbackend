@@ -137,7 +137,7 @@ public class QuotationMapper {
                         .stars(hi.getStars())
                         .pricePerRoom(hi.getPricePerRoom())
                         .rooms(hi.getRooms())
-                        .imageUrl(hi.getImageUrl())
+                        .imagePath(hi.getImagePath())
                         .build());
             }
         }
@@ -169,7 +169,7 @@ public class QuotationMapper {
                                 .startTime(a.getStartTime())
                                 .description(a.getDescription())
                                 .transfer(a.getTransfer())
-                                .imageUrl(a.getImageUrl())
+                                .imagePath(a.getImagePath())
                                 .build();
                         if (a.getMeals() != null) act.getMeals().addAll(a.getMeals());
                         day.addActivity(act);
@@ -404,7 +404,7 @@ public class QuotationMapper {
                 .stars(h.getStars())
                 .pricePerRoom(h.getPricePerRoom())
                 .rooms(h.getRooms())
-                .imageUrl(h.getImageUrl())
+                .imagePath(h.getImagePath())
                 .build();
     }
 
@@ -425,7 +425,7 @@ public class QuotationMapper {
                 .description(a.getDescription())
                 .meals(new ArrayList<>(a.getMeals()))
                 .transfer(a.getTransfer())
-                .imageUrl(a.getImageUrl())
+                .imagePath(a.getImagePath())
                 .build();
     }
 

@@ -50,5 +50,5 @@ public class QuotationSightseeingActivity extends BaseEntity {
 
     /** Optional activity image (Cloudinary URL) rendered in the PDF when present. */
     @Column(name = "image_url", length = 500)
-    private String imageUrl;
+    private String imagePath;
 }
