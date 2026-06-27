@@ -45,6 +45,10 @@ public interface LeadRepository extends JpaRepository<Lead, Long> {
     Optional<Lead> findByPublicIdAndTenantIdAndDeletedAtIsNull(
             UUID publicId, Long tenantId);
 
+    /** Batch fetch by internal ids — read-only, used by the Follow-up Report to enrich
+     *  reminders with their lead's stage / temperature / travel date without an N+1. */
+    List<Lead> findByTenantIdAndIdInAndDeletedAtIsNull(Long tenantId, Collection<Long> ids);
+
     // ── Search ───────────────────────────────────────────────────────────────
     @EntityGraph(attributePaths = "assignedUser")
     Optional<Lead> findByEmailAndTenantIdAndDeletedAtIsNull(

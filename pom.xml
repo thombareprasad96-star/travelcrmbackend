@@ -70,6 +70,18 @@
 				<optional>true</optional>
 			</dependency>
 
+			<!-- ===================================================== -->
+			<!-- SPRING AI BOM (Disha assistant)                        -->
+			<!-- 1.1.x is the line aligned with Spring Boot 3.5.x.      -->
+			<!-- ===================================================== -->
+			<dependency>
+				<groupId>org.springframework.ai</groupId>
+				<artifactId>spring-ai-bom</artifactId>
+				<version>1.1.8</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+
 		</dependencies>
 	</dependencyManagement>
 
@@ -418,6 +430,41 @@
 			<groupId>ognl</groupId>
 			<artifactId>ognl</artifactId>
 			<version>3.3.4</version>
+		</dependency>
+
+		<!-- ===================================================== -->
+		<!-- SPRING AI — Disha internal assistant                   -->
+		<!-- Ollama chat+embeddings (Step A/B) and PgVectorStore    -->
+		<!-- (Step B). Version managed by spring-ai-bom above.      -->
+		<!-- Logback excluded to keep Log4j2 the sole provider.     -->
+		<!-- ===================================================== -->
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-model-ollama</artifactId>
+			<exclusions>
+				<exclusion>
+					<groupId>org.springframework.boot</groupId>
+					<artifactId>spring-boot-starter-logging</artifactId>
+				</exclusion>
+				<exclusion>
+					<groupId>ch.qos.logback</groupId>
+					<artifactId>logback-classic</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-vector-store-pgvector</artifactId>
+			<exclusions>
+				<exclusion>
+					<groupId>org.springframework.boot</groupId>
+					<artifactId>spring-boot-starter-logging</artifactId>
+				</exclusion>
+				<exclusion>
+					<groupId>ch.qos.logback</groupId>
+					<artifactId>logback-classic</artifactId>
+				</exclusion>
+			</exclusions>
 		</dependency>
 
 	</dependencies>

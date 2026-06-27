@@ -17,6 +17,33 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/sightseeings")
 @RequiredArgsConstructor
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 public class SightseeingController {
 
     private final SightseeingService sightseeingService;

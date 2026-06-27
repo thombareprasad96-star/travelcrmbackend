@@ -9,11 +9,15 @@ import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 public interface ReminderRepository
         extends JpaRepository<Reminder, Long>, JpaSpecificationExecutor<Reminder> {
 
     Optional<Reminder> findByIdAndTenantIdAndDeletedAtIsNull(Long id, Long tenantId);
+
+    /** External-id lookup used by the Follow-up Report's complete / bulk-complete actions. */
+    Optional<Reminder> findByPublicIdAndTenantIdAndDeletedAtIsNull(UUID publicId, Long tenantId);
 
     List<Reminder> findByTenantIdAndLeadNameIgnoreCaseAndDeletedAtIsNullOrderByDueDateAsc(
             Long tenantId, String leadName);

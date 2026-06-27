@@ -7,6 +7,8 @@ import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.auth.repository.SuperAdminRepository;
 import com.crm.travelcrm.auth.repository.UserRepository;
 import com.crm.travelcrm.auth.security.JwtUtil;
+import com.crm.travelcrm.activity.audit.ActivityLogRecorder;
+import com.crm.travelcrm.activity.entity.ActivityAction;
 import com.crm.travelcrm.common.entity.SuperAdmin;
 import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.EmailAlreadyExistsException;
@@ -32,6 +34,7 @@ public class AuthServiceImpl implements AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtUtil jwtUtil;
     private final StaffIpService staffIpService;
+    private final ActivityLogRecorder activityLogRecorder;
 
     // ------------------------------------------------------------------ register
 
@@ -127,6 +130,14 @@ public class AuthServiceImpl implements AuthService {
 
         // Capture the staff member's IP into the tenant's "home IP" set — best-effort, never blocks login.
         staffIpService.recordStaffIp(user.getTenantId(), clientIp);
+
+        // Audit trail — best-effort; a logging failure must never block a valid login.
+        activityLogRecorder.safeRecord(
+                ActivityAction.Login,
+                "User logged in from IP: " + clientIp,
+                user.getId(), user.getName(), user.getEmail(),
+                ActivityLogRecorder.labelFor(user.getRole()),
+                user.getTenantId(), clientIp, null);
 
         return new LoginResponseDTO(
                 user.getName(),
