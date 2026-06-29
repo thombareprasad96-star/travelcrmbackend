@@ -66,10 +66,16 @@ public class QuotationServiceImpl implements QuotationService {
     @Transactional
     public QuotationResponseDto create(QuotationRequestDto request) {
         Long tenantId = currentTenantId();
+        log.debug("create() | tenantId={} | leadPublicId={} | title='{}' | requestedStage={}",
+                tenantId, request.getLeadId(), request.getTitle(), request.getQuotationStage());
 
         Quotation q = new Quotation();
         q.setTenantId(tenantId);
         quotationMapper.applyRequest(request, q);
+        log.debug("Mapped request -> sections: flightIncluded={} segments={} | hotels={} | sightseeingDays={} | cruises={} | vehicles={} | addons={} | inclusions={} exclusions={}",
+                q.getFlightIncluded(), q.getFlightSegments().size(), q.getHotels().size(),
+                q.getSightseeingDays().size(), q.getCruises().size(), q.getVehicles().size(),
+                q.getAddons().size(), q.getInclusions().size(), q.getExclusions().size());
 
         // Per-lead auto versioning: the Nth live quotation for a lead becomes vN.0
         // (1st → v1.0, 2nd → v2.0, …). Sorted latest-first, so the newest version is on top.
@@ -78,15 +84,23 @@ public class QuotationServiceImpl implements QuotationService {
             long existing = quotationRepository
                     .countByLeadPublicIdAndTenantIdAndDeletedAtIsNull(request.getLeadId(), tenantId);
             versionNumber = (int) existing + 1;
+            log.debug("Lead {} already has {} live quotation(s) -> assigning version v{}.0",
+                    request.getLeadId(), existing, versionNumber);
         }
         q.setVersionNumber(versionNumber);
         q.setVersion("v" + versionNumber + ".0");
 
         q.setQuoteNo((int) (quotationRepository.countByTenantIdAndParentQuotationIdIsNull(tenantId) + 1));
+        log.debug("Assigned quoteNo={} | version={}", q.getQuoteNo(), q.getVersion());
         linkLeadAndSnapshot(q, request.getLeadId());
 
         Quotation saved = quotationRepository.save(q);
         log.info("Quotation created | publicId: {} | tenantId: {}", saved.getPublicId(), tenantId);
+        if (log.isDebugEnabled()) {
+            log.debug("Persisted quotation {} | quoteNo={} | version={} | grandTotal={}",
+                    saved.getPublicId(), saved.getQuoteNo(), saved.getVersion(),
+                    quotationMapper.computeTotals(saved).getGrandTotal());
+        }
         return quotationMapper.toResponse(saved);
     }
 
@@ -96,6 +110,8 @@ public class QuotationServiceImpl implements QuotationService {
     @Transactional
     public QuotationResponseDto update(UUID publicId, QuotationRequestDto request) {
         Long tenantId = currentTenantId();
+        log.debug("update() | publicId={} | tenantId={} | newLeadPublicId={} | title='{}'",
+                publicId, tenantId, request.getLeadId(), request.getTitle());
 
         Quotation q = quotationRepository
                 .findByPublicIdAndTenantIdAndDeletedAtIsNull(publicId, tenantId)
@@ -104,6 +120,9 @@ public class QuotationServiceImpl implements QuotationService {
         quotationMapper.applyRequest(request, q);
         // Content changed — drop the cached PDF so the next GET /pdf regenerates it.
         q.setPdfUrl(null);
+        log.debug("Re-mapped quotation {} | pdfUrl cleared (will re-render on next /pdf) | sections: hotels={} segments={} sightseeingDays={} cruises={} vehicles={} addons={}",
+                publicId, q.getHotels().size(), q.getFlightSegments().size(), q.getSightseeingDays().size(),
+                q.getCruises().size(), q.getVehicles().size(), q.getAddons().size());
         // Re-link the lead only if the client sent one (keeps the existing snapshot otherwise)
         if (request.getLeadId() != null) {
             linkLeadAndSnapshot(q, request.getLeadId());
@@ -111,6 +130,10 @@ public class QuotationServiceImpl implements QuotationService {
 
         Quotation saved = quotationRepository.save(q);
         log.info("Quotation updated | publicId: {} | tenantId: {}", publicId, tenantId);
+        if (log.isDebugEnabled()) {
+            log.debug("Quotation {} updated | version={} | grandTotal={}",
+                    publicId, saved.getVersion(), quotationMapper.computeTotals(saved).getGrandTotal());
+        }
         return quotationMapper.toResponse(saved);
     }
 
@@ -127,6 +150,8 @@ public class QuotationServiceImpl implements QuotationService {
     public Page<QuotationSummaryDto> search(String keyword, QuotationStage stage, UUID leadId,
                                             int page, int size, String sortBy, String sortDir) {
         Long tenantId = currentTenantId();
+        log.debug("search() | tenantId={} | keyword='{}' | stage={} | leadId={} | page={} size={} sort={} {}",
+                tenantId, keyword, stage, leadId, page, size, sortBy, sortDir);
 
         Sort sort = sortDir.equalsIgnoreCase("asc")
                 ? Sort.by(sortBy).ascending()
@@ -137,7 +162,11 @@ public class QuotationServiceImpl implements QuotationService {
                 .and(QuotationSpecification.search(keyword))
                 .and(QuotationSpecification.filter(stage, leadId, null, null));
 
-        return quotationRepository.findAll(spec, pageable).map(quotationMapper::toSummary);
+        Page<QuotationSummaryDto> result =
+                quotationRepository.findAll(spec, pageable).map(quotationMapper::toSummary);
+        log.debug("search() -> {} row(s) on page {} of {} (total {})",
+                result.getNumberOfElements(), page, result.getTotalPages(), result.getTotalElements());
+        return result;
     }
 
     @Override
@@ -190,6 +219,7 @@ public class QuotationServiceImpl implements QuotationService {
     @Override
     @Transactional
     public void delete(UUID publicId) {
+        log.debug("delete() | publicId={}", publicId);
         Quotation q = loadOwned(publicId);
         q.softDelete(currentUserEmail());
         quotationRepository.save(q);
@@ -201,6 +231,7 @@ public class QuotationServiceImpl implements QuotationService {
     @Override
     @Transactional
     public QuotationResponseDto updateStage(UUID publicId, QuotationStage stage) {
+        log.debug("updateStage() | publicId={} -> {}", publicId, stage);
         Quotation q = loadOwned(publicId);
         q.setStage(stage);
         Quotation saved = quotationRepository.save(q);
@@ -213,6 +244,7 @@ public class QuotationServiceImpl implements QuotationService {
     @Override
     @Transactional
     public QuotationResponseDto duplicate(UUID publicId) {
+        log.debug("duplicate() | source publicId={}", publicId);
         Long tenantId = currentTenantId();
         Quotation copy = buildNextVersion(loadOwned(publicId), tenantId);
         Quotation saved = quotationRepository.save(copy);
@@ -225,6 +257,7 @@ public class QuotationServiceImpl implements QuotationService {
     @Override
     @Transactional
     public QuotationResponseDto newVersion(UUID publicId) {
+        log.debug("newVersion() | source publicId={}", publicId);
         Long tenantId = currentTenantId();
         Quotation copy = buildNextVersion(loadOwned(publicId), tenantId);
         Quotation saved = quotationRepository.save(copy);
@@ -250,6 +283,7 @@ public class QuotationServiceImpl implements QuotationService {
     @Override
     @Transactional(readOnly = true)
     public byte[] generatePdf(UUID publicId) {
+        log.debug("generatePdf() | publicId={}", publicId);
         QuotationResponseDto dto = quotationMapper.toResponse(loadOwned(publicId));
         return quotationPdfService.render(dto);
     }
@@ -259,21 +293,26 @@ public class QuotationServiceImpl implements QuotationService {
     public QuotationPdfResource getPdf(UUID publicId) {
         Quotation q = loadOwned(publicId);
         if (StringUtils.hasText(q.getPdfUrl())) {
+            log.debug("getPdf({}) -> serving cached Cloudinary PDF: {}", publicId, q.getPdfUrl());
             return QuotationPdfResource.remote(q.getPdfUrl());
         }
+        log.debug("getPdf({}) -> no cached URL, rendering PDF inline", publicId);
         return QuotationPdfResource.inline(quotationPdfService.render(quotationMapper.toResponse(q)));
     }
 
     @Override
     @Transactional(readOnly = true)
     public QuotationPdfResource getPublicPdf(UUID publicId) {
+        log.debug("getPublicPdf() | publicId={} (public share link)", publicId);
         // Capability-URL access: no auth / no tenant context. Lookup is by the globally-unique
         // publicId only. Read-only — never mutates and never exposes anything but this one PDF.
         Quotation q = quotationRepository.findByPublicIdAndDeletedAtIsNull(publicId)
                 .orElseThrow(() -> new ResourceNotFoundException("Quotation not found: " + publicId));
         if (StringUtils.hasText(q.getPdfUrl())) {
+            log.debug("getPublicPdf({}) -> serving cached Cloudinary PDF: {}", publicId, q.getPdfUrl());
             return QuotationPdfResource.remote(q.getPdfUrl());
         }
+        log.debug("getPublicPdf({}) -> no cached URL, rendering PDF inline", publicId);
         return QuotationPdfResource.inline(quotationPdfService.render(quotationMapper.toResponse(q)));
     }
 
@@ -295,8 +334,12 @@ public class QuotationServiceImpl implements QuotationService {
     @Override
     @Transactional(readOnly = true)
     public void sendEmail(UUID publicId, QuotationEmailRequestDto request) {
+        log.debug("sendEmail() | publicId={} | to={} | customSubject={} | customMessage={}",
+                publicId, request.getToEmail(), StringUtils.hasText(request.getSubject()),
+                StringUtils.hasText(request.getMessage()));
         QuotationResponseDto dto = quotationMapper.toResponse(loadOwned(publicId));
         byte[] pdf = quotationPdfService.render(dto);
+        log.debug("Rendered quotation {} PDF ({} bytes); dispatching email", publicId, pdf.length);
 
         String subject = StringUtils.hasText(request.getSubject())
                 ? request.getSubject()
@@ -356,6 +399,7 @@ public class QuotationServiceImpl implements QuotationService {
      */
     private void linkLeadAndSnapshot(Quotation q, UUID leadPublicId) {
         if (leadPublicId == null) {
+            log.debug("linkLeadAndSnapshot: no leadId on request — skipping lead snapshot");
             return;
         }
         // Resolve through the central guard so the Lead module's tenant + row-level scope is
@@ -373,6 +417,9 @@ public class QuotationServiceImpl implements QuotationService {
         q.setInfants(lead.getInfants());
         q.setTravelDate(lead.getTravelDate());
         q.setDestination(resolveDestination(lead));
+        log.debug("Snapshotted lead {} -> customer='{}' | destination='{}' | pax(a/c/i)={}/{}/{} | travelDate={} | leadStage={}",
+                lead.getPublicId(), q.getCustomerName(), q.getDestination(),
+                q.getAdults(), q.getChildren(), q.getInfants(), q.getTravelDate(), q.getLeadStage());
     }
 
     private String resolveDestination(Lead lead) {
@@ -398,6 +445,8 @@ public class QuotationServiceImpl implements QuotationService {
     private Quotation buildNextVersion(Quotation src, Long tenantId) {
         Long rootId = src.getParentQuotationId() != null ? src.getParentQuotationId() : src.getId();
         int nextVersion = quotationRepository.findMaxVersionInFamily(rootId, tenantId) + 1;
+        log.debug("buildNextVersion | source id={} | familyRootId={} | nextVersion=v{}.0",
+                src.getId(), rootId, nextVersion);
 
         Quotation copy = copyForDuplicate(src, "v" + nextVersion + ".0");
         copy.setTenantId(tenantId);
@@ -411,8 +460,13 @@ public class QuotationServiceImpl implements QuotationService {
     private String generateAndStorePdf(Quotation q) {
         byte[] pdf = quotationPdfService.render(quotationMapper.toResponse(q));
         String quotationNo = q.getPublicId().toString();
-        return cloudinaryService.uploadRaw(pdf, "quotations/" + quotationNo + ".pdf");
+        log.debug("Uploading quotation {} PDF to Cloudinary ({} bytes) at quotations/{}.pdf",
+                q.getPublicId(), pdf.length, quotationNo);
+        String url = cloudinaryService.uploadRaw(pdf, "quotations/" + quotationNo + ".pdf");
+        log.debug("Uploaded quotation {} PDF -> {}", q.getPublicId(), url);
+        return url;
     }
+
 
     /** Deep-copies a quotation (sans id/publicId/audit) for the duplicate / new-version features. */
     private Quotation copyForDuplicate(Quotation src, String newVersion) {
