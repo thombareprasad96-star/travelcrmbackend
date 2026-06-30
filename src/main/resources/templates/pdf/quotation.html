@@ -8,7 +8,7 @@
       >>> COLORFUL EDITION  +  FULL-PAGE IMAGE cover/thank-you
           + RUNNING HEADER & FOOTER on content pages only <<<
 
-      HEADER  : banner image (headerImageUrl) with logo left / company center
+      HEADER  : banner image (headerimagePath) with logo left / company center
                 → appears on ALL content pages, NOT on cover & thank-you
       FOOTER  : 3-column strip
                 Left   = CONTACT       (phone · whatsapp · email)
@@ -32,7 +32,7 @@
         brandColor, companyName, companyTagline, companyLogoUrl
         companyPhone, companyEmail, companyWebsite, companyAddress
         companyWhatsapp, companyGst, companyGoogleReviews, companyYearsExperience
-        generatedOn, headerImageUrl
+        generatedOn, headerimagePath
         consultantName/Phone/Email
         fmt.{date,orElse,travellers,inr,plain}
         q / customer / totals  (unchanged)
@@ -75,7 +75,7 @@
         /* ---- [C] CONTENT pages (page2, flights, hotels, itinerary, services, policies) ---- */
         @page content {
             size: A4;
-            margin-top: 28mm;       /* <-- HEADER space (header 22mm + ~6mm gap). content niche karne ko BADHAO */
+            margin-top: 24mm;       /* <-- HEADER height ke BARABAR (24mm). isse upar white space nahi aata */
             margin-right: 0mm;      /* <-- 0 = header/footer RIGHT edge tak FULL WIDTH */
             margin-bottom: 24mm;    /* <-- FOOTER space (footer 20mm + ~4mm gap). content upar karne ko BADHAO */
             margin-left: 0mm;       /* <-- 0 = header/footer LEFT edge tak FULL WIDTH */
@@ -124,12 +124,12 @@
         /* >>> change picture / path HERE — one place <<< */
         /* FIX: background-size 100% 100% = image EXACTLY fills page edge-to-edge (no white strip).
            (cover/contain shift the image and leave a right/left gap in Flying Saucer)            */
-        .travel-bg { background-image: url('file:///C:/travelcrmbackend/src/main/resources/templates/pdf/banner.png');
+        .travel-bg { background-image: url('file:///C:/travelcrmbackend/src/main/resources/templates/pdf/travel.png');
             background-size: 100% 100%;                  /* <-- exact fill, no gap. (cover -> strip) */
             background-position: center;
             background-repeat: no-repeat;
             background-color: #0b2540; }                 /* fallback color if image missing */
-        .page-wash { height: 297mm; background-color: rgba(11,30,52,0.42); }  /* dark wash so text readable on photo */
+        .page-wash { height: 297mm; background-color: rgba(0,0,0,0); }  /* NO wash -> image ka REAL color dikhega (transparent) */
         .glass     { background-color: rgba(0,0,0,0); border-radius: 6px; }
 
         /* ============ RUNNING HEADER (content pages only) ============ */
@@ -137,7 +137,9 @@
         .page-header {
             position: running(pageHeader);
             width: 210mm;          /* <-- A4 full width (edge-to-edge header). page width = 210mm */
+            height: 24mm;          /* <-- header height = @page content margin-top (no white space above) */
             display: block;
+            margin: 0; padding: 0;
         }
 
         /* ============ RUNNING FOOTER (content pages only) ============ */
@@ -162,24 +164,24 @@
 
         /* ============ COVER ============ */
         .coverpage   { page: cover; width: 210mm; }   /* explicit full width -> image no left-shift */
-        .cover-ov    { width: 210mm; height: 297mm; text-align: center; padding-top: 50mm; }
+        .cover-ov    { width: 210mm; height: 297mm; text-align: center; padding-top: 42mm; }
         .logo-box    { display: inline-block; background-color: #ffffff; border-radius: 13px; padding: 12px 19px; }
         .logo-box img{ height: 50px; }
         .logo-box .nm{ font-size: 22px; font-weight: bold; letter-spacing: 0.4px; color: #0b2540; }
-        .cover-frame { border: 0; margin: 20px 13mm 0 13mm; padding: 24px 9mm 22px 9mm; }
-        .cover-kicker{ font-size: 9px; font-weight: bold; letter-spacing: 5px; color: rgba(255,255,255,0.92); text-transform: uppercase; }
-        .cover-title { font-size: 33px; font-weight: bold; color: #ffffff; margin-top: 10px; letter-spacing: 0.3px; line-height: 1.15; }
-        .cover-dest  { font-size: 11px; color: rgba(255,255,255,0.92); letter-spacing: 3px; text-transform: uppercase; margin-top: 11px; }
-        .cover-rule  { width: 64px; height: 3px; background-color: #3d8fc7; margin: 15px auto 0 auto; }
-        .cover-diam  { width: 8px; height: 8px; background-color: #3d8fc7; margin: -4px auto 0 auto; }
-        .svc-eyebrow { font-size: 8.5px; color: rgba(255,255,255,0.92); letter-spacing: 3.5px; margin-top: 22px; text-transform: uppercase; }
-        .svc-circle  { display: inline-block; width: 52px; height: 52px; border-radius: 26px; text-align: center; margin: 0 13px; background-color: rgba(61,143,199,0.25); border: 2px solid #3d8fc7; }
-        .svc-circle .i { font-size: 19px; font-weight: bold; color: #ffffff; line-height: 52px; }
-        .svc-label   { font-size: 8.5px; font-weight: bold; color: #ffffff; letter-spacing: 1px; text-transform: uppercase; }
-        .cover-meta  { font-size: 9px; color: rgba(255,255,255,0.9); letter-spacing: 1px; margin-top: 20px; }
-        .cover-cont  { width: 100%; margin-top: 18px; padding-top: 13px; border-top: 1px solid rgba(255,255,255,0.25); }
-        .cover-cont td{ color: #ffffff; font-size: 9px; letter-spacing: 0.4px; }
-        .cover-cont .k{ color: rgba(255,255,255,0.75); }
+        .cover-frame { width: 150mm; margin: 22px auto 0 auto; background-color: rgba(255,255,255,0.82); border-radius: 18px; padding: 26px 9mm 24px 9mm; border: 1px solid rgba(255,255,255,0.9); }   /* frosted card -> real image around, text readable inside */
+        .cover-kicker{ font-size: 9px; font-weight: bold; letter-spacing: 5px; color: #2563eb; text-transform: uppercase; }
+        .cover-title { font-size: 31px; font-weight: bold; color: #0f172a; margin-top: 10px; letter-spacing: 0.3px; line-height: 1.15; }
+        .cover-dest  { font-size: 11px; color: #475569; letter-spacing: 3px; text-transform: uppercase; margin-top: 11px; }
+        .cover-rule  { width: 64px; height: 3px; background-color: #2563eb; margin: 15px auto 0 auto; }
+        .cover-diam  { width: 8px; height: 8px; background-color: #2563eb; margin: -4px auto 0 auto; }
+        .svc-eyebrow { font-size: 8.5px; color: #64748b; letter-spacing: 3.5px; margin-top: 20px; text-transform: uppercase; }
+        .svc-circle  { display: inline-block; width: 50px; height: 50px; border-radius: 25px; text-align: center; margin: 0 12px; background-color: #eef3ff; border: 2px solid #2563eb; }
+        .svc-circle .i { font-size: 18px; font-weight: bold; color: #2563eb; line-height: 48px; }
+        .svc-label   { font-size: 8.5px; font-weight: bold; color: #0f172a; letter-spacing: 1px; text-transform: uppercase; }
+        .cover-meta  { font-size: 9px; color: #64748b; letter-spacing: 1px; margin-top: 18px; }
+        .cover-cont  { width: 100%; margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(15,23,42,0.12); }
+        .cover-cont td{ color: #0f172a; font-size: 9px; letter-spacing: 0.4px; }
+        .cover-cont .k{ color: #64748b; }
 
         /* ============ SECTION HEADINGS ============ */
         .sec        { border-left: 4px solid #f59e0b; padding: 2px 0 2px 15px; margin-bottom: 16px; }
@@ -241,6 +243,10 @@
         .tl-dot    { display: inline-block; width: 12px; height: 12px; border-radius: 6px; border: 2px solid; background-color: #ffffff; margin-right: 8px; }
         .tl-place  { font-size: 12.5px; font-weight: bold; color: #0f172a; }
         .tl-line   { font-size: 10px; color: #475569; margin-top: 4px; }
+        .act-row   { width: 100%; margin-bottom: 12px; }
+        .act-row td { vertical-align: top; }
+        .act-img   { width: 112px; padding-right: 12px; }
+        .act-img img { width: 100px; height: 75px; border-radius: 9px; }
         .day-info  { font-size: 9.5px; margin-top: 6px; }
         .day-info .lab { font-weight: bold; color: #334155; letter-spacing: 0.3px; }
         .mdot { display: inline-block; width: 7px; height: 7px; border-radius: 4px; margin: 0 5px 0 8px; }
@@ -253,6 +259,8 @@
         .veh-card { border: 1px solid #eef1f6; border-radius: 14px; margin-top: 13px; page-break-inside: avoid; overflow: hidden; }
         .veh-ribbon { display: inline-block; padding: 5px 15px; border-radius: 0 0 12px 0; color: #ffffff; font-size: 8px; font-weight: bold; letter-spacing: 1px; text-transform: uppercase; }
         .veh-name { font-size: 15.5px; font-weight: bold; color: #0f172a; }
+        .veh-img   { width: 158px; padding: 11px 0 11px 15px; vertical-align: top; }
+        .veh-img img { width: 136px; height: 98px; border-radius: 10px; }
 
         /* ============ POLICIES ============ */
         .pol-2col { margin-top: 15px; }
@@ -273,32 +281,39 @@
         .green { color: #15803d; } .red { color: #be123c; }
         .chip-in { background-color: #cdf2db; color: #15803d; }
         .chip-ex { background-color: #fbd9de; color: #be123c; }
+        .pol-pay  { border: 1px solid #bfdbfe; } .bg-pay  { background-color: #eff6ff; }
+        .pol-can  { border: 1px solid #fed7aa; } .bg-can  { background-color: #fff7ed; }
+        .pol-book { border: 1px solid #ddd6fe; } .bg-book { background-color: #f5f3ff; }
+        .blue { color: #1d4ed8; } .orange { color: #c2410c; } .violet { color: #6d28d9; }
+        .chip-pay { background-color: #dbeafe; color: #1d4ed8; }
+        .chip-can { background-color: #ffedd5; color: #c2410c; }
+        .chip-book{ background-color: #ede9fe; color: #6d28d9; }
 
         /* ============ THANK YOU ============ */
         .typage   { page: thankyou; width: 210mm; }   /* explicit full width -> image no left-shift */
-        .ty-ov    { width: 210mm; height: 297mm; padding: 14mm 14mm; }
-        .ty-frame { width: 100%; border: 0; height: 264mm; padding: 12mm 11mm; }
-        .ty-kicker { font-size: 9.5px; font-weight: bold; letter-spacing: 5px; color: rgba(255,255,255,0.92); text-transform: uppercase; text-align: center; }
-        .ty-rule { width: 116px; height: 3px; background-color: #3d8fc7; margin: 14px auto 0 auto; border-radius: 2px; }
-        .ty-big  { font-size: 48px; font-weight: bold; color: #ffffff; text-align: center; letter-spacing: 3px; margin-top: 22px; }
-        .ty-sub  { font-size: 13.5px; color: rgba(255,255,255,0.92); text-align: center; margin-top: 5px; }
-        .ty-diam { width: 9px; height: 9px; background-color: #3d8fc7; margin: 18px auto; }
-        .ty-msg  { font-size: 10.5px; color: rgba(255,255,255,0.92); text-align: center; margin: 0 6mm; line-height: 1.7; }
+        .ty-ov    { width: 210mm; height: 297mm; padding: 22mm 14mm; }
+        .ty-frame { width: 160mm; margin: 0 auto; background-color: rgba(255,255,255,0.82); border-radius: 18px; border: 1px solid rgba(255,255,255,0.9); padding: 14mm 11mm; }   /* frosted card */
+        .ty-kicker { font-size: 9.5px; font-weight: bold; letter-spacing: 5px; color: #2563eb; text-transform: uppercase; text-align: center; }
+        .ty-rule { width: 116px; height: 3px; background-color: #2563eb; margin: 14px auto 0 auto; border-radius: 2px; }
+        .ty-big  { font-size: 44px; font-weight: bold; color: #0f172a; text-align: center; letter-spacing: 3px; margin-top: 20px; }
+        .ty-sub  { font-size: 13.5px; color: #475569; text-align: center; margin-top: 5px; }
+        .ty-diam { width: 9px; height: 9px; background-color: #2563eb; margin: 16px auto; }
+        .ty-msg  { font-size: 10.5px; color: #334155; text-align: center; margin: 0 4mm; line-height: 1.7; }
         .ty-cards { width: 100%; margin-top: 24px; }
         .ty-cards td { padding: 7px; width: 50%; }
-        .ty-c { border-radius: 11px; padding: 13px 16px; border-left: 4px solid #3d8fc7; background-color: rgba(61,143,199,0.18); }
+        .ty-c { border-radius: 11px; padding: 12px 15px; border-left: 4px solid #2563eb; background-color: #f4f7fb; }
         .ty-c .ico { font-size: 16px; }
         .ty-c .lab { font-size: 8px; font-weight: bold; letter-spacing: 1px; text-transform: uppercase; }
-        .ty-c .val { font-size: 11.5px; color: #ffffff; margin-top: 3px; }
-        .ty-addr { text-align: center; color: rgba(255,255,255,0.9); font-size: 9.5px; margin-top: 18px; letter-spacing: 0.4px; }
-        .ty-stats { width: 100%; border: 1.5px solid #3d8fc7; border-radius: 14px; margin-top: 20px; background-color: rgba(61,143,199,0.15); }
-        .ty-stats td { padding: 16px 10px; text-align: center; width: 33%; border-right: 1px solid rgba(255,255,255,0.35); }
+        .ty-c .val { font-size: 11.5px; color: #0f172a; margin-top: 3px; }
+        .ty-addr { text-align: center; color: #64748b; font-size: 9.5px; margin-top: 16px; letter-spacing: 0.4px; }
+        .ty-stats { width: 100%; border: 1.5px solid #dbe5f1; border-radius: 14px; margin-top: 18px; background-color: #f4f7fb; }
+        .ty-stats td { padding: 15px 10px; text-align: center; width: 33%; border-right: 1px solid #dbe5f1; }
         .ty-stats td:last-child { border-right: none; }
-        .ty-stats .n { font-size: 23px; font-weight: bold; color: #ffffff; }
-        .ty-stats .l { font-size: 8.5px; color: rgba(255,255,255,0.85); margin-top: 4px; letter-spacing: 0.4px; }
-        .ty-foot-rule { width: 100%; height: 2px; background-color: #3d8fc7; margin: 22px 0 13px 0; }
-        .ty-foot-name { font-size: 14.5px; font-weight: bold; color: #ffffff; text-align: center; letter-spacing: 2px; }
-        .ty-foot-sub  { font-size: 9px; color: rgba(255,255,255,0.8); text-align: center; margin-top: 3px; letter-spacing: 0.5px; }
+        .ty-stats .n { font-size: 22px; font-weight: bold; color: #2563eb; }
+        .ty-stats .l { font-size: 8.5px; color: #64748b; margin-top: 4px; letter-spacing: 0.4px; }
+        .ty-foot-rule { width: 100%; height: 2px; background-color: #dbe5f1; margin: 20px 0 13px 0; }
+        .ty-foot-name { font-size: 14.5px; font-weight: bold; color: #0f172a; text-align: center; letter-spacing: 2px; }
+        .ty-foot-sub  { font-size: 9px; color: #64748b; text-align: center; margin-top: 3px; letter-spacing: 0.5px; }
     </style>
 </head>
 <body th:with="acc=${ {'#2563eb','#0d9488','#7c3aed','#ea580c','#e11d48','#0891b2'} },accSoft=${ {'#eef3ff','#e7faf5','#f4efff','#fff3eb','#fdeef2','#e9fafe'} }">
@@ -308,37 +323,11 @@
      Appears ONLY on @page content via @top-center{element(pageHeader)}
      NOT on cover (@page cover) or thank-you (@page thankyou)
      ============================================================ -->
-<div class="page-header" style="width:210mm; display:block;">
-    <table style="width:210mm; height:22mm; table-layout:fixed; border-collapse:collapse;"
-           th:style="'background-image:url(file:///C:/travelcrmbackend/src/main/resources/templates/pdf/banner.png); background-size:cover; background-position:center; width:210mm; height:22mm; table-layout:fixed; border-collapse:collapse;'">
-        <tr style="height:22mm;">
-            <!-- LEFT: logo or company name (white text on image) -->
-            <td style="width:22%; vertical-align:middle; padding:0 5mm 0 13mm; height:22mm;">
-                <img th:if="${companyLogoUrl != null and !companyLogoUrl.isEmpty()}" th:src="${companyLogoUrl}" style="height:34px;" />
-                <span th:unless="${companyLogoUrl != null and !companyLogoUrl.isEmpty()}"
-                      style="font-size:13px; font-weight:bold; color:#ffffff; letter-spacing:0.5px;"
-                      th:text="${companyName}">Company</span>
-            </td>
-            <!-- CENTER: company name + tagline (white text on image) -->
-            <td style="width:56%; vertical-align:middle; padding:0 5mm; height:22mm; text-align:center;">
-                <div style="font-size:11px; font-weight:bold; color:#ffffff; letter-spacing:3px;"
-                     th:text="${companyName}">Company Name</div>
-                <div style="font-size:7.5px; color:rgba(255,255,255,0.9); margin-top:2px; letter-spacing:1px;"
-                     th:text="${fmt.orElse(companyTagline,'Your Trusted Travel Partner')}">Tagline</div>
-            </td>
-            <!-- RIGHT: quote ref + date (white text on image) -->
-            <td style="width:22%; vertical-align:middle; padding:0 13mm 0 5mm; height:22mm; text-align:right;">
-                <div style="font-size:7.5px; color:#ffffff; letter-spacing:0.5px;"
-                     th:if="${q.quoteNo != null}"
-                     th:text="|Ref #${#numbers.formatInteger(q.quoteNo,5)}|">Ref</div>
-                <div style="font-size:7px; color:rgba(255,255,255,0.85); margin-top:2px;"
-                     th:if="${generatedOn != null}"
-                     th:text="${generatedOn}">Date</div>
-            </td>
-        </tr>
-        <!-- blue accent line -->
-        <tr>
-            <td colspan="3" style="height:3px; background-color:#225b95; padding:0;"></td>
+<div class="page-header" style="width:210mm; height:24mm; display:block; margin:0; padding:0;">
+    <table style="width:210mm; height:24mm; border-collapse:collapse; margin:0; padding:0;">
+        <tr style="height:24mm;">
+            <td style="height:24mm; padding:0; margin:0;"
+                th:style="'background-image:url(file:///C:/travelcrmbackend/src/main/resources/templates/pdf/banner.png); background-size:100% 100%; background-position:center; background-repeat:no-repeat; height:24mm; padding:0; margin:0;'">&#160;</td>
         </tr>
     </table>
 </div>
@@ -386,8 +375,8 @@
 <div class="coverpage travel-bg">
     <div class="cover-ov page-wash">
         <div class="logo-box">
-            <img th:if="${companyLogoUrl != null and !companyLogoUrl.isEmpty()}" th:src="${companyLogoUrl}" />
-            <span class="nm" th:unless="${companyLogoUrl != null and !companyLogoUrl.isEmpty()}"
+            <img th:if="${!#strings.isEmpty(companyLogoUrl)}" th:src="${companyLogoUrl}" />
+            <span class="nm" th:unless="${!#strings.isEmpty(companyLogoUrl)}"
                   th:style="'color:' + ${brandColor} + ';'" th:text="${companyName}">Company</span>
         </div>
         <div class="cover-frame glass">
@@ -547,7 +536,7 @@
               th:text="|Stay ${hs.count}|">Stay 1</span>
         <table>
             <tr>
-                <td class="h-img" th:if="${h.imagePath != null and !h.imagePath.isEmpty()}">
+                <td class="h-img" th:if="${!#strings.isEmpty(h.imagePath)}">
                     <img th:src="${h.imagePath}" /></td>
                 <td class="h-body">
                     <div class="h-name">
@@ -601,38 +590,44 @@
                             <div class="day-title"
                                  th:text="${day.day != null} ? |Day ${day.day} Itinerary| : 'Itinerary'">Title</div>
                             <div class="day-date"
-                                 th:if="${day.date != null and !day.date.isEmpty()}" th:text="${day.date}">Date</div>
+                                 th:if="${!#strings.isEmpty(day.date)}" th:text="${day.date}">Date</div>
                         </td>
                     </tr>
                 </table>
             </td></tr>
         </table>
         <div class="day-desc" th:style="'border-color:' + ${acc[iter.index % 6]} + ';'">
-            <div th:each="act : ${day.activities}" style="margin-bottom: 11px;">
-                <div>
-                    <span class="tl-dot" th:style="'border-color:' + ${acc[iter.index % 6]} + ';'"></span>
-                    <span class="tl-place" th:text="${act.attraction}">Attraction</span>
-                    <span class="small muted"
-                          th:if="${act.startTime != null and !act.startTime.isEmpty()}"
-                          th:text="|&#160;&#183;&#160;${act.startTime}|"></span>
-                </div>
-                <div class="tl-line"
-                     th:if="${act.description != null and !act.description.isEmpty()}"
-                     th:text="${fmt.plain(act.description)}">Description</div>
-                <div class="day-info" th:if="${act.meals != null and !act.meals.isEmpty()}">
-                    <span class="lab">Meals</span>
-                    <span th:each="m : ${act.meals}">
-                        <span class="mdot"
-                              th:style="${#strings.containsIgnoreCase(m,'breakfast')} ? 'background-color:#f59e0b;' : 'background-color:' + ${acc[iter.index % 6]} + ';'"></span>
-                        <span th:text="${m}"></span>
-                    </span>
-                </div>
-                <div th:if="${act.transfer != null and !act.transfer.isEmpty()}">
-                    <span class="tpill"
-                          th:style="'background-color:' + ${accSoft[iter.index % 6]} + '; color:' + ${acc[iter.index % 6]} + ';'"
-                          th:text="${act.transfer}">Transfer</span>
-                </div>
-            </div>
+            <table class="act-row" th:each="act : ${day.activities}">
+                <tr>
+                    <td class="act-img" th:if="${!#strings.isEmpty(act.imagePath)}">
+                        <img th:src="${act.imagePath}" /></td>
+                    <td>
+                        <div>
+                            <span class="tl-dot" th:style="'border-color:' + ${acc[iter.index % 6]} + ';'"></span>
+                            <span class="tl-place" th:text="${act.attraction}">Attraction</span>
+                            <span class="small muted"
+                                  th:if="${!#strings.isEmpty(act.startTime)}"
+                                  th:text="|&#160;&#183;&#160;${act.startTime}|"></span>
+                        </div>
+                        <div class="tl-line"
+                             th:if="${!#strings.isEmpty(act.description)}"
+                             th:text="${fmt.plain(act.description)}">Description</div>
+                        <div class="day-info" th:if="${!#lists.isEmpty(act.meals)}">
+                            <span class="lab">Meals</span>
+                            <span th:each="m : ${act.meals}">
+                                <span class="mdot"
+                                      th:style="${#strings.containsIgnoreCase(m,'breakfast')} ? 'background-color:#f59e0b;' : 'background-color:' + ${acc[iter.index % 6]} + ';'"></span>
+                                <span th:text="${m}"></span>
+                            </span>
+                        </div>
+                        <div th:if="${!#strings.isEmpty(act.transfer)}">
+                            <span class="tpill"
+                                  th:style="'background-color:' + ${accSoft[iter.index % 6]} + '; color:' + ${acc[iter.index % 6]} + ';'"
+                                  th:text="${act.transfer}">Transfer</span>
+                        </div>
+                    </td>
+                </tr>
+            </table>
         </div>
     </div>
 </div>
@@ -646,9 +641,11 @@
     </div>
     <table class="veh-card" th:if="${q.vehicle != null and q.vehicle.included}"
            th:each="v : ${q.vehicle.vehicles}" style="border-left:4px solid #ea580c;">
-        <tr><td style="padding: 0;">
+        <tr><td colspan="2" style="padding: 0;">
             <span class="veh-ribbon" style="background-color:#ea580c;">Vehicle</span></td></tr>
         <tr>
+            <td class="veh-img" th:if="${!#strings.isEmpty(v.imagePath)}">
+                <img th:src="${v.imagePath}" /></td>
             <td style="padding: 12px 15px 14px 15px; vertical-align: middle;">
                 <div class="veh-name" th:text="${v.type}">Vehicle</div>
                 <table style="margin-top: 9px;">
@@ -657,10 +654,10 @@
                         <td class="lbl">Drop</td><td class="small" th:text="${fmt.orElse(v.drop,'-')}"></td>
                     </tr>
                     <tr>
-                        <td class="lbl">Start</td><td class="small" th:text="${fmt.orElse(v.startDate,'-')}"></td>
-                        <td class="lbl">End</td><td class="small" th:text="${fmt.orElse(v.endDate,'-')}"></td>
+                        <td class="lbl">Start</td><td class="small" style="white-space:nowrap;" th:text="${fmt.orElse(v.startDate,'-')}"></td>
+                        <td class="lbl">End</td><td class="small" style="white-space:nowrap;" th:text="${fmt.orElse(v.endDate,'-')}"></td>
                     </tr>
-                    <tr th:if="${v.qty != null or (v.notes != null and !v.notes.isEmpty())}">
+                    <tr th:if="${v.qty != null or !#strings.isEmpty(v.notes)}">
                         <td class="lbl">Qty</td>
                         <td class="small" th:text="${v.qty != null} ? ${v.qty} : '-'"></td>
                         <td class="lbl">Notes</td>
@@ -697,7 +694,7 @@
 </div>
 
 <!-- ============ POLICIES ============ -->
-<div th:if="${(q.inclusions != null and !q.inclusions.isEmpty()) or (q.exclusions != null and !q.exclusions.isEmpty())}"
+<div th:if="${!#lists.isEmpty(q.inclusions) or !#lists.isEmpty(q.exclusions) or !#lists.isEmpty(q.paymentPolicies) or !#lists.isEmpty(q.cancellationPolicies) or !#lists.isEmpty(q.bookingTerms)}"
      style="page: content; page-break-before: always; width:100%; padding-left:13mm; padding-right:13mm;">
     <div class="sec" style="border-left-color:#0f172a;">
         <div class="sec-eyebrow">Good To Know</div>
@@ -705,8 +702,8 @@
     </div>
     <table class="pol-2col">
         <tr>
-            <td th:if="${q.inclusions != null and !q.inclusions.isEmpty()}"
-                th:style="${q.exclusions != null and !q.exclusions.isEmpty()} ? 'width:50%; padding-right:8px;' : 'width:100%;'">
+            <td th:if="${!#lists.isEmpty(q.inclusions)}"
+                th:style="${!#lists.isEmpty(q.exclusions)} ? 'width:50%; padding-right:8px;' : 'width:100%;'">
                 <div class="pol pol-in">
                     <table class="pol-head bg-in">
                         <tr>
@@ -723,8 +720,8 @@
                     </div>
                 </div>
             </td>
-            <td th:if="${q.exclusions != null and !q.exclusions.isEmpty()}"
-                th:style="${q.inclusions != null and !q.inclusions.isEmpty()} ? 'width:50%; padding-left:8px;' : 'width:100%;'">
+            <td th:if="${!#lists.isEmpty(q.exclusions)}"
+                th:style="${!#lists.isEmpty(q.inclusions)} ? 'width:50%; padding-left:8px;' : 'width:100%;'">
                 <div class="pol pol-ex">
                     <table class="pol-head bg-ex">
                         <tr>
@@ -743,26 +740,62 @@
             </td>
         </tr>
     </table>
-    <div class="pol" style="border: 1px solid #eef1f6;"
-         th:if="${q.paymentPolicies != null and !q.paymentPolicies.isEmpty()}">
-        <table class="pol-head" style="background-color: #f4f7fb;">
-            <tr><td><span class="pol-title" th:style="'color:' + ${brandColor} + ';'">Payment Policy</span></td></tr>
+    <!-- PAYMENT + CANCELLATION side-by-side (left/right, like inclusions/exclusions) -->
+    <table class="pol-2col"
+           th:if="${!#lists.isEmpty(q.paymentPolicies) or !#lists.isEmpty(q.cancellationPolicies)}">
+        <tr>
+            <td th:if="${!#lists.isEmpty(q.paymentPolicies)}"
+                th:style="${!#lists.isEmpty(q.cancellationPolicies)} ? 'width:50%; padding-right:8px;' : 'width:100%;'">
+                <div class="pol pol-pay">
+                    <table class="pol-head bg-pay">
+                        <tr>
+                            <td><span class="pol-chip" style="background-color:#2563eb;">
+                                <span class="i">&#8377;</span></span>
+                                <span class="pol-title blue">Payment Policy</span></td>
+                            <td class="r"><span class="pol-count chip-pay"
+                                                th:text="|${#lists.size(q.paymentPolicies)}|">0</span></td>
+                        </tr>
+                    </table>
+                    <div class="pol-body">
+                        <div class="pol-line" th:each="p : ${q.paymentPolicies}">
+                            <span class="pol-dot blue">&#9679;</span><span th:text="${p}"></span></div>
+                    </div>
+                </div>
+            </td>
+            <td th:if="${!#lists.isEmpty(q.cancellationPolicies)}"
+                th:style="${!#lists.isEmpty(q.paymentPolicies)} ? 'width:50%; padding-left:8px;' : 'width:100%;'">
+                <div class="pol pol-can">
+                    <table class="pol-head bg-can">
+                        <tr>
+                            <td><span class="pol-chip" style="background-color:#ea580c;">
+                                <span class="i">&#10007;</span></span>
+                                <span class="pol-title orange">Cancellation Policy</span></td>
+                            <td class="r"><span class="pol-count chip-can"
+                                                th:text="|${#lists.size(q.cancellationPolicies)}|">0</span></td>
+                        </tr>
+                    </table>
+                    <div class="pol-body">
+                        <div class="pol-line" th:each="p : ${q.cancellationPolicies}">
+                            <span class="pol-dot orange">&#9679;</span><span th:text="${p}"></span></div>
+                    </div>
+                </div>
+            </td>
+        </tr>
+    </table>
+    <!-- BOOKING TERMS & CONDITIONS (card style) -->
+    <div class="pol pol-book" th:if="${!#lists.isEmpty(q.bookingTerms)}">
+        <table class="pol-head bg-book">
+            <tr>
+                <td><span class="pol-chip" style="background-color:#7c3aed;">
+                    <span class="i">&#10003;</span></span>
+                    <span class="pol-title violet">Booking Terms &amp; Conditions</span></td>
+                <td class="r"><span class="pol-count chip-book"
+                                    th:text="|${#lists.size(q.bookingTerms)}|">0</span></td>
+            </tr>
         </table>
         <div class="pol-body">
-            <div class="pol-line" th:each="p : ${q.paymentPolicies}">
-                <span class="pol-dot" th:style="'color:' + ${brandColor} + ';'">&#9679;</span>
-                <span th:text="${p}"></span></div>
-        </div>
-    </div>
-    <div class="pol" style="border: 1px solid #eef1f6;"
-         th:if="${q.cancellationPolicies != null and !q.cancellationPolicies.isEmpty()}">
-        <table class="pol-head" style="background-color: #f4f7fb;">
-            <tr><td><span class="pol-title" th:style="'color:' + ${brandColor} + ';'">Cancellation Policy</span></td></tr>
-        </table>
-        <div class="pol-body">
-            <div class="pol-line" th:each="p : ${q.cancellationPolicies}">
-                <span class="pol-dot" th:style="'color:' + ${brandColor} + ';'">&#9679;</span>
-                <span th:text="${p}"></span></div>
+            <div class="pol-line" th:each="t : ${q.bookingTerms}">
+                <span class="pol-dot violet">&#9679;</span><span th:text="${t}"></span></div>
         </div>
     </div>
 </div>
@@ -781,28 +814,28 @@
                 Thank you message</div>
             <table class="ty-cards">
                 <tr>
-                    <td><div class="ty-c" style="border-color: #3d8fc7;">
-                        <span class="ico" style="color: #3d8fc7;">&#9742;</span>
-                        <div class="lab" style="color: #7fb2d9;">Call Us</div>
+                    <td><div class="ty-c" style="border-color: #2563eb;">
+                        <span class="ico" style="color: #2563eb;">&#9742;</span>
+                        <div class="lab" style="color: #64748b;">Call Us</div>
                         <div class="val" th:text="${fmt.orElse(companyPhone,'-')}">-</div></div></td>
-                    <td><div class="ty-c" style="border-color: #3d8fc7;">
-                        <span class="ico" style="color: #3d8fc7;">&#9990;</span>
-                        <div class="lab" style="color: #7fb2d9;">WhatsApp</div>
+                    <td><div class="ty-c" style="border-color: #2563eb;">
+                        <span class="ico" style="color: #2563eb;">&#9990;</span>
+                        <div class="lab" style="color: #64748b;">WhatsApp</div>
                         <div class="val" th:text="${companyWhatsapp != null ? companyWhatsapp : companyPhone}">-</div></div></td>
                 </tr>
                 <tr>
-                    <td><div class="ty-c" style="border-color: #3d8fc7;">
-                        <span class="ico" style="color: #3d8fc7;">&#9993;</span>
-                        <div class="lab" style="color: #7fb2d9;">Email Us</div>
+                    <td><div class="ty-c" style="border-color: #2563eb;">
+                        <span class="ico" style="color: #2563eb;">&#9993;</span>
+                        <div class="lab" style="color: #64748b;">Email Us</div>
                         <div class="val" th:text="${fmt.orElse(companyEmail,'-')}">-</div></div></td>
-                    <td><div class="ty-c" style="border-color: #3d8fc7;">
-                        <span class="ico" style="color: #3d8fc7;">&#8984;</span>
-                        <div class="lab" style="color: #7fb2d9;">Visit Us</div>
+                    <td><div class="ty-c" style="border-color: #2563eb;">
+                        <span class="ico" style="color: #2563eb;">&#8984;</span>
+                        <div class="lab" style="color: #64748b;">Visit Us</div>
                         <div class="val" th:text="${fmt.orElse(companyWebsite,'-')}">-</div></div></td>
                 </tr>
             </table>
             <div class="ty-addr"
-                 th:if="${companyAddress != null and !companyAddress.isEmpty()}"
+                 th:if="${!#strings.isEmpty(companyAddress)}"
                  th:text="${companyAddress}">Address</div>
             <table class="ty-stats">
                 <tr>
@@ -820,5 +853,6 @@
         </div>
     </div>
 </div>
+
 </body>
 </html>

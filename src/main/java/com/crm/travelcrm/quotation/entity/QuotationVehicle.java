@@ -53,4 +53,6 @@ public class QuotationVehicle extends BaseEntity {
 
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
+    @Column(name = "imagePath", columnDefinition = "TEXT")
+    private String imagePath;
 }

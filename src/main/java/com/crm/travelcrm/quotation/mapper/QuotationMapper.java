@@ -454,6 +454,7 @@ public class QuotationMapper {
                 .price(v.getPrice())
                 .pricePerVehicle(v.getPricePerVehicle())
                 .qty(v.getQty())
+                .imagePath(v.getImagePath())
                 .notes(v.getNotes())
                 .build();
     }

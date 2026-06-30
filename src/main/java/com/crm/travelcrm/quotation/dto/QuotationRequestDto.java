@@ -193,6 +193,7 @@ public class QuotationRequestDto {
         private BigDecimal pricePerVehicle;
         private Integer qty;
         private String notes;
+        private String imagePath;
     }
 
     // ── Add-on services ───────────────────────────────────────────────────────
