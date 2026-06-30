@@ -24,7 +24,7 @@ public class LeadBoardColumnDto {
     /** Number of leads in this column (matches {@code leads.size()}). */
     private long count;
 
-    /** Sum of {@code estimatedValue} across the leads in this column. */
+    /** Sum of {@code budget} across the leads in this column. */
     private BigDecimal totalValue;
 
     private List<LeadResponseDto> leads;

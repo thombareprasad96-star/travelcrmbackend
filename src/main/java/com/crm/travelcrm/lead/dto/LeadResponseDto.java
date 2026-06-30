@@ -28,7 +28,7 @@ public class LeadResponseDto {
     private UserDto assignedUser;
     private LocalDate birthDate;
     private LocalDate travelDate;
-    private BigDecimal estimatedValue;
+    private BigDecimal budget;
     private String departCountry;
     private String departCity;
     private Integer rooms;

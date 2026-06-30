@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.Builder;
 import lombok.Data;
 
+import java.math.BigDecimal;
 import java.util.UUID;
 
 /**
@@ -22,4 +23,7 @@ public class QuotationRefDto {
 
     /** Quotation.publicId — used for both the view route and the /pdf download endpoint. */
     private UUID publicId;
+
+    /** Computed grand total of this (latest) quotation — what the lead list shows as the deal value. */
+    private BigDecimal grandTotal;
 }

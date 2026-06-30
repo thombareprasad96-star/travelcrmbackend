@@ -1,6 +1,7 @@
 package com.crm.travelcrm.quotation.repository;
 
 import com.crm.travelcrm.quotation.entity.Quotation;
+import com.crm.travelcrm.quotation.enums.DiscountType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -10,6 +11,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
@@ -51,7 +53,12 @@ public interface QuotationRepository
     // entity. One query for many leads, reduced to latest-per-lead in the service
     // (JPQL has no Postgres DISTINCT ON).
     @Query("""
-            SELECT q.leadPublicId AS leadPublicId, q.publicId AS quotationPublicId
+            SELECT q.leadPublicId AS leadPublicId, q.publicId AS quotationPublicId,
+                   q.flightAmount AS flightAmount, q.hotelAmount AS hotelAmount,
+                   q.sightseeingAmount AS sightseeingAmount, q.cruiseAmount AS cruiseAmount,
+                   q.vehicleAmount AS vehicleAmount, q.addonAmount AS addonAmount,
+                   q.discount AS discount, q.discountType AS discountType,
+                   q.tax AS tax, q.markup AS markup
               FROM Quotation q
              WHERE q.leadPublicId IN :ids
                AND q.tenantId = :tenantId
@@ -61,10 +68,24 @@ public interface QuotationRepository
     List<LatestQuotationRef> findLatestRefsForLeads(
             @Param("ids") Collection<UUID> ids, @Param("tenantId") Long tenantId);
 
-    /** Closed projection: a lead's publicId paired with the publicId of its latest quotation. */
+    /**
+     * Closed projection: a lead's publicId, its latest quotation's publicId, and the raw pricing
+     * columns needed to compute that quotation's grand total (via {@code QuotationMapper.computeTotals})
+     * for the lead list — without loading the wide Quotation entity or its collections.
+     */
     interface LatestQuotationRef {
         UUID getLeadPublicId();
         UUID getQuotationPublicId();
+        BigDecimal getFlightAmount();
+        BigDecimal getHotelAmount();
+        BigDecimal getSightseeingAmount();
+        BigDecimal getCruiseAmount();
+        BigDecimal getVehicleAmount();
+        BigDecimal getAddonAmount();
+        BigDecimal getDiscount();
+        DiscountType getDiscountType();
+        BigDecimal getTax();
+        BigDecimal getMarkup();
     }
 
     // ── Quote-number sequence ───────────────────────────────────────────────────

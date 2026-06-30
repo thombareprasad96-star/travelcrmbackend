@@ -209,7 +209,15 @@ public class QuotationServiceImpl implements QuotationService {
         for (QuotationRepository.LatestQuotationRef row :
                 quotationRepository.findLatestRefsForLeads(leadPublicIds, tenantId)) {
             result.putIfAbsent(row.getLeadPublicId(),
-                    QuotationRefDto.builder().publicId(row.getQuotationPublicId()).build());
+                    QuotationRefDto.builder()
+                            .publicId(row.getQuotationPublicId())
+                            // Grand total via the shared pricing formula so it matches the quotation exactly.
+                            .grandTotal(QuotationMapper.computeTotals(
+                                    row.getFlightAmount(), row.getHotelAmount(), row.getSightseeingAmount(),
+                                    row.getCruiseAmount(), row.getVehicleAmount(), row.getAddonAmount(),
+                                    row.getDiscount(), row.getDiscountType(), row.getTax(), row.getMarkup(),
+                                    null).getGrandTotal())
+                            .build());
         }
         return result;
     }

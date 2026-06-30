@@ -409,7 +409,7 @@ public class DevDataSeeder implements CommandLineRunner {
                     .customerName(names[i]).phone("+91 91234 5000" + i).email("lead" + i + "@demo.crm")
                     .leadSource(sources[i]).leadType(types[i]).leadStage(stages[i])
                     .assignedUser(users.get(i % users.size()))
-                    .estimatedValue(BigDecimal.valueOf(50000L + i * 10000L))
+                    .budget(BigDecimal.valueOf(50000L + i * 10000L))
                     .adults(2).children(i % 2).build()));
         }
         log.info("[DevDataSeeder] seeded {} leads", out.size());

@@ -79,10 +79,10 @@ public class Lead extends BaseTenantEntity {
     @Column(name = "travel_date")
     private LocalDate travelDate;
 
-    // Estimated deal value (₹) — drives the Kanban column totals and the
-    // active-pipeline figure. Nullable: not every fresh lead has a value yet.
-    @Column(name = "estimated_value", precision = 15, scale = 2)
-    private BigDecimal estimatedValue;
+    // Budget (₹) — the customer's planned spend; drives the Kanban column totals
+    // and the active-pipeline figure. Nullable: not every fresh lead has a value yet.
+    @Column(name = "budget", precision = 15, scale = 2)
+    private BigDecimal budget;
 
     @Column(name = "depart_country", length = 100)
     private String departCountry;

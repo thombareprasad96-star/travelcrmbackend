@@ -184,7 +184,7 @@ public class LeadServiceImpl implements LeadService {
 
         // Travel details
         lead.setTravelDate(request.getTravelDate());
-        lead.setEstimatedValue(request.getEstimatedValue());
+        lead.setBudget(request.getBudget());
         lead.setDepartCountry(request.getDepartCountry());
         lead.setDepartCity(request.getDepartCity());
 
@@ -279,7 +279,7 @@ public class LeadServiceImpl implements LeadService {
                 .map(stage -> {
                     List<Lead> stageLeads = byStage.getOrDefault(stage, List.of());
                     BigDecimal total = stageLeads.stream()
-                            .map(Lead::getEstimatedValue)
+                            .map(Lead::getBudget)
                             .filter(Objects::nonNull)
                             .reduce(BigDecimal.ZERO, BigDecimal::add);
                     return LeadBoardColumnDto.builder()

@@ -3,12 +3,17 @@ package com.crm.travelcrm.lead.controller;
 import com.crm.travelcrm.common.dto.ApiResponse;
 import com.crm.travelcrm.common.dto.PagedApiResponse;
 import com.crm.travelcrm.common.dto.PaginationMeta;
+import com.crm.travelcrm.lead.dto.AddLeadLogRequestDto;
 import com.crm.travelcrm.lead.dto.CreateLeadRequestDto;
 import com.crm.travelcrm.lead.dto.LeadBoardColumnDto;
+import com.crm.travelcrm.lead.dto.LeadLogResponseDto;
+import com.crm.travelcrm.lead.dto.LeadLogStatsDto;
+import com.crm.travelcrm.lead.dto.LeadLogSummaryResponseDto;
 import com.crm.travelcrm.lead.dto.LeadResponseDto;
 import com.crm.travelcrm.lead.dto.UpdateLeadStageRequestDto;
 import com.crm.travelcrm.lead.dto.UserLeadStageCountDto;
 import com.crm.travelcrm.lead.dto.UserWorkloadDto;
+import com.crm.travelcrm.lead.service.LeadLogService;
 import com.crm.travelcrm.lead.service.LeadService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -33,6 +38,7 @@ import java.util.UUID;
 public class LeadController {
 
     private final LeadService leadService;
+    private final LeadLogService leadLogService;
 
     @PostMapping
     @PreAuthorize("hasAuthority('LEAD_CREATE')")
@@ -121,6 +127,64 @@ public class LeadController {
         log.info("Received delete lead request for publicId: {}", publicId);
         leadService.deleteLead(publicId);
         return ResponseEntity.ok(ApiResponse.success("Lead deleted successfully"));
+    }
+
+    // ── Activity logs ───────────────────────────────────────────────────────────
+
+    /** Add an activity log to a lead (optionally creating a follow-up reminder). */
+    @PostMapping("/{publicId}/logs")
+    @PreAuthorize("hasAuthority('LEAD_UPDATE')")
+    public ResponseEntity<ApiResponse<LeadLogResponseDto>> addLeadLog(
+            @PathVariable UUID publicId,
+            @Valid @RequestBody AddLeadLogRequestDto request) {
+
+        log.info("Adding activity log to lead publicId: {}", publicId);
+        LeadLogResponseDto response = leadLogService.addLog(publicId, request);
+        return ResponseEntity
+                .status(HttpStatus.CREATED)
+                .body(ApiResponse.success("Log added successfully", response, 201));
+    }
+
+    /** All activity logs for one lead, newest first — powers the per-lead LeadLogs page. */
+    @GetMapping("/{publicId}/logs")
+    public ResponseEntity<ApiResponse<List<LeadLogResponseDto>>> getLeadLogs(
+            @PathVariable UUID publicId) {
+
+        return ResponseEntity.ok(
+                ApiResponse.success("Lead logs fetched", leadLogService.getLogsForLead(publicId)));
+    }
+
+    /** Leads (visible to the caller) that have at least one log — the All-Lead-Logs grid. */
+    @GetMapping("/logs/summary")
+    public ResponseEntity<ApiResponse<LeadLogSummaryResponseDto>> getLeadLogSummary(
+            @RequestParam(required = false)                  String search,
+            @RequestParam(required = false)                  String stage,
+            @RequestParam(name = "userId", required = false) UUID userPublicId,
+            @RequestParam(defaultValue = "1")                int page,
+            @RequestParam(defaultValue = "12")               int perPage) {
+
+        LeadLogSummaryResponseDto summary =
+                leadLogService.getLogSummary(search, stage, userPublicId, page, perPage);
+        return ResponseEntity.ok(ApiResponse.success("Lead log summary fetched", summary));
+    }
+
+    /** Roll-up totals for the All-Lead-Logs hero stat cards. */
+    @GetMapping("/logs/stats")
+    public ResponseEntity<ApiResponse<LeadLogStatsDto>> getLeadLogStats() {
+        return ResponseEntity.ok(
+                ApiResponse.success("Lead log stats fetched", leadLogService.getLogStats()));
+    }
+
+    /** Soft-delete a single activity log from a lead. */
+    @DeleteMapping("/{publicId}/logs/{logId}")
+    @PreAuthorize("hasAuthority('LEAD_UPDATE')")
+    public ResponseEntity<ApiResponse<Void>> deleteLeadLog(
+            @PathVariable UUID publicId,
+            @PathVariable UUID logId) {
+
+        log.info("Deleting activity log {} from lead {}", logId, publicId);
+        leadLogService.deleteLog(publicId, logId);
+        return ResponseEntity.ok(ApiResponse.success("Log deleted successfully"));
     }
 
     // ── Statistics ────────────────────────────────────────────────────────────

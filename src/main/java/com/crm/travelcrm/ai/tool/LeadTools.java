@@ -24,12 +24,12 @@ public class LeadTools {
 
     public record LeadSummary(String publicId, String customerName, String phone, String email,
                               String leadStage, String leadType, String assignedTo,
-                              String travelDate, String estimatedValue,
+                              String travelDate, String budget,
                               String departCity, String departCountry) {}
 
     public record LeadDetail(String publicId, String customerName, String phone, String email,
                              String leadStage, String leadType, String assignedTo,
-                             String travelDate, String estimatedValue,
+                             String travelDate, String budget,
                              String departCity, String departCountry,
                              List<String> services, String notes, String createdAt,
                              String convertedBookingPublicId) {}
@@ -70,7 +70,7 @@ public class LeadTools {
                 ToolFmt.str(d.getId()), d.getCustomerName(), d.getPhone(), d.getEmail(),
                 ToolFmt.str(d.getLeadStage()), ToolFmt.str(d.getLeadType()),
                 d.getAssignedUser() != null ? d.getAssignedUser().getFullName() : null,
-                ToolFmt.str(d.getTravelDate()), ToolFmt.str(d.getEstimatedValue()),
+                ToolFmt.str(d.getTravelDate()), ToolFmt.str(d.getBudget()),
                 d.getDepartCity(), d.getDepartCountry());
     }
 
@@ -79,7 +79,7 @@ public class LeadTools {
                 ToolFmt.str(d.getId()), d.getCustomerName(), d.getPhone(), d.getEmail(),
                 ToolFmt.str(d.getLeadStage()), ToolFmt.str(d.getLeadType()),
                 d.getAssignedUser() != null ? d.getAssignedUser().getFullName() : null,
-                ToolFmt.str(d.getTravelDate()), ToolFmt.str(d.getEstimatedValue()),
+                ToolFmt.str(d.getTravelDate()), ToolFmt.str(d.getBudget()),
                 d.getDepartCity(), d.getDepartCountry(),
                 d.getServices(), d.getNotes(), ToolFmt.str(d.getCreatedAt()),
                 ToolFmt.str(d.getConvertedBookingPublicId()));

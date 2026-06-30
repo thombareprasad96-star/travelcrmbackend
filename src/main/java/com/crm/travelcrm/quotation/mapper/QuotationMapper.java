@@ -501,30 +501,47 @@ public class QuotationMapper {
     // ════════════════════════════════════════════════════════════════════════
 
     public QuotationResponseDto.Totals computeTotals(Quotation q) {
-        BigDecimal subtotal = nz(q.getFlightAmount())
-                .add(nz(q.getHotelAmount()))
-                .add(nz(q.getSightseeingAmount()))
-                .add(nz(q.getCruiseAmount()))
-                .add(nz(q.getVehicleAmount()))
-                .add(nz(q.getAddonAmount()))
+        return computeTotals(
+                q.getFlightAmount(), q.getHotelAmount(), q.getSightseeingAmount(),
+                q.getCruiseAmount(), q.getVehicleAmount(), q.getAddonAmount(),
+                q.getDiscount(), q.getDiscountType(), q.getTax(), q.getMarkup(), q.getAdults());
+    }
+
+    /**
+     * Pricing math in ONE place (the formula block above). Takes the raw scalar component
+     * values so it can be reused both for a full {@link Quotation} and for the lean lead-list
+     * projection that carries only these columns — guaranteeing the lead-list amount equals the
+     * quotation's real grand total. {@code adults} may be null → {@code perAdult} is null.
+     */
+    public static QuotationResponseDto.Totals computeTotals(
+            BigDecimal flightAmount, BigDecimal hotelAmount, BigDecimal sightseeingAmount,
+            BigDecimal cruiseAmount, BigDecimal vehicleAmount, BigDecimal addonAmount,
+            BigDecimal discount, DiscountType discountType, BigDecimal tax, BigDecimal markup,
+            Integer adults) {
+
+        BigDecimal subtotal = nz(flightAmount)
+                .add(nz(hotelAmount))
+                .add(nz(sightseeingAmount))
+                .add(nz(cruiseAmount))
+                .add(nz(vehicleAmount))
+                .add(nz(addonAmount))
                 .setScale(2, RoundingMode.HALF_UP);
 
-        DiscountType dt = q.getDiscountType() != null ? q.getDiscountType() : DiscountType.FIXED;
-        BigDecimal discountRaw = nz(q.getDiscount());
+        DiscountType dt = discountType != null ? discountType : DiscountType.FIXED;
+        BigDecimal discountRaw = nz(discount);
         BigDecimal discountAmount = dt == DiscountType.PERCENT
                 ? subtotal.multiply(discountRaw).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP)
                 : discountRaw.setScale(2, RoundingMode.HALF_UP);
 
-        BigDecimal markup = nz(q.getMarkup()).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal afterDiscount = subtotal.subtract(discountAmount).add(markup);
+        BigDecimal markupAmount = nz(markup).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal afterDiscount = subtotal.subtract(discountAmount).add(markupAmount);
 
-        BigDecimal taxPercent = nz(q.getTax());
+        BigDecimal taxPercent = nz(tax);
         BigDecimal taxAmount = afterDiscount.multiply(taxPercent)
                 .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
 
         BigDecimal grandTotal = afterDiscount.add(taxAmount).setScale(2, RoundingMode.HALF_UP);
 
-        Integer adults = q.getAdults();
         BigDecimal perAdult = (adults != null && adults > 0)
                 ? grandTotal.divide(BigDecimal.valueOf(adults), 2, RoundingMode.HALF_UP)
                 : null;
@@ -534,11 +551,11 @@ public class QuotationMapper {
                 .discountType(dt)
                 .discount(discountRaw)
                 .discountAmount(discountAmount)
-                .markup(markup)
+                .markup(markupAmount)
                 .taxPercent(taxPercent)
                 .taxAmount(taxAmount)
                 .grandTotal(grandTotal)
-                .addonsTotal(nz(q.getAddonAmount()).setScale(2, RoundingMode.HALF_UP))
+                .addonsTotal(nz(addonAmount).setScale(2, RoundingMode.HALF_UP))
                 .perAdult(perAdult)
                 .build();
     }

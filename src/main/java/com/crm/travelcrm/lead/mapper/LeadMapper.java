@@ -28,7 +28,7 @@ public class LeadMapper {
                 // (tenant-scoped lookup) and set there
                 .birthDate(request.getBirthDate())
                 .travelDate(request.getTravelDate())
-                .estimatedValue(request.getEstimatedValue())
+                .budget(request.getBudget())
                 .departCountry(request.getDepartCountry())
                 .departCity(request.getDepartCity())
                 .rooms(request.getRooms())
@@ -82,7 +82,7 @@ public class LeadMapper {
                 .assignedUser(toUserDto(lead.getAssignedUser()))
                 .birthDate(lead.getBirthDate())
                 .travelDate(lead.getTravelDate())
-                .estimatedValue(lead.getEstimatedValue())
+                .budget(lead.getBudget())
                 .departCountry(lead.getDepartCountry())
                 .departCity(lead.getDepartCity())
                 .rooms(lead.getRooms())

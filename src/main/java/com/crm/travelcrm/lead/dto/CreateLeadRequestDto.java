@@ -52,10 +52,10 @@ public class CreateLeadRequestDto {
     @JsonFormat(pattern = "yyyy-MM-dd")
     private LocalDate travelDate;
 
-    // Estimated deal value in INR. Frontend Kanban sends this as `value`.
-    @DecimalMin(value = "0.0", message = "Estimated value cannot be negative")
-    @Digits(integer = 13, fraction = 2, message = "Estimated value is invalid")
-    private BigDecimal estimatedValue;
+    // Customer budget in INR. Frontend Kanban sends this as `budget`.
+    @DecimalMin(value = "0.0", message = "Budget cannot be negative")
+    @Digits(integer = 13, fraction = 2, message = "Budget is invalid")
+    private BigDecimal budget;
 
     @Size(max = 100)
     private String departCountry;
