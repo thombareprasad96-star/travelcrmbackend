@@ -67,6 +67,16 @@ public class SightseeingServiceImpl implements SightseeingService {
                 PaginationMeta.from(result, sortBy, sortDir));
     }
 
+    @Transactional(readOnly = true)
+    public PagedApiResponse<SightseeingDto> getByDestionation(Long DestionationId, int page, int size, String sortBy, String sortDir) {
+        Long tenantId = GeographySupport.currentTenantId();
+        Page<Sightseeing> result = sightseeingRepository.findByTenantIdAndDestinationId(
+                tenantId, DestionationId, PageRequest.of(page, size, GeographySupport.buildSort(sortBy, sortDir)));
+        return PagedApiResponse.of("Sightseeings fetched",
+                result.map(sightseeingMapper::toDto).getContent(),
+                PaginationMeta.from(result, sortBy, sortDir));
+    }
+
     @Override
     @Transactional(readOnly = true)
     public SightseeingDto getById(Long id) {

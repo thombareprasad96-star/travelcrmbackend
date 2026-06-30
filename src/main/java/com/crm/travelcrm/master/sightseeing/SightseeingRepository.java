@@ -35,11 +35,14 @@ public interface SightseeingRepository extends JpaRepository<Sightseeing, Long> 
             @Param("destinationId") Long destinationId,
             Pageable pageable);
 
+    // ✅ FIX: CAST(:param AS string) — PostgreSQL ko batata hai param TEXT hai.
+    // Bina CAST, jab :destination/:city NULL hote hain, PostgreSQL unhe
+    // 'bytea' samajh leta tha → "function lower(bytea) does not exist" crash.
     @Query("""
             SELECT s FROM Sightseeing s
             WHERE s.tenantId = :tenantId
-              AND (:destination IS NULL OR LOWER(s.city.destination.name) LIKE LOWER(CONCAT('%', :destination, '%')))
-              AND (:city IS NULL OR LOWER(s.city.name) LIKE LOWER(CONCAT('%', :city, '%')))
+              AND (:destination IS NULL OR LOWER(s.city.destination.name) LIKE LOWER(CONCAT('%', CAST(:destination AS string), '%')))
+              AND (:city IS NULL OR LOWER(s.city.name) LIKE LOWER(CONCAT('%', CAST(:city AS string), '%')))
             """)
     Page<Sightseeing> filterByNames(
             @Param("tenantId") Long tenantId,
@@ -50,7 +53,7 @@ public interface SightseeingRepository extends JpaRepository<Sightseeing, Long> 
     @Query("""
             SELECT s FROM Sightseeing s
             WHERE s.tenantId = :tenantId
-              AND LOWER(s.title) LIKE LOWER(CONCAT('%', :q, '%'))
+              AND LOWER(s.title) LIKE LOWER(CONCAT('%', CAST(:q AS string), '%'))
             """)
     List<Sightseeing> searchByTitle(@Param("tenantId") Long tenantId, @Param("q") String q);
 

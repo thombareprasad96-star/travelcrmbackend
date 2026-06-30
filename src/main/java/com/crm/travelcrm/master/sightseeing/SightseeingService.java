@@ -24,4 +24,6 @@ public interface SightseeingService {
     String uploadImage(MultipartFile file);
 
     List<SightseeingDto> search(String q);
+
+    PagedApiResponse<SightseeingDto> getByDestionation(Long destionationId, int page, int size, String sortBy, String sortDir);
 }

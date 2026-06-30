@@ -17,33 +17,6 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/sightseeings")
 @RequiredArgsConstructor
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 public class SightseeingController {
 
     private final SightseeingService sightseeingService;
@@ -73,6 +46,17 @@ public class SightseeingController {
             @RequestParam(defaultValue = "sequence")  String sortBy,
             @RequestParam(defaultValue = "asc")       String sortDir) {
         return ResponseEntity.ok(sightseeingService.getByCity(cityId, page, size, sortBy, sortDir));
+    }
+
+    @GetMapping("/destionation/{destionationId}")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<PagedApiResponse<SightseeingDto>> getByDestionation(
+            @PathVariable Long destionationId,
+            @RequestParam(defaultValue = "0")         int page,
+            @RequestParam(defaultValue = "20")        int size,
+            @RequestParam(defaultValue = "sequence")  String sortBy,
+            @RequestParam(defaultValue = "asc")       String sortDir) {
+        return ResponseEntity.ok(sightseeingService.getByDestionation(destionationId, page, size, sortBy, sortDir));
     }
 
     @GetMapping("/{id}")
