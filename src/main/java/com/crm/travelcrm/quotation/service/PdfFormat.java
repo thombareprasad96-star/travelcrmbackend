@@ -36,6 +36,7 @@ public class PdfFormat {
      * break the XML the renderer parses; lists/breaks become readable separators.
      */
     public String plain(String html) {
+
         if (html == null || html.isBlank()) return "";
         String s = html
                 .replaceAll("(?i)<br\\s*/?>", " ")

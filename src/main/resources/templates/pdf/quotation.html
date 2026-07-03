@@ -124,7 +124,7 @@
         /* >>> change picture / path HERE — one place <<< */
         /* FIX: background-size 100% 100% = image EXACTLY fills page edge-to-edge (no white strip).
            (cover/contain shift the image and leave a right/left gap in Flying Saucer)            */
-        .travel-bg { background-image: url('file:///C:/travelcrmbackend/src/main/resources/templates/pdf/travel.png');
+        .travel-bg { background-image: url('D:\CRM PROJECT\travelcrmbackend\src\main\resources\templates\pdf\travel.png');
             background-size: 100% 100%;                  /* <-- exact fill, no gap. (cover -> strip) */
             background-position: center;
             background-repeat: no-repeat;
@@ -225,7 +225,7 @@
         /* image + naam overlay (position:relative/absolute — FS supported) */
         .hcard-imgwrap { position: relative; height: 160px; }
         .hcard-img     { width: 100%; height: 160px; display: block; }
-        .hcard-namestar{ color: #fbbf24; font-size: 11px; letter-spacing: 1px; }
+        .hcard-namestar{ color: #fbbf24; font-size: 11px; letter-spacing: 1px; font-family: 'StarFont'; }
         .hcard-nameband{ position: absolute; left: 0; right: 0; bottom: 0;
             background-color: rgba(15,23,42,0.72); padding: 6px 12px; }
         .hcard-name    { color: #ffffff; font-size: 13px; font-weight: bold; letter-spacing: 0.3px; }
@@ -348,7 +348,7 @@
     <table style="width:210mm; height:24mm; border-collapse:collapse; margin:0; padding:0;">
         <tr style="height:24mm;">
             <td style="height:24mm; padding:0; margin:0;"
-                th:style="'background-image:url(file:///C:/travelcrmbackend/src/main/resources/templates/pdf/banner.png); background-size:100% 100%; background-position:center; background-repeat:no-repeat; height:24mm; padding:0; margin:0;'">&#160;</td>
+                th:style="'background-image:url(file:D:\CRM PROJECT\travelcrmbackend\src\main\resources\templates\pdf\banner.png); background-size:100% 100%; background-position:center; background-repeat:no-repeat; height:24mm; padding:0; margin:0;'">&#160;</td>
         </tr>
     </table>
 </div>
@@ -567,12 +567,12 @@
                         <div class="hcard-nameband">
                             <span class="hcard-name" th:text="${h.name}">Hotel</span>
                             <span class="hcard-namestar" th:if="${h.stars != null}"
-                                  th:text="|&#160;${h.stars}&#9733;|">5★</span></div>
+                                  th:text="|&#160;${&quot;★&quot;.repeat(h.stars)}|">5★</span></div>
                     </div>
                     <div class="hcard-namebar" th:unless="${!#strings.isEmpty(h.imagePath)}">
                         <span class="hcard-name" th:text="${h.name}">Hotel</span>
                         <span class="hcard-namestar" th:if="${h.stars != null}"
-                              th:text="|&#160;${h.stars}&#9733;|">5★</span>
+                              th:text="|&#160;${&quot;★&quot;.repeat(h.stars)}|">5★</span>
                     </div>
                     <div class="hcard-body">
                         <table class="hmeta">
@@ -616,12 +616,12 @@
                         <div class="hcard-nameband">
                             <span class="hcard-name" th:text="${h2.name}">Hotel</span>
                             <span class="hcard-namestar" th:if="${h2.stars != null}"
-                                  th:text="|&#160;${h2.stars}&#9733;|">5★</span></div>
+                                  th:text="|&#160;${&quot;★&quot;.repeat(h2.stars)}|">5★</span></div>
                     </div>
                     <div class="hcard-namebar" th:unless="${!#strings.isEmpty(h2.imagePath)}">
                         <span class="hcard-name" th:text="${h2.name}">Hotel</span>
                         <span class="hcard-namestar" th:if="${h2.stars != null}"
-                              th:text="|&#160;${h2.stars}&#9733;|">5★</span>
+                              th:text="|&#160;${&quot;★&quot;.repeat(h2.stars)}|">5★</span>
                     </div>
                     <div class="hcard-body">
                         <table class="hmeta">
