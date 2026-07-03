@@ -67,6 +67,12 @@ public enum Permission {
     REMINDER_UPDATE ("Reminders",     "Edit reminder"),
     REMINDER_DELETE ("Reminders",     "Delete reminder"),
 
+    // ── Fleet / Vehicle Diary ───────────────────────────────────────────────
+    FLEET_READ   ("Fleet",            "View fleet vehicles, drivers, trips & logs"),
+    FLEET_CREATE ("Fleet",            "Add fleet vehicles, drivers, trips & logs"),
+    FLEET_UPDATE ("Fleet",            "Edit fleet records / trip lifecycle (start, close, cancel)"),
+    FLEET_DELETE ("Fleet",            "Delete fleet records"),
+
     // ── Master data (coarse: read vs manage) ────────────────────────────────
     MASTER_READ   ("Master Data",     "View master data"),
     MASTER_MANAGE ("Master Data",     "Create / edit / delete master data"),
@@ -135,6 +141,7 @@ public enum Permission {
                     QUOTATION_READ, QUOTATION_CREATE, QUOTATION_UPDATE, QUOTATION_DELETE,
                     VENDOR_READ, VENDOR_CREATE, VENDOR_UPDATE,
                     REMINDER_READ, REMINDER_CREATE, REMINDER_UPDATE, REMINDER_DELETE,
+                    FLEET_READ, FLEET_CREATE, FLEET_UPDATE, FLEET_DELETE,
                     MASTER_READ, MASTER_MANAGE, REPORT_VIEW, USER_READ,
                     TRASH_VIEW, TRASH_RESTORE);
 
@@ -145,6 +152,7 @@ public enum Permission {
                     QUOTATION_READ, QUOTATION_CREATE, QUOTATION_UPDATE,
                     VENDOR_READ,
                     REMINDER_READ, REMINDER_CREATE, REMINDER_UPDATE,
+                    FLEET_READ, FLEET_CREATE, FLEET_UPDATE,
                     MASTER_READ, REPORT_VIEW,
                     TRASH_VIEW);
 
@@ -158,6 +166,7 @@ public enum Permission {
                     CUSTOMER_READ,
                     QUOTATION_READ,
                     VENDOR_READ, VENDOR_UPDATE,
+                    FLEET_READ,
                     REPORT_VIEW, MASTER_READ);
         };
     }

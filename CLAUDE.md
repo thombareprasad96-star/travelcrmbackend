@@ -75,6 +75,7 @@ CORS is configured to allow `http://localhost:5173` and `http://localhost:5174` 
 auth/             Login, registration, JWT, SecurityConfig, two UserDetailsService impls
 booking/          Booking CRUD, CSV export, voucher send, filtering via JPA Specifications
 lead/             Lead pipeline (LeadStage, LeadType, LeadSource), itineraries. Lead `services` are stored via @ElementCollection (lead_services join table), NOT a comma-separated string
+fleet/            Vehicle Diary — operational fleet: vehicles, drivers, trips (PLANNED→ONGOING→COMPLETED lifecycle syncs vehicle status), fuel/maintenance logs, document-expiry scheduler + alerts. Separate from master/vehicle (see docs/FLEET_MODULE.md). Permissions: FLEET_*
 master/
   geography/      Country → Destination → City (cascading hierarchy)
   hotel/          Hotel, RoomType, MealPlan (nested under hotel)

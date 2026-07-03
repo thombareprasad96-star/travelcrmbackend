@@ -2,6 +2,11 @@ package com.crm.travelcrm.trash;
 
 import com.crm.travelcrm.booking.entity.Booking;
 import com.crm.travelcrm.customer.entity.Customer;
+import com.crm.travelcrm.fleet.entity.FleetDriver;
+import com.crm.travelcrm.fleet.entity.FleetFuelLog;
+import com.crm.travelcrm.fleet.entity.FleetMaintenanceLog;
+import com.crm.travelcrm.fleet.entity.FleetTrip;
+import com.crm.travelcrm.fleet.entity.FleetVehicle;
 import com.crm.travelcrm.lead.entity.Lead;
 import com.crm.travelcrm.master.addon.Addon;
 import com.crm.travelcrm.master.airline.Airline;
@@ -60,7 +65,17 @@ public enum TrashableType {
     VEHICLE("VEHICLE", "Vehicles", VehicleEntity.class),
     CITY("CITY", "Cities", City.class),
     DESTINATION("DESTINATION", "Destinations", Destination.class),
-    COUNTRY("COUNTRY", "Countries", Country.class);
+    COUNTRY("COUNTRY", "Countries", Country.class),
+
+    // ── Fleet / Vehicle Diary — trips & logs reference vehicle/driver via REAL FKs, so
+    //     they are declared (and hard-purged) before their parents. The fleet services
+    //     enforce the matching guard: a vehicle/driver with active child rows can't be
+    //     trashed, so a parent never purges before its children. ──────────────────────
+    FLEET_TRIP("FLEET_TRIP", "Fleet Trips", FleetTrip.class),
+    FLEET_FUEL_LOG("FLEET_FUEL_LOG", "Fleet Fuel Logs", FleetFuelLog.class),
+    FLEET_MAINTENANCE_LOG("FLEET_MAINTENANCE_LOG", "Fleet Service Logs", FleetMaintenanceLog.class),
+    FLEET_DRIVER("FLEET_DRIVER", "Fleet Drivers", FleetDriver.class),
+    FLEET_VEHICLE("FLEET_VEHICLE", "Fleet Vehicles", FleetVehicle.class);
 
     private final String key;
     private final String module;

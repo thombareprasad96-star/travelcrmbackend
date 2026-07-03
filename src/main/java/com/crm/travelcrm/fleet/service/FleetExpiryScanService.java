@@ -1,0 +1,139 @@
+package com.crm.travelcrm.fleet.service;
+
+import com.crm.travelcrm.auth.entity.User;
+import com.crm.travelcrm.auth.repository.UserRepository;
+import com.crm.travelcrm.fleet.entity.FleetDocumentAlert;
+import com.crm.travelcrm.fleet.entity.FleetDriver;
+import com.crm.travelcrm.fleet.entity.FleetVehicle;
+import com.crm.travelcrm.fleet.enums.FleetDocumentType;
+import com.crm.travelcrm.fleet.enums.FleetDriverStatus;
+import com.crm.travelcrm.fleet.enums.FleetRefType;
+import com.crm.travelcrm.fleet.repository.FleetDocumentAlertRepository;
+import com.crm.travelcrm.fleet.repository.FleetDriverRepository;
+import com.crm.travelcrm.fleet.repository.FleetVehicleRepository;
+import com.crm.travelcrm.notification.api.NotifyEvent;
+import com.crm.travelcrm.notification.domain.enums.DeliveryChannel;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
+import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+
+/**
+ * Per-tenant document-expiry scan (vehicle insurance/RC/permit/PUC + active drivers'
+ * licences). Same threshold semantics as the portal's DocumentExpiryReminderService: only
+ * the most urgent crossed-and-unfired threshold fires, so a long gap never floods a backlog.
+ * The saved {@link FleetDocumentAlert} row is both the idempotency marker and the alert
+ * history; delivery is a {@link NotifyEvent} to the tenant's admins/managers.
+ */
+@Service
+@Slf4j
+@RequiredArgsConstructor
+public class FleetExpiryScanService {
+
+    private final FleetVehicleRepository vehicleRepository;
+    private final FleetDriverRepository driverRepository;
+    private final FleetDocumentAlertRepository alertRepository;
+    private final UserRepository userRepository;
+    private final ApplicationEventPublisher eventPublisher;
+
+    @Transactional
+    public int scanCurrentTenant(Long tenantId, List<Integer> thresholdsDesc, LocalDate today) {
+        int maxThreshold = thresholdsDesc.get(0);
+        LocalDate limit = today.plusDays(maxThreshold);
+
+        List<Long> recipientIds = userRepository
+                .findByTenantIdAndRoleInAndIsActiveTrue(tenantId, List.of("TENANT_ADMIN", "MANAGER"))
+                .stream().map(User::getId).toList();
+
+        int fired = 0;
+        for (FleetVehicle v : vehicleRepository.findWithDocumentsExpiringBy(tenantId, limit)) {
+            fired += process(tenantId, thresholdsDesc, today, limit, recipientIds,
+                    FleetRefType.VEHICLE, v.getId(), v.getPublicId(), "Vehicle " + v.getVehicleNumber(),
+                    FleetDocumentType.INSURANCE, v.getInsuranceExpiry());
+            fired += process(tenantId, thresholdsDesc, today, limit, recipientIds,
+                    FleetRefType.VEHICLE, v.getId(), v.getPublicId(), "Vehicle " + v.getVehicleNumber(),
+                    FleetDocumentType.RC, v.getRcExpiry());
+            fired += process(tenantId, thresholdsDesc, today, limit, recipientIds,
+                    FleetRefType.VEHICLE, v.getId(), v.getPublicId(), "Vehicle " + v.getVehicleNumber(),
+                    FleetDocumentType.PERMIT, v.getPermitExpiry());
+            fired += process(tenantId, thresholdsDesc, today, limit, recipientIds,
+                    FleetRefType.VEHICLE, v.getId(), v.getPublicId(), "Vehicle " + v.getVehicleNumber(),
+                    FleetDocumentType.PUC, v.getPucExpiry());
+        }
+        for (FleetDriver d : driverRepository
+                .findByTenantIdAndStatusAndLicenseExpiryLessThanEqualAndDeletedAtIsNull(
+                        tenantId, FleetDriverStatus.ACTIVE, limit)) {
+            fired += process(tenantId, thresholdsDesc, today, limit, recipientIds,
+                    FleetRefType.DRIVER, d.getId(), d.getPublicId(), "Driver " + d.getName(),
+                    FleetDocumentType.DRIVER_LICENSE, d.getLicenseExpiry());
+        }
+        return fired;
+    }
+
+    private int process(Long tenantId, List<Integer> thresholdsDesc, LocalDate today, LocalDate limit,
+                        List<Long> recipientIds, FleetRefType refType, Long refId, UUID refPublicId,
+                        String refLabel, FleetDocumentType docType, LocalDate expiryDate) {
+        if (expiryDate == null || expiryDate.isAfter(limit)) return 0;
+
+        long daysLeft = ChronoUnit.DAYS.between(today, expiryDate);
+        Integer lastFired = alertRepository
+                .findFirstByTenantIdAndRefTypeAndRefIdAndDocTypeAndExpiryDateOrderByThresholdDaysAsc(
+                        tenantId, refType, refId, docType, expiryDate)
+                .map(FleetDocumentAlert::getThresholdDays)
+                .orElse(null);
+        Integer threshold = pickThreshold(thresholdsDesc, daysLeft, lastFired);
+        if (threshold == null) return 0;
+
+        // The alert row is saved even when nobody can be notified — it is the idempotency
+        // marker (prevents daily re-fires) and the /alerts history.
+        alertRepository.save(FleetDocumentAlert.builder()
+                .tenantId(tenantId)
+                .refType(refType).refId(refId).refPublicId(refPublicId).refLabel(refLabel)
+                .docType(docType).expiryDate(expiryDate)
+                .daysLeft(daysLeft).thresholdDays(threshold)
+                .build());
+
+        if (!recipientIds.isEmpty()) {
+            String when = daysLeft < 0
+                    ? "expired " + Math.abs(daysLeft) + " day(s) ago (on " + expiryDate + ")"
+                    : daysLeft == 0
+                            ? "expires TODAY (" + expiryDate + ")"
+                            : "expires on " + expiryDate + " (in " + daysLeft + " day(s))";
+            eventPublisher.publishEvent(NotifyEvent.builder()
+                    .type("FLEET_DOCUMENT_EXPIRY")
+                    .tenantId(tenantId)
+                    .recipientUserIds(recipientIds)
+                    .title(refLabel + " — " + docType.label() + (daysLeft < 0 ? " expired" : " expiring"))
+                    .message(refLabel + ": " + docType.label() + " " + when + ".")
+                    .referenceType("FLEET_" + refType.name())
+                    .referencePublicId(refPublicId)
+                    .channels(Set.of(DeliveryChannel.IN_APP))
+                    .build());
+        }
+
+        log.info("[FLEET-DOC-EXPIRY] {} {} {} | daysLeft={} | threshold={} | tenant={}",
+                refType, refLabel, docType, daysLeft, threshold, tenantId);
+        return 1;
+    }
+
+    /**
+     * The smallest (most urgent) threshold that expiry has crossed and that hasn't fired yet —
+     * identical semantics to the portal's DocumentExpiryReminderService#pickThreshold.
+     */
+    private Integer pickThreshold(List<Integer> thresholdsDesc, long daysUntil, Integer lastFired) {
+        Integer chosen = null;
+        for (int t : thresholdsDesc) {
+            if (daysUntil <= t && (lastFired == null || t < lastFired)) {
+                chosen = t;
+            }
+        }
+        return chosen;
+    }
+}
