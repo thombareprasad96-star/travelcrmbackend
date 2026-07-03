@@ -230,6 +230,7 @@ public class QuotationMapper {
                         .pricePerVehicle(vi.getPricePerVehicle())
                         .qty(vi.getQty())
                         .notes(vi.getNotes())
+                        .imagePath(vi.getImagePath())
                         .build());
             }
         }
