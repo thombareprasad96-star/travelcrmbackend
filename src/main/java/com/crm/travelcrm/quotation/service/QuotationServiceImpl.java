@@ -2,6 +2,8 @@ package com.crm.travelcrm.quotation.service;
 
 import com.crm.travelcrm.common.cloudinary.CloudinaryService;
 import com.crm.travelcrm.common.context.TenantContext;
+import com.crm.travelcrm.settings.service.EmailAuditService;
+import com.crm.travelcrm.settings.service.TenantMailSenderFactory;
 import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.lead.entity.Lead;
@@ -52,10 +54,8 @@ public class QuotationServiceImpl implements QuotationService {
     private final QuotationPdfService quotationPdfService;
     private final CloudinaryService cloudinaryService;
     private final LeadAccessGuard leadAccessGuard;
-    private final JavaMailSender mailSender;
-
-    @Value("${spring.mail.username:no-reply@travelcrm.local}")
-    private String mailFrom;
+    private final TenantMailSenderFactory tenantMailSenderFactory;
+    private final EmailAuditService emailAudit;
 
     @Value("${app.public-base-url:http://localhost:8080}")
     private String publicBaseUrl;
@@ -359,18 +359,28 @@ public class QuotationServiceImpl implements QuotationService {
         String fileName = "quotation-" + dto.getTitle().replaceAll("[^a-zA-Z0-9-_]", "_") + ".pdf";
 
         try {
-            MimeMessage message = mailSender.createMimeMessage();
+            // Send from the tenant's own SMTP config (Settings → Email); falls back to the
+            // application-wide spring.mail sender if this tenant hasn't configured email.
+            TenantMailSenderFactory.ResolvedMail mail =
+                    tenantMailSenderFactory.resolve(TenantContext.getTenantId());
+            MimeMessage message = mail.sender().createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, true, StandardCharsets.UTF_8.name());
-            helper.setFrom(mailFrom);
+            if (StringUtils.hasText(mail.fromName())) {
+                helper.setFrom(mail.from(), mail.fromName());
+            } else {
+                helper.setFrom(mail.from());
+            }
             helper.setTo(request.getToEmail());
             helper.setSubject(subject);
             helper.setText(body, false);
             helper.addAttachment(fileName, new org.springframework.core.io.ByteArrayResource(pdf),
                     "application/pdf");
-            mailSender.send(message);
-            log.info("Quotation {} emailed to {}", publicId, request.getToEmail());
+            mail.sender().send(message);
+            emailAudit.record(request.getToEmail(), subject, true, null);
+            log.info("Quotation {} emailed to {} (from {})", publicId, request.getToEmail(), mail.from());
         } catch (Exception ex) {
             log.error("Failed to email quotation {}: {}", publicId, ex.getMessage(), ex);
+            emailAudit.record(request.getToEmail(), subject, false, ex.getMessage());
             throw new BusinessException("Failed to send quotation email: " + ex.getMessage(),
                     HttpStatus.BAD_GATEWAY);
         }
