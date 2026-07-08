@@ -10,6 +10,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -91,6 +92,16 @@ public interface BookingRepository extends JpaRepository<Booking, Long>,
 
     // ── Traveler portal: object-level ownership (a traveler sees ONLY their own customer) ──
     Optional<Booking> findByPublicIdAndCustomerIdAndDeletedAtIsNull(UUID publicId, Long customerId);
+
+    /**
+     * Portal-access gate. Does this customer have at least one non-cancelled, non-trashed booking
+     * whose travel date is still within the access window — i.e. {@code travelDate >= minTravelDate}
+     * (where {@code minTravelDate = today - accessDays}, so equivalently {@code travelDate + accessDays
+     * >= today})? Future bookings always qualify; a booking whose travel was more than {@code accessDays}
+     * ago no longer grants portal access. Cancelled bookings never grant access.
+     */
+    boolean existsByTenantIdAndCustomerIdAndStatusNotAndTravelDateGreaterThanEqualAndDeletedAtIsNull(
+            Long tenantId, Long customerId, BookingStatus status, LocalDate minTravelDate);
 
     /**
      * Grouped booking metrics for a batch of customers, scoped to the tenant.

@@ -5,6 +5,7 @@ import com.crm.travelcrm.common.dto.ApiResponse;
 import com.crm.travelcrm.common.dto.PagedApiResponse;
 import com.crm.travelcrm.common.dto.PaginationMeta;
 import com.crm.travelcrm.notification.web.dto.NotificationResponseDTO;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -125,14 +126,18 @@ public class NotificationController {
      * {@code "notification"}.
      */
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter stream(@RequestParam String token) {
+    public SseEmitter stream(@RequestParam String token, HttpServletResponse response) {
         // Header-less auth: validate the token and populate SecurityContext + TenantContext
         // via the auth module's public facade (mirrors JwtAuthFilter for the SSE flow).
         if (!tokenAuthenticator.authenticateForCurrentThread(token)) {
+            // Reject cleanly with a 401. We must NOT complete the emitter with an exception:
+            // that re-dispatches to the JSON @ExceptionHandler, which then can't negotiate a
+            // text/event-stream response ("No acceptable representation") and blows up as a 500.
+            // Setting the status and returning null lets Spring mark the request handled with an
+            // empty body — no content negotiation, no stack trace. The client re-auths and reconnects.
             log.warn("SSE connection rejected: invalid or expired token");
-            SseEmitter rejected = new SseEmitter(0L);
-            rejected.completeWithError(new SecurityException("Invalid token"));
-            return rejected;
+            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+            return null;
         }
 
         return notificationService.subscribe();

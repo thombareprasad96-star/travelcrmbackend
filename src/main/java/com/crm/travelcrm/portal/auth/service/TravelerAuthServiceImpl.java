@@ -1,5 +1,7 @@
 package com.crm.travelcrm.portal.auth.service;
 
+import com.crm.travelcrm.booking.enums.BookingStatus;
+import com.crm.travelcrm.booking.repository.BookingRepository;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.exception.UnauthorizedException;
 import com.crm.travelcrm.customer.entity.Customer;
@@ -15,10 +17,12 @@ import com.crm.travelcrm.portal.auth.repository.TravelerAccountRepository;
 import com.crm.travelcrm.portal.security.PortalJwtUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.Optional;
 
 /**
@@ -41,6 +45,15 @@ public class TravelerAuthServiceImpl implements TravelerAuthService {
     private final TravelerAccountRepository travelerAccountRepository;
     private final PortalJwtUtil portalJwtUtil;
     private final OtpService otpService;
+    private final BookingRepository bookingRepository;
+
+    /**
+     * Portal access lasts until a booking's {@code travelDate + this many days}. A traveler may log
+     * in only while they still have at least one active booking inside that window. Tunable without
+     * a recompile via {@code portal.access.days-after-travel} (default 90).
+     */
+    @Value("${portal.access.days-after-travel:90}")
+    private int accessDaysAfterTravel;
 
     @Override
     @Transactional
@@ -60,6 +73,12 @@ public class TravelerAuthServiceImpl implements TravelerAuthService {
             log.warn("[PORTAL] OTP request for DISABLED account {}", account.getPublicId());
             return;
         }
+        // Access window: only travelers with an active booking (until travelDate + N days) may log in.
+        if (!hasPortalAccess(customer)) {
+            log.info("[PORTAL] OTP request denied — no booking within access window for customer {}",
+                    customer.getPublicId());
+            return;   // silently ignore — controller still responds 200, so no enumeration leak
+        }
         // Delivery channel is inferred (email vs SMS) from the identifier by the OTP module.
         otpService.request(OtpPurpose.PORTAL_LOGIN, id, OtpChannel.AUTO);
     }
@@ -75,6 +94,12 @@ public class TravelerAuthServiceImpl implements TravelerAuthService {
                 .findByTenantIdAndCustomerIdAndDeletedAtIsNull(customer.getTenantId(), customer.getId())
                 .filter(TravelerAccount::isActive)
                 .orElseThrow(this::invalid);
+
+        // Access window re-check (belt-and-braces, in case it lapsed since the code was requested).
+        // Same opaque error as an invalid code so nothing about account/booking state leaks.
+        if (!hasPortalAccess(customer)) {
+            throw invalid();
+        }
 
         // Credential check delegated entirely to the shared OTP module.
         OtpResult result = otpService.verify(OtpPurpose.PORTAL_LOGIN, id, otp);
@@ -105,6 +130,20 @@ public class TravelerAuthServiceImpl implements TravelerAuthService {
         return id.contains("@")
                 ? customerRepository.findFirstByEmailAndDeletedAtIsNullOrderByIdAsc(id)
                 : customerRepository.findFirstByPhoneAndDeletedAtIsNullOrderByIdAsc(id);
+    }
+
+    /**
+     * Portal-access rule: a traveler may use the portal only while they hold at least one active
+     * booking within the access window — access begins once a booking exists and lasts until the
+     * booking's {@code travelDate + accessDaysAfterTravel} days. Upcoming trips always qualify;
+     * once every booking's travel date is more than {@code accessDaysAfterTravel} days in the past,
+     * access lapses. Cancelled and trashed bookings never grant access.
+     */
+    private boolean hasPortalAccess(Customer customer) {
+        LocalDate minTravelDate = LocalDate.now().minusDays(accessDaysAfterTravel);
+        return bookingRepository
+                .existsByTenantIdAndCustomerIdAndStatusNotAndTravelDateGreaterThanEqualAndDeletedAtIsNull(
+                        customer.getTenantId(), customer.getId(), BookingStatus.CANCELLED, minTravelDate);
     }
 
     private TravelerAccount provision(Customer customer, String identifier) {
