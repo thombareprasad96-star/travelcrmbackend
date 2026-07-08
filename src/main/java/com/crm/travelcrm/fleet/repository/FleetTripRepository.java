@@ -11,6 +11,7 @@ import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -30,6 +31,20 @@ public interface FleetTripRepository
     @EntityGraph(attributePaths = {"vehicle", "driver"})
     List<FleetTrip> findByTenantIdAndStatusAndDeletedAtIsNullOrderByStartDatetimeAsc(
             Long tenantId, FleetTripStatus status);
+
+    /** Planned trips starting within a window — dashboard "upcoming trips" list. */
+    @EntityGraph(attributePaths = {"vehicle", "driver"})
+    List<FleetTrip> findByTenantIdAndStatusAndStartDatetimeBetweenAndDeletedAtIsNullOrderByStartDatetimeAsc(
+            Long tenantId, FleetTripStatus status, LocalDateTime from, LocalDateTime to);
+
+    /** Single row [count, coalesce(sum(distanceKm),0)] for trips of {@code status} that ended in [from, to). */
+    @Query("""
+            select count(t), coalesce(sum(t.distanceKm), 0) from FleetTrip t
+            where t.tenantId = :tenantId and t.status = :status and t.deletedAt is null
+              and t.endDatetime >= :from and t.endDatetime < :to""")
+    List<Object[]> countAndDistanceByStatusAndEndBetween(
+            @Param("tenantId") Long tenantId, @Param("status") FleetTripStatus status,
+            @Param("from") LocalDateTime from, @Param("to") LocalDateTime to);
 
     boolean existsByVehicle_IdAndStatusAndDeletedAtIsNull(Long vehicleId, FleetTripStatus status);
 

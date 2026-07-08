@@ -46,8 +46,14 @@ public interface BookingRepository extends JpaRepository<Booking, Long>,
     // Duplicate guard: a lead must not be silently converted into a second booking.
     boolean existsByLeadIdAndTenantIdAndDeletedAtIsNull(Long leadId, Long tenantId);
 
-    // The existing active booking a lead was already converted into (newest first).
-    Optional<Booking> findFirstByLeadIdAndTenantIdAndDeletedAtIsNullOrderByIdDesc(Long leadId, Long tenantId);
+    // The still-live booking a lead is already converted into (newest first), EXCLUDING a
+    // given status. Double-convert protection passes CANCELLED here so a reopened lead whose
+    // only prior booking was cancelled can be converted again, while a lead with a genuinely
+    // active (PENDING/CONFIRMED/COMPLETED/REFUNDED) booking is still blocked. A cancelled
+    // booking is retained (deleted_at stays null), so filtering on soft-delete alone is not
+    // enough to tell "already booked" from "was booked, then cancelled".
+    Optional<Booking> findFirstByLeadIdAndTenantIdAndStatusNotAndDeletedAtIsNullOrderByIdDesc(
+            Long leadId, Long tenantId, BookingStatus status);
 
     // ── Stats queries ────────────────────────────────────────────────────────
 

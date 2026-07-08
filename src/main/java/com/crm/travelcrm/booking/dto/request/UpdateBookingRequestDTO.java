@@ -6,6 +6,7 @@
 
 package com.crm.travelcrm.booking.dto.request;
 
+import com.crm.travelcrm.booking.enums.BookingStatus;
 import jakarta.validation.constraints.*;
 import lombok.Getter;
 import lombok.Setter;
@@ -40,10 +41,19 @@ public class UpdateBookingRequestDTO {
 
     private List<String> services;
 
-    // ── Removed from your original ────────────────────────────────────────────
-    // customerName  → resolved server-side, never client-supplied
-    // customerId    → immutable after creation
-    // paidAmount    → dedicated PaymentUpdateRequestDTO + endpoint only
-    // bookingCode   → immutable
-    // status        → dedicated StatusUpdateRequestDTO + endpoint only
+    // Amount already collected — ABSOLUTE value (not an increment). Server re-derives
+    // paymentStatus / pendingAmount and rejects a value above total payable.
+    @DecimalMin(value = "0.0", message = "Paid amount cannot be negative")
+    @Digits(integer = 10, fraction = 2, message = "Invalid amount format")
+    private BigDecimal paidAmount;
+
+    // Booking status. Applied with lifecycle guards in the service: CANCELLED is refused
+    // here (use the cancel action so the lead/customer are handled); a COMPLETED/CANCELLED
+    // booking is terminal and locked.
+    private BookingStatus status;
+
+    // ── Still server-owned / immutable (intentionally NOT editable here) ───────
+    // customerName  → resolved server-side snapshot, never client-supplied
+    // customerId    → immutable after creation (would break referential integrity)
+    // bookingCode   → immutable business code
 }

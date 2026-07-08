@@ -25,6 +25,7 @@ import com.crm.travelcrm.common.dto.PaginationMeta;
 import com.crm.travelcrm.common.event.LeadSoftDeletedEvent;
 import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
+import com.crm.travelcrm.common.util.PhoneNormalizer;
 import com.crm.travelcrm.customer.entity.Customer;
 import com.crm.travelcrm.customer.repository.CustomerRepository;
 import com.crm.travelcrm.customer.util.CustomerCodeGenerator;
@@ -40,6 +41,7 @@ import com.crm.travelcrm.quotation.repository.QuotationRepository;
 import lombok.RequiredArgsConstructor;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.http.HttpStatus;
@@ -59,6 +61,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -68,8 +71,16 @@ public class BookingServiceImpl implements BookingService {
 
     private static final Logger log = LogManager.getLogger(BookingServiceImpl.class);
 
-    private static final BigDecimal GST_RATE = new BigDecimal("0.05");
-    private static final BigDecimal TCS_RATE = new BigDecimal("0.05");
+    // Tax rates are externalised so they can be tuned per environment without a redeploy.
+    // NOTE: these are still flat rates applied to every booking. Correct Indian TCS is
+    // slabbed (nil domestic; 5% up to ₹7L, 20% above, under LRS) and GST varies by service —
+    // applying that properly needs a domestic/overseas + product classification the booking
+    // model does not yet carry. Externalising the rate is the safe first step, not the whole fix.
+    @Value("${app.booking.gst-rate:0.05}")
+    private BigDecimal gstRate;
+
+    @Value("${app.booking.tcs-rate:0.05}")
+    private BigDecimal tcsRate;
 
     private final BookingRepository    bookingRepository;
     private final BookingMapper        bookingMapper;
@@ -136,9 +147,13 @@ public class BookingServiceImpl implements BookingService {
         // managed Lead so the stage flip below participates in this same transaction.
         Lead lead = leadAccessGuard.requireVisible(leadPublicId, "LEAD_UPDATE");
 
-        // Duplicate guard — never silently create a second booking for the same lead. Re-submits
-        // and double-clicks land here and are rejected with a friendly 409 naming the existing one.
-        bookingRepository.findFirstByLeadIdAndTenantIdAndDeletedAtIsNullOrderByIdDesc(lead.getId(), tenantId)
+        // Duplicate guard — never silently create a SECOND active booking for the same lead.
+        // Re-submits and double-clicks are rejected with a friendly 409 naming the existing one.
+        // CANCELLED bookings are excluded: cancelling reopens the lead (REOPENED) but retains the
+        // booking row, so a reopened lead must be re-convertible even though its old cancelled
+        // booking still exists.
+        bookingRepository.findFirstByLeadIdAndTenantIdAndStatusNotAndDeletedAtIsNullOrderByIdDesc(
+                        lead.getId(), tenantId, BookingStatus.CANCELLED)
                 .ifPresent(existing -> {
                     throw new BusinessException(
                             "This lead is already converted to booking " + existing.getBookingCode()
@@ -207,22 +222,60 @@ public class BookingServiceImpl implements BookingService {
         return bookingMapper.toResponse(saved);
     }
 
-    /** Find the tenant customer by the lead's phone, or create a fresh one snapshotting the lead. */
+    /**
+     * Resolve the tenant customer for a conversion, in order:
+     *   1. Reuse the live customer with this (normalised) phone — a repeat customer.
+     *   2. Else restore-and-reuse a trashed customer with this phone — avoids an INSERT that
+     *      would collide with the (tenant_id, phone) partial unique index and 500 (the failure
+     *      that hit "convert → cancel → same customer converts again").
+     *   3. Else create a fresh customer, stamped with provenance ({@code createdFromLeadId}) so
+     *      cancel-cleanup can safely reclaim ONLY the customers conversion created itself.
+     * Phone is normalised the same way everywhere ({@link PhoneNormalizer}) so a lead never
+     * spawns a duplicate of an otherwise-identical customer, and a blank phone is rejected up
+     * front instead of creating an unmatchable / NOT-NULL-violating row.
+     */
     private Customer resolveOrCreateCustomer(Lead lead, String name, Long tenantId) {
-        return customerRepository.findByPhoneAndTenantIdAndDeletedAtIsNull(lead.getPhone(), tenantId)
-                .orElseGet(() -> {
-                    Customer customer = Customer.builder()
-                            .tenantId(tenantId)
-                            .customerCode(customerCodeGenerator.generate(tenantId))
-                            .name(name != null && !name.isBlank() ? name : lead.getCustomerName())
-                            .phone(lead.getPhone())
-                            .email(lead.getEmail())
-                            .build();
-                    Customer created = customerRepository.save(customer);
-                    log.info("Created customer {} from lead {} during conversion",
-                            created.getCustomerCode(), lead.getPublicId());
-                    return created;
-                });
+        String phone = PhoneNormalizer.normalize(lead.getPhone());
+        if (PhoneNormalizer.isBlank(phone)) {
+            throw new BusinessException(
+                    "This lead has no phone number, so it cannot be converted to a booking. "
+                            + "Add a phone number to the lead first.",
+                    HttpStatus.BAD_REQUEST);
+        }
+        String resolvedName = (name != null && !name.isBlank()) ? name : lead.getCustomerName();
+
+        // 1. Live customer — reuse.
+        Optional<Customer> live = customerRepository
+                .findByPhoneAndTenantIdAndDeletedAtIsNull(phone, tenantId);
+        if (live.isPresent()) {
+            return live.get();
+        }
+
+        // 2. Trashed customer with the same phone — restore rather than insert a colliding row.
+        Optional<Customer> trashed = customerRepository
+                .findFirstByPhoneAndTenantIdAndDeletedAtIsNotNullOrderByDeletedAtDesc(phone, tenantId);
+        if (trashed.isPresent()) {
+            Customer revived = trashed.get();
+            revived.restore();
+            Customer saved = customerRepository.save(revived);
+            log.info("Restored trashed customer {} for conversion of lead {}",
+                    saved.getCustomerCode(), lead.getPublicId());
+            return saved;
+        }
+
+        // 3. Brand-new customer — stamp provenance so cancel-cleanup can reclaim it later.
+        Customer customer = Customer.builder()
+                .tenantId(tenantId)
+                .customerCode(customerCodeGenerator.generate(tenantId))
+                .name(resolvedName)
+                .phone(phone)
+                .email(lead.getEmail())
+                .createdFromLeadId(lead.getId())
+                .build();
+        Customer created = customerRepository.save(customer);
+        log.info("Created customer {} from lead {} during conversion",
+                created.getCustomerCode(), lead.getPublicId());
+        return created;
     }
 
     // ── Get by ID ────────────────────────────────────────────────────────────
@@ -283,17 +336,77 @@ public class BookingServiceImpl implements BookingService {
             booking.setDestinationSnapshot(request.getDestination());
         }
 
-        // Recalculate only if either financial field was touched
-        if (request.getCustomerAmount() != null || request.getVendorCost() != null) {
+        // Status is server-owned (mapper ignores it). Apply here behind lifecycle guards so an
+        // edit can never silently skip the cancel() flow or mutate a locked booking.
+        boolean statusChanged = applyStatusOnUpdate(booking, request.getStatus());
+
+        // paidAmount is server-owned too — apply it as an ABSOLUTE set when the client sends it.
+        // Recalculate whenever ANY financial input (amount / vendor cost / paid) changed so
+        // gst / tcs / totalPayable / paymentStatus — and thus the derived pendingAmount — stay
+        // consistent. Note totalPayable depends only on customerAmount, so a paid-only edit
+        // leaves it unchanged and simply moves paymentStatus + pendingAmount.
+        if (request.getCustomerAmount() != null
+                || request.getVendorCost() != null
+                || request.getPaidAmount() != null) {
+
+            BigDecimal newPaid = request.getPaidAmount() != null
+                    ? request.getPaidAmount()
+                    : booking.getPaidAmount();
+
             calculateAndApplyFinancials(
                     booking,
-                    booking.getCustomerAmount(),  // ✅ post-mapper value
-                    booking.getVendorCost(),       // ✅ post-mapper value
-                    booking.getPaidAmount()        // ✅ paidAmount unchanged in this flow
+                    booking.getCustomerAmount(),  // post-mapper value
+                    booking.getVendorCost(),       // post-mapper value
+                    newPaid
             );
+
+            // Never let paid exceed what's owed (mirrors updatePayment()). Throwing rolls back.
+            if (booking.getPaidAmount().compareTo(booking.getTotalPayable()) > 0) {
+                throw new BusinessException(
+                        "Paid amount ₹" + booking.getPaidAmount()
+                                + " exceeds total payable ₹" + booking.getTotalPayable());
+            }
         }
 
-        return bookingMapper.toResponse(bookingRepository.save(booking));
+        Booking saved = bookingRepository.save(booking);
+
+        // Mirror updateStatus(): notify on a real status change so the bell/feed stays in sync.
+        if (statusChanged) {
+            publishBookingEvent(statusEventType(saved.getStatus()), saved,
+                    "Booking " + saved.getStatus() + ": " + saved.getBookingCode(),
+                    "Booking " + saved.getBookingCode() + " status changed to " + saved.getStatus());
+        }
+
+        return bookingMapper.toResponse(saved);
+    }
+
+    /**
+     * Apply a client-requested status change coming from the general update, guarding the
+     * booking lifecycle. Returns {@code true} only if the status actually changed (so the
+     * caller can fire the notification).
+     *
+     * <p>CANCELLED is refused here — it must go through {@code cancel()}, which reopens the
+     * linked lead and reclaims a conversion-created customer; setting it via a field edit would
+     * skip all of that. A COMPLETED or CANCELLED booking is terminal, so its status is locked.</p>
+     */
+    private boolean applyStatusOnUpdate(Booking booking, BookingStatus newStatus) {
+        if (newStatus == null || newStatus == booking.getStatus()) {
+            return false;
+        }
+        if (newStatus == BookingStatus.CANCELLED) {
+            throw new BusinessException(
+                    "To cancel a booking, use the cancel action — it reopens the linked lead and "
+                            + "cleans up a conversion-created customer. Setting CANCELLED here would skip that.",
+                    HttpStatus.CONFLICT);
+        }
+        if (booking.getStatus() == BookingStatus.COMPLETED
+                || booking.getStatus() == BookingStatus.CANCELLED) {
+            throw new BusinessException(
+                    "A " + booking.getStatus() + " booking is locked; its status can no longer be changed.",
+                    HttpStatus.CONFLICT);
+        }
+        booking.setStatus(newStatus);
+        return true;
     }
 
     // ── Update Status ────────────────────────────────────────────────────────
@@ -403,12 +516,16 @@ public class BookingServiceImpl implements BookingService {
     }
 
     /**
-     * Customer-removal guard for cancel. The customer derived from this booking is moved to Trash
-     * (soft-deleted) ONLY when it has no other active (non-trashed) booking; otherwise it is a
-     * repeat customer and is preserved — the cancelled booking simply stays in its history (the
-     * {@code customer_id} column is NOT NULL, so the link is kept rather than nulled). Always
-     * recoverable, never a hard delete. A COMPLETED booking can't reach here (it can't be
-     * cancelled), so any customer with completed-journey history is inherently protected.
+     * Customer-removal guard for cancel. A customer is moved to Trash (soft-deleted) ONLY when
+     * BOTH hold:
+     *   (a) it was auto-created by a lead→booking conversion ({@code createdFromLeadId} set) —
+     *       a manually-entered customer is NEVER reclaimed just because a booking was cancelled;
+     *   (b) it has no other active (non-trashed) booking — otherwise it's a repeat customer and
+     *       is preserved, the cancelled booking simply staying in its history ({@code customer_id}
+     *       is NOT NULL, so the link is kept rather than nulled).
+     * Always recoverable, never a hard delete. A COMPLETED booking can't reach here (it can't be
+     * cancelled) and counts as "active" for (b), so any customer with completed-journey history —
+     * even a conversion-derived one — is inherently protected.
      */
     private void handleDerivedCustomerOnCancel(Booking booking, Long tenantId) {
         Long customerId = booking.getCustomerId();
@@ -422,6 +539,13 @@ public class BookingServiceImpl implements BookingService {
             return;
         }
         customerRepository.findByIdAndTenantIdAndDeletedAtIsNull(customerId, tenantId).ifPresent(customer -> {
+            // Provenance gate: only reclaim customers conversion created itself. A hand-entered
+            // customer (createdFromLeadId == null) whose first/only booking is cancelled stays.
+            if (customer.getCreatedFromLeadId() == null) {
+                log.info("Cancel: customer {} retained (manually created, not conversion-derived); booking {} kept linked",
+                        customer.getCustomerCode(), booking.getBookingCode());
+                return;
+            }
             customer.softDelete(currentUserEmail());
             customerRepository.save(customer);
             log.info("Cancel: derived customer {} moved to Trash (no other active bookings)",
@@ -668,8 +792,8 @@ public class BookingServiceImpl implements BookingService {
                                              BigDecimal customerAmount,
                                              BigDecimal vendorCost,
                                              BigDecimal paidAmount) {
-        BigDecimal gst          = customerAmount.multiply(GST_RATE).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal tcs          = customerAmount.multiply(TCS_RATE).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal gst          = customerAmount.multiply(gstRate).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal tcs          = customerAmount.multiply(tcsRate).setScale(2, RoundingMode.HALF_UP);
         BigDecimal totalPayable = customerAmount.add(gst).add(tcs);
         BigDecimal netProfit    = customerAmount.subtract(vendorCost);
 

@@ -7,6 +7,7 @@ import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.dto.PagedApiResponse;
 import com.crm.travelcrm.common.dto.PaginationMeta;
 import com.crm.travelcrm.common.exception.RestoreAvailableException;
+import com.crm.travelcrm.common.util.PhoneNormalizer;
 import com.crm.travelcrm.customer.dto.request.CreateCustomerRequest;
 import com.crm.travelcrm.customer.dto.request.StatusUpdateRequest;
 import com.crm.travelcrm.customer.dto.request.TierUpdateRequest;
@@ -424,7 +425,7 @@ public class CustomerServiceImpl implements CustomerService {
     }
 
     private String normalizePhone(String phone) {
-        return phone == null ? null : phone.trim();
+        return PhoneNormalizer.normalize(phone);
     }
 
     private String normalizeEmail(String email) {

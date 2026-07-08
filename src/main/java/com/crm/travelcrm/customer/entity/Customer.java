@@ -34,15 +34,12 @@ import java.time.LocalDate;
                 @Index(name = "idx_customer_type",          columnList = "tenant_id,customer_type"),
                 @Index(name = "idx_customer_tier",          columnList = "tenant_id,loyalty_tier"),
                 @Index(name = "idx_customer_phone",         columnList = "phone")
-        },
-        uniqueConstraints = {
-                @UniqueConstraint(
-                        name = "uk_customer_tenant_phone",
-                        columnNames = {"tenant_id", "phone"}
-                )
-                // customer_code uniqueness is enforced by the soft-delete-aware partial
-                // unique index uq_customers_code_tenant (see db/indexes.sql), not a constraint.
         }
+        // Uniqueness of (tenant_id, phone) and (tenant_id, customer_code) is enforced by
+        // soft-delete-aware PARTIAL unique indexes (uq_customers_phone_tenant /
+        // uq_customers_code_tenant, see db/indexes.sql), NOT absolute @UniqueConstraints.
+        // An absolute constraint would block reusing a phone after the owning customer is
+        // moved to Trash — which broke the lead→booking re-conversion flow.
 )
 @Getter
 @Setter
@@ -68,6 +65,14 @@ public class Customer extends BaseTenantEntity {
 
     @Column(name = "alternate_phone", length = 20)
     private String alternatePhone;
+
+    // ── Provenance ───────────────────────────────────────────────────────────
+    // Set to the originating lead's internal id ONLY when this customer row was
+    // auto-created by a lead→booking conversion. Null for manually-entered
+    // customers. The cancel-cleanup uses this to auto-Trash ONLY the customers it
+    // created itself, never a customer a user typed in by hand.
+    @Column(name = "created_from_lead_id")
+    private Long createdFromLeadId;
 
     // ── Classification ───────────────────────────────────────────────────────
 

@@ -55,6 +55,14 @@ public class LeadServiceImpl implements LeadService {
     private final ScopeResolver scopeResolver;
     private final LeadAccessGuard leadAccessGuard;
 
+    // Terminal (closed) stages. A lead here no longer blocks a fresh lead for the same
+    // contact, and CONVERTED specifically is owned by the booking lifecycle — it may be
+    // entered ONLY by convert-to-booking and left ONLY by cancelling that booking (see
+    // assertConversionStageTransitionAllowed). Kept in sync with the uq_leads_*_open
+    // partial unique indexes in db/indexes.sql.
+    private static final Set<LeadStage> TERMINAL_STAGES =
+            Set.of(LeadStage.CONVERTED, LeadStage.LOST);
+
     // ── Create ────────────────────────────────────────────────────────────────
 
     @Override
@@ -135,12 +143,14 @@ public class LeadServiceImpl implements LeadService {
 
         if (keyword.contains("@")) {
             lead = leadRepository
-                    .findByEmailAndTenantIdAndDeletedAtIsNull(keyword.toLowerCase(), tenantId)
+                    .findFirstByEmailAndTenantIdAndDeletedAtIsNullOrderByCreatedAtDesc(
+                            keyword.toLowerCase(), tenantId)
                     .orElseThrow(() -> new ResourceNotFoundException(
                             "Lead not found with email: " + keyword));
         } else {
             lead = leadRepository
-                    .findByPhoneAndTenantIdAndDeletedAtIsNull(keyword, tenantId)
+                    .findFirstByPhoneAndTenantIdAndDeletedAtIsNullOrderByCreatedAtDesc(
+                            keyword, tenantId)
                     .orElseThrow(() -> new ResourceNotFoundException(
                             "Lead not found with phone: " + keyword));
         }
@@ -175,6 +185,8 @@ public class LeadServiceImpl implements LeadService {
         lead.setPhone(request.getPhone());
         lead.setLeadType(request.getLeadType());
         lead.setLeadSource(request.getLeadSource());
+        // Editing a lead must not smuggle it into/out of CONVERTED behind the booking's back.
+        assertConversionStageTransitionAllowed(lead.getLeadStage(), request.getLeadStage());
         lead.setLeadStage(request.getLeadStage());
         lead.setNotes(request.getNotes());
 
@@ -327,6 +339,9 @@ public class LeadServiceImpl implements LeadService {
             return leadMapper.toResponse(lead);
         }
 
+        // CONVERTED is owned by the booking lifecycle — reject drag/edit crossings.
+        assertConversionStageTransitionAllowed(oldStage, newStage);
+
         lead.setLeadStage(newStage);
         Lead updated = leadRepository.save(lead);
         log.info("Lead stage changed | publicId: {} | {} -> {} | tenantId: {}",
@@ -345,6 +360,29 @@ public class LeadServiceImpl implements LeadService {
                 .build());
 
         return leadMapper.toResponse(updated);
+    }
+
+    /**
+     * Guard the CONVERTED invariant. CONVERTED is owned by the booking lifecycle, not by
+     * ad-hoc stage edits: it is ENTERED only via convert-to-booking (which also creates the
+     * booking and the back-links) and LEFT only via cancelling that booking (which sets
+     * REOPENED and clears the back-links). Blocking both crossings on the generic
+     * stage/edit endpoints stops us ever producing a CONVERTED lead with no booking, or a
+     * live lead still pointing at one. A CONVERTED→CONVERTED no-op (editing other fields of
+     * a converted lead) is allowed.
+     */
+    private void assertConversionStageTransitionAllowed(LeadStage oldStage, LeadStage newStage) {
+        if (oldStage == newStage) return;
+        if (newStage == LeadStage.CONVERTED) {
+            throw new BusinessException(
+                    "A lead becomes Converted only by converting it to a booking.",
+                    HttpStatus.CONFLICT);
+        }
+        if (oldStage == LeadStage.CONVERTED) {
+            throw new BusinessException(
+                    "This lead is already converted to a booking. Cancel the booking to reopen it.",
+                    HttpStatus.CONFLICT);
+        }
     }
 
     // ── Statistics ────────────────────────────────────────────────────────────
@@ -468,26 +506,29 @@ public class LeadServiceImpl implements LeadService {
                                       Long tenantId,
                                       UUID excludePublicId) {
 
+        // Only an OPEN lead is a conflict. A CONVERTED/LOST lead for the same contact is
+        // kept for history and must NOT block the customer's next inquiry — that block was
+        // what made repeat business impossible.
         if (request.getEmail() != null) {
             boolean emailTaken = excludePublicId == null
-                    ? leadRepository.existsByEmailAndTenantIdAndDeletedAtIsNull(
-                    request.getEmail().toLowerCase(), tenantId)
-                    : leadRepository.existsByEmailAndTenantIdAndDeletedAtIsNullAndPublicIdNot(
-                    request.getEmail().toLowerCase(), tenantId, excludePublicId);
+                    ? leadRepository.existsByEmailAndTenantIdAndDeletedAtIsNullAndLeadStageNotIn(
+                    request.getEmail().toLowerCase(), tenantId, TERMINAL_STAGES)
+                    : leadRepository.existsByEmailAndTenantIdAndDeletedAtIsNullAndLeadStageNotInAndPublicIdNot(
+                    request.getEmail().toLowerCase(), tenantId, TERMINAL_STAGES, excludePublicId);
 
             if (emailTaken) throw new DuplicateLeadException(
-                    "Lead already exists with email: " + request.getEmail());
+                    "An open lead already exists with email: " + request.getEmail());
         }
 
         if (request.getPhone() != null) {
             boolean phoneTaken = excludePublicId == null
-                    ? leadRepository.existsByPhoneAndTenantIdAndDeletedAtIsNull(
-                    request.getPhone(), tenantId)
-                    : leadRepository.existsByPhoneAndTenantIdAndDeletedAtIsNullAndPublicIdNot(
-                    request.getPhone(), tenantId, excludePublicId);
+                    ? leadRepository.existsByPhoneAndTenantIdAndDeletedAtIsNullAndLeadStageNotIn(
+                    request.getPhone(), tenantId, TERMINAL_STAGES)
+                    : leadRepository.existsByPhoneAndTenantIdAndDeletedAtIsNullAndLeadStageNotInAndPublicIdNot(
+                    request.getPhone(), tenantId, TERMINAL_STAGES, excludePublicId);
 
             if (phoneTaken) throw new DuplicateLeadException(
-                    "Lead already exists with phone: " + request.getPhone());
+                    "An open lead already exists with phone: " + request.getPhone());
         }
     }
 

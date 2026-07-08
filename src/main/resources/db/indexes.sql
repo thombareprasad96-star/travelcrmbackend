@@ -43,6 +43,32 @@ ALTER TABLE customers DROP CONSTRAINT IF EXISTS uk_customer_tenant_code;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_customers_code_tenant
         ON customers (customer_code, tenant_id) WHERE deleted_at IS NULL;
 
+-- customers.phone: the absolute uk_customer_tenant_phone constraint (annotation removed
+-- from the entity) is replaced by a soft-delete-aware partial unique index. The absolute
+-- form blocked reusing a phone after the owning customer was moved to Trash, which made the
+-- lead→booking re-conversion flow (convert → cancel → convert again) fail with a raw
+-- constraint violation. Uniqueness now applies only across LIVE customers.
+ALTER TABLE customers DROP CONSTRAINT IF EXISTS uk_customer_tenant_phone;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_customers_phone_tenant
+        ON customers (phone, tenant_id) WHERE deleted_at IS NULL;
+
+-- leads.email / leads.phone: the absolute uk_lead_tenant_email / uk_lead_tenant_phone
+-- constraints (annotations removed from the entity) are replaced by soft-delete-aware,
+-- OPEN-lead-only partial unique indexes. The absolute form permanently blocked repeat
+-- business — a CONVERTED lead is kept for history (never deleted), so its email/phone stayed
+-- reserved forever and the same customer could never be entered as a fresh lead. Uniqueness
+-- now applies only to OPEN leads (stage NOT IN CONVERTED/LOST), so at most one open lead per
+-- contact while new inquiries are allowed once the prior one closes. lead_stage is persisted
+-- as the enum NAME (@Enumerated(STRING)), hence 'CONVERTED' / 'LOST'.
+ALTER TABLE leads DROP CONSTRAINT IF EXISTS uk_lead_tenant_email;
+ALTER TABLE leads DROP CONSTRAINT IF EXISTS uk_lead_tenant_phone;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_leads_email_tenant_open
+        ON leads (email, tenant_id)
+        WHERE deleted_at IS NULL AND lead_stage NOT IN ('CONVERTED', 'LOST');
+CREATE UNIQUE INDEX IF NOT EXISTS uq_leads_phone_tenant_open
+        ON leads (phone, tenant_id)
+        WHERE deleted_at IS NULL AND lead_stage NOT IN ('CONVERTED', 'LOST');
+
 -- NOTE: users(email, tenant_id) and tenants(organization_code) are intentionally
 -- left on their existing absolute UNIQUE constraints. Converting them to partial
 -- indexes would require dropping Hibernate-managed constraints on the tables that

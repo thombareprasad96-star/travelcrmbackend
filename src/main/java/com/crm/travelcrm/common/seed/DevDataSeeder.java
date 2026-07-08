@@ -19,6 +19,20 @@ import com.crm.travelcrm.company.repository.CompanyRepository;
 import com.crm.travelcrm.company.repository.TaxRateRepository;
 import com.crm.travelcrm.customer.entity.Customer;
 import com.crm.travelcrm.customer.repository.CustomerRepository;
+import com.crm.travelcrm.fleet.entity.FleetDriver;
+import com.crm.travelcrm.fleet.entity.FleetFuelLog;
+import com.crm.travelcrm.fleet.entity.FleetMaintenanceLog;
+import com.crm.travelcrm.fleet.entity.FleetTrip;
+import com.crm.travelcrm.fleet.entity.FleetVehicle;
+import com.crm.travelcrm.fleet.enums.FleetDriverStatus;
+import com.crm.travelcrm.fleet.enums.FleetOwnerType;
+import com.crm.travelcrm.fleet.enums.FleetTripStatus;
+import com.crm.travelcrm.fleet.enums.FleetVehicleStatus;
+import com.crm.travelcrm.fleet.repository.FleetDriverRepository;
+import com.crm.travelcrm.fleet.repository.FleetFuelLogRepository;
+import com.crm.travelcrm.fleet.repository.FleetMaintenanceLogRepository;
+import com.crm.travelcrm.fleet.repository.FleetTripRepository;
+import com.crm.travelcrm.fleet.repository.FleetVehicleRepository;
 import com.crm.travelcrm.lead.entity.Lead;
 import com.crm.travelcrm.lead.enums.LeadSource;
 import com.crm.travelcrm.lead.enums.LeadStage;
@@ -69,6 +83,7 @@ import org.springframework.stereotype.Component;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
@@ -118,6 +133,11 @@ public class DevDataSeeder implements CommandLineRunner {
     private final TaxRateRepository taxRateRepository;
     private final CompanyRepository companyRepository;
     private final NotificationSettingRepository notificationSettingRepository;
+    private final FleetVehicleRepository fleetVehicleRepository;
+    private final FleetDriverRepository fleetDriverRepository;
+    private final FleetTripRepository fleetTripRepository;
+    private final FleetFuelLogRepository fleetFuelLogRepository;
+    private final FleetMaintenanceLogRepository fleetMaintenanceLogRepository;
 
     @Override
     public void run(String... args) {
@@ -145,6 +165,8 @@ public class DevDataSeeder implements CommandLineRunner {
             seedVendors();
             List<Lead> leads = seedLeads(users);
             seedBookings(customers, destinations, leads);
+
+            seedFleet();
 
             seedReminders();
             seedBookingReminders();
@@ -528,5 +550,263 @@ public class DevDataSeeder implements CommandLineRunner {
         notificationSettingRepository.save(NotificationSetting.builder()
                 .settingsJson("[]").build());
         log.info("[DevDataSeeder] seeded notification settings");
+    }
+
+    // ── fleet / vehicle diary ─────────────────────────────────────────────────
+
+    /** Fleet seeds 7 rows per entity (independent of the platform-wide {@link #N}). */
+    private static final int FLEET_N = 7;
+
+    /**
+     * Seeds the Vehicle Diary: 7 vehicles, 7 drivers, 7 trips, 7 fuel logs and 7 maintenance
+     * logs. Statuses, odometers, document/service dates and log dates are kept mutually
+     * consistent (two ONGOING trips hold their vehicles ON_TRIP; several docs expire within
+     * the dashboard window or are already overdue; a couple of vehicles fall due for service;
+     * fuel/maintenance logs land in the current month) so the dashboard counts, KPIs, expiry
+     * alerts and service-due tiles all show live data. Each table is guarded independently for
+     * idempotency (seeded only when empty).
+     */
+    private void seedFleet() {
+        List<FleetVehicle> vehicles = fleetVehicleRepository.count() > 0
+                ? fleetVehicleRepository.findAll()
+                : seedFleetVehicles();
+        List<FleetDriver> drivers = fleetDriverRepository.count() > 0
+                ? fleetDriverRepository.findAll()
+                : seedFleetDrivers();
+        if (vehicles.isEmpty() || drivers.isEmpty()) return;
+
+        if (fleetTripRepository.count() == 0) seedFleetTrips(vehicles, drivers);
+        if (fleetFuelLogRepository.count() == 0) seedFleetFuelLogs(vehicles);
+        if (fleetMaintenanceLogRepository.count() == 0) seedFleetMaintenanceLogs(vehicles);
+    }
+
+    private List<FleetVehicle> seedFleetVehicles() {
+        LocalDate today = LocalDate.now();
+        // Vendor snapshot for VENDOR/RENTED-owned vehicles (logical FK, same pattern as booking snapshots).
+        Vendor vendor = vendorRepository.findAll().stream().findFirst().orElse(null);
+
+        String[][] spec = {   // number, type, make, model, year, seats
+                {"MH12 AB 1234", "Sedan",           "Toyota",   "Etios",          "2021", "4"},
+                {"MH14 CD 5678", "SUV",             "Toyota",   "Innova Crysta",  "2022", "7"},
+                {"MH01 EF 9012", "Tempo Traveller", "Force",    "Traveller 3350", "2020", "12"},
+                {"MH02 GH 3456", "Mini Bus",        "Tata",     "Winger",         "2019", "20"},
+                {"MH03 IJ 7890", "Luxury Coach",    "Volvo",    "9600",           "2023", "40"},
+                {"MH04 KL 2345", "Sedan",           "Honda",    "City",           "2022", "4"},
+                {"MH05 MN 6789", "SUV",             "Mahindra", "Scorpio N",      "2021", "7"},
+        };
+        FleetOwnerType[] owners = { FleetOwnerType.OWN, FleetOwnerType.OWN, FleetOwnerType.VENDOR,
+                FleetOwnerType.RENTED, FleetOwnerType.OWN, FleetOwnerType.VENDOR, FleetOwnerType.OWN };
+        // v4 & v7 stay AVAILABLE here — seedFleetTrips flips them to ON_TRIP alongside their ongoing trips.
+        FleetVehicleStatus[] statuses = {
+                FleetVehicleStatus.AVAILABLE, FleetVehicleStatus.AVAILABLE, FleetVehicleStatus.MAINTENANCE,
+                FleetVehicleStatus.AVAILABLE, FleetVehicleStatus.OUT_OF_SERVICE, FleetVehicleStatus.AVAILABLE,
+                FleetVehicleStatus.AVAILABLE };
+        int[] odo = { 45210, 78300, 120500, 63000, 15400, 32000, 88000 };
+        int[][] docDays = {   // days-from-today: insurance, rc, permit, puc (negative = expired)
+                { 200, 400,  25,   5 },
+                {  10, 300, 180,  -3 },
+                {  60,  90,  45, 120 },
+                {  15, 160,  75,  40 },
+                { 365, 365, 300, 250 },
+                {  28,  20, 400, 500 },
+                { -10, 500, 200,  90 },
+        };
+        int[] svcDays = { 10, 60, 200, 90, 365, 8, 45 };
+        // v2 (78500-78300=200) and v7 (88300-88000=300) fall due by odometer (≤500 threshold).
+        int[] svcKm = { 46000, 78500, 125000, 70000, 30000, 40000, 88300 };
+
+        List<FleetVehicle> out = new ArrayList<>();
+        for (int i = 0; i < FLEET_N; i++) {
+            String[] s = spec[i];
+            boolean linked = owners[i] != FleetOwnerType.OWN && vendor != null;
+            out.add(fleetVehicleRepository.save(FleetVehicle.builder()
+                    .vehicleNumber(s[0]).type(s[1]).make(s[2]).model(s[3])
+                    .year(Integer.parseInt(s[4])).seatingCapacity(Integer.parseInt(s[5]))
+                    .ownerType(owners[i])
+                    .vendorId(linked ? vendor.getId() : null)
+                    .vendorPublicId(linked ? vendor.getPublicId() : null)
+                    .vendorName(linked ? vendor.getVendorName() : null)
+                    .status(statuses[i])
+                    .lastOdometer(odo[i])
+                    .insuranceExpiry(today.plusDays(docDays[i][0]))
+                    .rcExpiry(today.plusDays(docDays[i][1]))
+                    .permitExpiry(today.plusDays(docDays[i][2]))
+                    .pucExpiry(today.plusDays(docDays[i][3]))
+                    .nextServiceDueDate(today.plusDays(svcDays[i]))
+                    .nextServiceDueKm(svcKm[i])
+                    .notes("Auto-seeded fleet vehicle")
+                    .build()));
+        }
+        log.info("[DevDataSeeder] seeded {} fleet vehicles", out.size());
+        return out;
+    }
+
+    private List<FleetDriver> seedFleetDrivers() {
+        LocalDate today = LocalDate.now();
+        String[] names = { "Ramesh Yadav", "Suresh Pawar", "Imran Shaikh", "Datta Patil",
+                "Vijay More", "Kunal Jadhav", "Sagar Bhosale" };
+        String[] phones = { "+91 90000 11111", "+91 90000 22222", "+91 90000 33333",
+                "+91 90000 44444", "+91 90000 55555", "+91 90000 66666", "+91 90000 77777" };
+        String[] licenses = { "MH0120180011111", "MH0120190022222", "MH0120200033333",
+                "MH0120170044444", "MH0120210055555", "MH0120160066666", "MH0120220077777" };
+        int[] licDays = { 400, 20, 5, 250, -10, 15, 600 };   // drivers 2, 3 & 6 expire within the alert window
+        FleetDriverStatus[] statuses = {
+                FleetDriverStatus.ACTIVE, FleetDriverStatus.ACTIVE, FleetDriverStatus.ACTIVE,
+                FleetDriverStatus.ACTIVE, FleetDriverStatus.INACTIVE, FleetDriverStatus.ACTIVE,
+                FleetDriverStatus.ACTIVE };
+        List<FleetDriver> out = new ArrayList<>();
+        for (int i = 0; i < FLEET_N; i++) {
+            out.add(fleetDriverRepository.save(FleetDriver.builder()
+                    .name(names[i]).phone(phones[i]).licenseNumber(licenses[i])
+                    .licenseExpiry(today.plusDays(licDays[i])).status(statuses[i])
+                    .notes("Auto-seeded driver").build()));
+        }
+        log.info("[DevDataSeeder] seeded {} fleet drivers", out.size());
+        return out;
+    }
+
+    private void seedFleetTrips(List<FleetVehicle> vehicles, List<FleetDriver> drivers) {
+        LocalDateTime now = LocalDateTime.now();
+        List<Booking> bookings = bookingRepository.findAll();
+        Booking bk1 = bookings.size() > 0 ? bookings.get(0) : null;
+        Booking bk2 = bookings.size() > 1 ? bookings.get(1) : null;
+
+        FleetVehicle v1 = vehicles.get(0);
+        FleetVehicle v2 = vehicles.get(1);
+        FleetVehicle v3 = vehicles.get(2);
+        FleetVehicle v4 = vehicles.get(3);
+        FleetVehicle v6 = vehicles.get(5 % vehicles.size());
+        FleetVehicle v7 = vehicles.get(6 % vehicles.size());
+        FleetDriver d1 = drivers.get(0);
+        FleetDriver d2 = drivers.get(1);
+        FleetDriver d3 = drivers.get(2);
+        FleetDriver d4 = drivers.get(3);
+        FleetDriver d5 = drivers.get(4);
+        FleetDriver d6 = drivers.get(5 % drivers.size());
+        FleetDriver d7 = drivers.get(6 % drivers.size());
+
+        // 1) COMPLETED this month — Mumbai → Lonavala (linked to a booking)
+        fleetTripRepository.save(FleetTrip.builder()
+                .vehicle(v1).driver(d1)
+                .bookingId(bk1 != null ? bk1.getId() : null)
+                .bookingPublicId(bk1 != null ? bk1.getPublicId() : null)
+                .bookingCode(bk1 != null ? bk1.getBookingCode() : null)
+                .status(FleetTripStatus.COMPLETED)
+                .startDatetime(now.minusHours(9).withSecond(0).withNano(0))
+                .endDatetime(now.minusHours(3).withSecond(0).withNano(0))
+                .startOdometer(45000).endOdometer(45210).distanceKm(210)
+                .routeFrom("Mumbai").routeTo("Lonavala").purpose("Airport transfer")
+                .fuelCost(BigDecimal.valueOf(1800)).tollCost(BigDecimal.valueOf(300))
+                .driverAllowance(BigDecimal.valueOf(500)).remarks("Completed on time").build());
+
+        // 2) COMPLETED this month — Pune → Mahabaleshwar (linked to a booking)
+        fleetTripRepository.save(FleetTrip.builder()
+                .vehicle(v2).driver(d2)
+                .bookingId(bk2 != null ? bk2.getId() : null)
+                .bookingPublicId(bk2 != null ? bk2.getPublicId() : null)
+                .bookingCode(bk2 != null ? bk2.getBookingCode() : null)
+                .status(FleetTripStatus.COMPLETED)
+                .startDatetime(now.minusDays(1).withHour(8).withMinute(0).withSecond(0).withNano(0))
+                .endDatetime(now.minusDays(1).withHour(16).withMinute(0).withSecond(0).withNano(0))
+                .startOdometer(78000).endOdometer(78300).distanceKm(300)
+                .routeFrom("Pune").routeTo("Mahabaleshwar").purpose("Sightseeing tour")
+                .fuelCost(BigDecimal.valueOf(2500)).tollCost(BigDecimal.valueOf(450))
+                .driverAllowance(BigDecimal.valueOf(700)).build());
+
+        // 3) COMPLETED this month — Mumbai → Alibaug
+        fleetTripRepository.save(FleetTrip.builder()
+                .vehicle(v6).driver(d6)
+                .status(FleetTripStatus.COMPLETED)
+                .startDatetime(now.minusDays(2).withHour(7).withMinute(30).withSecond(0).withNano(0))
+                .endDatetime(now.minusDays(2).withHour(13).withMinute(0).withSecond(0).withNano(0))
+                .startOdometer(31850).endOdometer(32000).distanceKm(150)
+                .routeFrom("Mumbai").routeTo("Alibaug").purpose("Day trip")
+                .fuelCost(BigDecimal.valueOf(1500)).tollCost(BigDecimal.valueOf(250))
+                .driverAllowance(BigDecimal.valueOf(450)).build());
+
+        // 4) ONGOING — Mumbai → Nashik (holds v4 ON_TRIP)
+        v4.setStatus(FleetVehicleStatus.ON_TRIP);
+        v4.bumpOdometer(63000);
+        fleetVehicleRepository.save(v4);
+        fleetTripRepository.save(FleetTrip.builder()
+                .vehicle(v4).driver(d4)
+                .status(FleetTripStatus.ONGOING)
+                .startDatetime(now.minusHours(2).withSecond(0).withNano(0))
+                .startOdometer(63000)
+                .routeFrom("Mumbai").routeTo("Nashik").purpose("Group tour").build());
+
+        // 5) ONGOING — Pune → Kolhapur (holds v7 ON_TRIP)
+        v7.setStatus(FleetVehicleStatus.ON_TRIP);
+        v7.bumpOdometer(88000);
+        fleetVehicleRepository.save(v7);
+        fleetTripRepository.save(FleetTrip.builder()
+                .vehicle(v7).driver(d7)
+                .status(FleetTripStatus.ONGOING)
+                .startDatetime(now.minusHours(5).withSecond(0).withNano(0))
+                .startOdometer(88000)
+                .routeFrom("Pune").routeTo("Kolhapur").purpose("Corporate tour").build());
+
+        // 6) PLANNED (upcoming, tomorrow) — Mumbai → Pune
+        fleetTripRepository.save(FleetTrip.builder()
+                .vehicle(v1).driver(d3)
+                .status(FleetTripStatus.PLANNED)
+                .startDatetime(now.plusDays(1).withHour(10).withMinute(0).withSecond(0).withNano(0))
+                .routeFrom("Mumbai").routeTo("Pune").purpose("Corporate pickup").build());
+
+        // 7) PLANNED (upcoming, in 3 days) — Mumbai → Shirdi
+        fleetTripRepository.save(FleetTrip.builder()
+                .vehicle(v6).driver(d5)
+                .status(FleetTripStatus.PLANNED)
+                .startDatetime(now.plusDays(3).withHour(6).withMinute(0).withSecond(0).withNano(0))
+                .routeFrom("Mumbai").routeTo("Shirdi").purpose("Pilgrimage").build());
+
+        log.info("[DevDataSeeder] seeded {} fleet trips", FLEET_N);
+    }
+
+    private void seedFleetFuelLogs(List<FleetVehicle> vehicles) {
+        LocalDate today = LocalDate.now();
+        // vehicleIndex, days-ago (kept small so most land in the current month), liters, cost, odometer
+        int[][] spec = {
+                { 0, 0, 35, 3800, 45210 },
+                { 1, 1, 45, 4900, 78300 },
+                { 2, 2, 55, 6000, 120500 },
+                { 3, 3, 60, 6500, 63000 },
+                { 4, 5, 80, 8800, 15400 },
+                { 5, 1, 30, 3300, 32000 },
+                { 6, 4, 40, 4400, 88000 },
+        };
+        for (int[] f : spec) {
+            FleetVehicle v = vehicles.get(f[0] % vehicles.size());
+            fleetFuelLogRepository.save(FleetFuelLog.builder()
+                    .vehicle(v).date(today.minusDays(f[1]))
+                    .liters(BigDecimal.valueOf(f[2])).cost(BigDecimal.valueOf(f[3]))
+                    .odometer(f[4]).notes("Auto-seeded fuel log").build());
+        }
+        log.info("[DevDataSeeder] seeded {} fleet fuel logs", spec.length);
+    }
+
+    private void seedFleetMaintenanceLogs(List<FleetVehicle> vehicles) {
+        LocalDate today = LocalDate.now();
+        Object[][] spec = {   // vehicleIndex, days-ago, serviceType, cost, vendorName, odometer
+                { 0,  0, "General Service",     4500, "Speedy Motors", 45000 },
+                { 1,  2, "Oil Change",          2200, "Auto Care",     78000 },
+                { 2, 10, "Brake Repair",        6800, "Force Service", 120000 },
+                { 3, 20, "Tyre Replacement",   12000, "Tyre World",    62000 },
+                { 4,  1, "AC Service",          3500, "Cool Air",      15000 },
+                { 5,  5, "General Service",     5200, "Speedy Motors", 31000 },
+                { 6,  3, "Battery Replacement", 7800, "Power Cells",   87000 },
+        };
+        for (Object[] m : spec) {
+            FleetVehicle v = vehicles.get((int) m[0] % vehicles.size());
+            LocalDate serviceDate = today.minusDays((int) m[1]);
+            fleetMaintenanceLogRepository.save(FleetMaintenanceLog.builder()
+                    .vehicle(v).serviceDate(serviceDate)
+                    .serviceType((String) m[2]).cost(BigDecimal.valueOf((int) m[3]))
+                    .vendorName((String) m[4]).odometer((int) m[5])
+                    .nextServiceDueDate(serviceDate.plusMonths(6))
+                    .nextServiceDueKm((int) m[5] + 10000)
+                    .notes("Auto-seeded maintenance log").build());
+        }
+        log.info("[DevDataSeeder] seeded {} fleet maintenance logs", spec.length);
     }
 }

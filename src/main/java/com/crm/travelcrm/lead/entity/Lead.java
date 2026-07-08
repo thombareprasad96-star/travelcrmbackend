@@ -25,17 +25,15 @@ import java.util.UUID;
                 @Index(name = "idx_lead_email", columnList = "email"),
                 @Index(name = "idx_lead_phone", columnList = "phone"),
                 @Index(name = "idx_leads_assigned_user_id", columnList = "assigned_user_id")
-        },
-        uniqueConstraints = {
-                @UniqueConstraint(
-                        name = "uk_lead_tenant_email",
-                        columnNames = {"tenant_id", "email"}
-                ),
-                @UniqueConstraint(
-                        name = "uk_lead_tenant_phone",
-                        columnNames = {"tenant_id", "phone"}
-                )
         }
+        // Uniqueness of (tenant_id, email) and (tenant_id, phone) is enforced by
+        // soft-delete-aware, OPEN-lead-only PARTIAL unique indexes
+        // (uq_leads_email_tenant_open / uq_leads_phone_tenant_open, see db/indexes.sql):
+        //   WHERE deleted_at IS NULL AND lead_stage NOT IN ('CONVERTED','LOST').
+        // An absolute constraint permanently blocked repeat business — once a lead was
+        // CONVERTED (kept for history, never deleted) the same customer could never be
+        // entered as a fresh lead again. The partial index keeps "one OPEN lead per
+        // contact" while allowing new inquiries after the prior one closed.
 )
 @Getter
 @Setter

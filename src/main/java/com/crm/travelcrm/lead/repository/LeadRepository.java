@@ -3,6 +3,7 @@ package com.crm.travelcrm.lead.repository;
 import com.crm.travelcrm.lead.dto.UserLeadStageCountDto;
 import com.crm.travelcrm.lead.dto.UserWorkloadDto;
 import com.crm.travelcrm.lead.entity.Lead;
+import com.crm.travelcrm.lead.enums.LeadStage;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
@@ -50,12 +51,15 @@ public interface LeadRepository extends JpaRepository<Lead, Long> {
     List<Lead> findByTenantIdAndIdInAndDeletedAtIsNull(Long tenantId, Collection<Long> ids);
 
     // ── Search ───────────────────────────────────────────────────────────────
+    // Newest-first single fetch. Repeat business now allows several non-deleted leads
+    // to share a phone/email (e.g. a CONVERTED one kept for history + a fresh OPEN one),
+    // so a plain Optional finder could throw NonUniqueResult — always take the latest.
     @EntityGraph(attributePaths = "assignedUser")
-    Optional<Lead> findByEmailAndTenantIdAndDeletedAtIsNull(
+    Optional<Lead> findFirstByEmailAndTenantIdAndDeletedAtIsNullOrderByCreatedAtDesc(
             String email, Long tenantId);
 
     @EntityGraph(attributePaths = "assignedUser")
-    Optional<Lead> findByPhoneAndTenantIdAndDeletedAtIsNull(
+    Optional<Lead> findFirstByPhoneAndTenantIdAndDeletedAtIsNullOrderByCreatedAtDesc(
             String phone, Long tenantId);
 
     // ── Existence check (cross-aggregate FK validation, e.g. Booking.leadId) ──
@@ -66,19 +70,23 @@ public interface LeadRepository extends JpaRepository<Lead, Long> {
     @EntityGraph(attributePaths = "assignedUser")
     Optional<Lead> findByIdAndTenantIdAndDeletedAtIsNull(Long id, Long tenantId);
 
-    // ── Duplicate checks ─────────────────────────────────────────────────────
-    boolean existsByEmailAndTenantIdAndDeletedAtIsNull(
-            String email, Long tenantId);
+    // ── Duplicate checks (OPEN leads only) ───────────────────────────────────
+    // A duplicate is only a conflict while the existing lead is still OPEN. Once it
+    // reaches a terminal stage (CONVERTED / LOST) the contact is free to come back as a
+    // new lead — so the caller passes the terminal stages to exclude. Mirrors the
+    // uq_leads_*_tenant_open partial unique indexes so the service check and the DB agree.
+    boolean existsByEmailAndTenantIdAndDeletedAtIsNullAndLeadStageNotIn(
+            String email, Long tenantId, Collection<LeadStage> excludedStages);
 
-    boolean existsByPhoneAndTenantIdAndDeletedAtIsNull(
-            String phone, Long tenantId);
+    boolean existsByPhoneAndTenantIdAndDeletedAtIsNullAndLeadStageNotIn(
+            String phone, Long tenantId, Collection<LeadStage> excludedStages);
 
     // ── Duplicate check excluding self (for update) ──────────────────────────
-    boolean existsByEmailAndTenantIdAndDeletedAtIsNullAndPublicIdNot(
-            String email, Long tenantId, UUID publicId);
+    boolean existsByEmailAndTenantIdAndDeletedAtIsNullAndLeadStageNotInAndPublicIdNot(
+            String email, Long tenantId, Collection<LeadStage> excludedStages, UUID publicId);
 
-    boolean existsByPhoneAndTenantIdAndDeletedAtIsNullAndPublicIdNot(
-            String phone, Long tenantId, UUID publicId);
+    boolean existsByPhoneAndTenantIdAndDeletedAtIsNullAndLeadStageNotInAndPublicIdNot(
+            String phone, Long tenantId, Collection<LeadStage> excludedStages, UUID publicId);
 
     // ── Trashed-only duplicate lookup (create-time "restore available" detection) ──
     // An ACTIVE duplicate is a hard "already exists" error; a match that lives ONLY in Trash
