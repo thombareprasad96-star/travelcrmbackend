@@ -1,5 +1,6 @@
 package com.crm.travelcrm.tenent.dto;
 
+import com.crm.travelcrm.tenent.enums.TenantPlan;
 import com.crm.travelcrm.tenent.enums.TenantStatus;
 import lombok.*;
 
@@ -19,11 +20,15 @@ public class TenantResponse {
     private String email;
     private String phone;
     private String address;
+    private TenantPlan plan;
     private TenantStatus status;
+    private Integer maxUsers;
+    private Long userCount;
     private LocalDate subscriptionStartDate;
     private LocalDate subscriptionEndDate;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+    private LocalDateTime deletedAt;
 
     // Populated only on create
     private String adminUsername;

@@ -1,0 +1,11 @@
+package com.crm.travelcrm.platform.billing.enums;
+
+/**
+ * Payment state of a platform invoice ({@code BillingRecord}). "Overdue" is intentionally NOT a
+ * status — it is derived (UNPAID + past due date) so there is no scheduler to keep in sync.
+ */
+public enum BillingStatus {
+    UNPAID,
+    PAID,
+    VOID
+}

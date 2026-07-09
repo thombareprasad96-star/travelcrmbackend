@@ -103,6 +103,9 @@ public interface LeadRepository extends JpaRepository<Lead, Long> {
     // All aggregation runs in the database. Never load leads into memory to
     // count them, and never traverse a User→leads collection.
 
+    /** Total live leads in the tenant — for the plan lead-cap check. */
+    long countByTenantIdAndDeletedAtIsNull(Long tenantId);
+
     /** Total live leads assigned to one user (tenant-scoped). */
     long countByAssignedUserPublicIdAndTenantIdAndDeletedAtIsNull(
             UUID userPublicId, Long tenantId);

@@ -23,6 +23,8 @@ import com.crm.travelcrm.notification.domain.enums.DeliveryChannel;
 import com.crm.travelcrm.permission.service.ScopeResolver;
 import com.crm.travelcrm.quotation.dto.QuotationRefDto;
 import com.crm.travelcrm.quotation.service.QuotationService;
+import com.crm.travelcrm.tenent.entity.Tenant;
+import com.crm.travelcrm.tenent.tenentsRepository.TenantRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -54,6 +56,7 @@ public class LeadServiceImpl implements LeadService {
     private final QuotationService quotationService;
     private final ScopeResolver scopeResolver;
     private final LeadAccessGuard leadAccessGuard;
+    private final TenantRepository tenantRepository;
 
     // Terminal (closed) stages. A lead here no longer blocks a fresh lead for the same
     // contact, and CONVERTED specifically is owned by the booking lifecycle — it may be
@@ -69,6 +72,7 @@ public class LeadServiceImpl implements LeadService {
     @Transactional
     public LeadResponseDto createLead(CreateLeadRequestDto request) {
         Long tenantId = currentTenantId();
+        enforceLeadQuota(tenantId);
 
         log.info("Creating lead for email: {} | tenantId: {}", request.getEmail(), tenantId);
 
@@ -444,6 +448,23 @@ public class LeadServiceImpl implements LeadService {
                             "and the JWT contains a tenantId claim.");
         }
         return tenantId;
+    }
+
+    /**
+     * Plan lead cap — blocks creating leads beyond the tenant's allowance ({@code Tenant.maxLeads},
+     * denormalized from the plan; null = unlimited). Mirrors the user-seat check. Pre-existing
+     * tenants carry a null cap until their plan is next assigned.
+     */
+    private void enforceLeadQuota(Long tenantId) {
+        Tenant tenant = tenantRepository.findById(tenantId).orElse(null);
+        Integer maxLeads = tenant != null ? tenant.getMaxLeads() : null;
+        if (maxLeads != null && maxLeads > 0
+                && leadRepository.countByTenantIdAndDeletedAtIsNull(tenantId) >= maxLeads) {
+            throw new BusinessException(
+                    "Your plan allows up to " + maxLeads + " leads. "
+                            + "Upgrade your plan or remove leads to add more.",
+                    HttpStatus.FORBIDDEN);
+        }
     }
 
     /**

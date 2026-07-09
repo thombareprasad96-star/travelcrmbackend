@@ -4,6 +4,8 @@ import com.crm.travelcrm.notification.web.dto.NotificationResponseDTO;
 import org.springframework.data.domain.Page;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.util.UUID;
+
 /**
  * Plug-and-play notification service — consumed only by NotificationController.
  * All queries are scoped to the currently authenticated user (resolved internally
@@ -17,14 +19,14 @@ public interface NotificationService {
     /** Unread badge count for the current user. */
     long getUnreadCount();
 
-    /** Mark a single notification (by numeric id) as read. Throws 404 if not owned by current user. */
-    NotificationResponseDTO markRead(Long id);
+    /** Mark a single notification (by public UUID) as read. Throws 404 if not owned by current user. */
+    NotificationResponseDTO markRead(UUID publicId);
 
     /** Bulk mark-all-read for the current user. */
     void markAllRead();
 
-    /** Soft-delete a single notification (by numeric id). Throws 404 if not owned by current user. */
-    void delete(Long id);
+    /** Soft-delete a single notification (by public UUID). Throws 404 if not owned by current user. */
+    void delete(UUID publicId);
 
     /**
      * Open an SSE stream for the current user.

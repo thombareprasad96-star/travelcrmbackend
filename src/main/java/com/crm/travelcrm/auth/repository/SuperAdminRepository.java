@@ -9,5 +9,9 @@ import java.util.Optional;
 @Repository
 public interface SuperAdminRepository extends JpaRepository<SuperAdmin, Long> {
     Optional<SuperAdmin> findByEmail(String email);
+
+    /** H1 — a soft-deleted platform account must never authenticate. Use this on every auth path. */
+    Optional<SuperAdmin> findByEmailAndDeletedAtIsNull(String email);
+
     boolean existsByEmail(String email);
 }

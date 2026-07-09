@@ -1,6 +1,8 @@
 package com.crm.travelcrm.auth.security;
 
 import com.crm.travelcrm.common.ratelimit.RateLimitFilter;
+import com.crm.travelcrm.platform.config.filter.MaintenanceModeFilter;
+import com.crm.travelcrm.platform.entitlement.filter.ModuleAccessFilter;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
@@ -38,6 +40,8 @@ public class SecurityConfig {
     private final SuperAdminDetailsService superAdminDetailsService;
     private final UserDetailsServiceImpl userDetailsService;
     private final RateLimitFilter rateLimitFilter;
+    private final MaintenanceModeFilter maintenanceModeFilter;
+    private final ModuleAccessFilter moduleAccessFilter;
 
     // Comma-separated allowed origins; override per environment (add the prod URL there).
     @org.springframework.beans.factory.annotation.Value(
@@ -85,6 +89,10 @@ public class SecurityConfig {
                 )
                 .addFilterBefore(rateLimitFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                // Maintenance gate runs AFTER auth so it can distinguish tenant vs platform traffic.
+                .addFilterAfter(maintenanceModeFilter, JwtAuthFilter.class)
+                // Module entitlement gate — 403s a tenant hitting a module its plan/flags exclude.
+                .addFilterAfter(moduleAccessFilter, MaintenanceModeFilter.class)
                 .exceptionHandling(e -> e
                         .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED))
                         .accessDeniedHandler((req, res, ex) ->
@@ -125,6 +133,22 @@ public class SecurityConfig {
     public FilterRegistrationBean<RateLimitFilter> rateLimitRegistration(RateLimitFilter filter) {
         FilterRegistrationBean<RateLimitFilter> registration = new FilterRegistrationBean<>(filter);
         registration.setEnabled(false); // Spring Boot auto-register band karo
+        return registration;
+    }
+
+    @Bean
+    public FilterRegistrationBean<MaintenanceModeFilter> maintenanceModeRegistration(MaintenanceModeFilter filter) {
+        // Disable auto-registration so it runs ONLY inside the staff chain (never globally / on portal).
+        FilterRegistrationBean<MaintenanceModeFilter> registration = new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
+    }
+
+    @Bean
+    public FilterRegistrationBean<ModuleAccessFilter> moduleAccessRegistration(ModuleAccessFilter filter) {
+        // Disable auto-registration so it runs ONLY inside the staff chain (never globally / on portal).
+        FilterRegistrationBean<ModuleAccessFilter> registration = new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
         return registration;
     }
 

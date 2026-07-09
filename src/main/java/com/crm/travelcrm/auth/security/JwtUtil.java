@@ -21,10 +21,14 @@ public class JwtUtil {
     @Value("${jwt.expiry-ms}")
     private long expiryMs;
 
+    @Value("${impersonation.jwt.expiry-ms:1800000}")
+    private long impersonationExpiryMs;
+
     public String generateToken(SuperAdmin superAdmin) {
         return Jwts.builder()
                 .subject(superAdmin.getEmail())
                 .claim(JwtClaims.ROLE, JwtClaims.ROLE_SUPER_ADMIN)
+                .claim(JwtClaims.TOKEN_TYPE, JwtClaims.TYPE_PLATFORM)
                 // SuperAdmin has no tenant — intentionally omitted
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + expiryMs))
@@ -37,10 +41,37 @@ public class JwtUtil {
                 .subject(user.getEmail())
                 .claim(JwtClaims.ROLE, user.getRole().name())
                 .claim(JwtClaims.TENANT_ID, user.getTenantId())   // ← ADDED
+                .claim(JwtClaims.TOKEN_VERSION, user.getTokenVersionOrZero())
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + expiryMs))
                 .signWith(getKey())
                 .compact();
+    }
+
+    /**
+     * Time-boxed impersonation token: a normal tenant-user token (so the staff app accepts it and
+     * runs AS that user) marked with {@code typ=IMPERSONATION} plus the acting SuperAdmin's id/email,
+     * and a short TTL ({@code impersonation.jwt.expiry-ms}). Signed with the SAME key as user tokens
+     * — a separate key would defeat the purpose (the token must authenticate as the target user).
+     */
+    public String generateImpersonationToken(User user, Long impersonatorId, String impersonatorEmail) {
+        long now = System.currentTimeMillis();
+        return Jwts.builder()
+                .subject(user.getEmail())
+                .claim(JwtClaims.ROLE, user.getRole().name())
+                .claim(JwtClaims.TENANT_ID, user.getTenantId())
+                .claim(JwtClaims.TOKEN_VERSION, user.getTokenVersionOrZero())
+                .claim(JwtClaims.TOKEN_TYPE, JwtClaims.TYPE_IMPERSONATION)
+                .claim(JwtClaims.IMPERSONATOR_ID, impersonatorId)
+                .claim(JwtClaims.IMPERSONATOR_EMAIL, impersonatorEmail)
+                .issuedAt(new Date(now))
+                .expiration(new Date(now + impersonationExpiryMs))
+                .signWith(getKey())
+                .compact();
+    }
+
+    public long getImpersonationExpiryMs() {
+        return impersonationExpiryMs;
     }
 
     public String extractEmail(String token) {
@@ -58,6 +89,31 @@ public class JwtUtil {
         if (value instanceof Integer i) return i.longValue();
         if (value instanceof Long l)    return l;
         return Long.parseLong(value.toString());
+    }
+
+    public String extractTokenType(String token) {
+        return getClaims(token).get(JwtClaims.TOKEN_TYPE, String.class);
+    }
+
+    /** Token version ('tv') claim, or null for tokens minted before token-versioning existed. */
+    public Integer extractTokenVersion(String token) {
+        Object value = getClaims(token).get(JwtClaims.TOKEN_VERSION);
+        if (value == null)              return null;
+        if (value instanceof Integer i) return i;
+        if (value instanceof Long l)    return l.intValue();
+        return Integer.parseInt(value.toString());
+    }
+
+    public Long extractImpersonatorId(String token) {
+        Object value = getClaims(token).get(JwtClaims.IMPERSONATOR_ID);
+        if (value == null)              return null;
+        if (value instanceof Integer i) return i.longValue();
+        if (value instanceof Long l)    return l;
+        return Long.parseLong(value.toString());
+    }
+
+    public String extractImpersonatorEmail(String token) {
+        return getClaims(token).get(JwtClaims.IMPERSONATOR_EMAIL, String.class);
     }
 
     public boolean isTokenValid(String token) {

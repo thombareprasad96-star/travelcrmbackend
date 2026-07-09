@@ -52,7 +52,17 @@ public class UserServiceImpl implements UserService {
 
         // tenantId is the caller's own tenant (from the authenticated principal,
         // passed by the controller) — never taken from the request body.
-        requireActiveTenant(tenantId);
+        Tenant tenant = requireActiveTenant(tenantId);
+
+        // Plan seat limit — block creating users beyond the tenant's allowance.
+        Integer maxUsers = tenant.getMaxUsers();
+        if (maxUsers != null && maxUsers > 0
+                && userRepository.countByTenantIdAndDeletedAtIsNull(tenantId) >= maxUsers) {
+            throw new BusinessException(
+                    "Your plan allows up to " + maxUsers + " users. "
+                            + "Upgrade your plan or remove a user to add more.",
+                    HttpStatus.FORBIDDEN);
+        }
 
         // Whitelist: a tenant admin may mint any tenant role (Staff, Manager,
         // Travel Agent, Organization Admin, Account) — only SUPERADMIN is forbidden → 403.
@@ -242,17 +252,18 @@ public class UserServiceImpl implements UserService {
 
     // A tenant admin whose own organization is inactive/suspended/soft-deleted
     // must not be able to provision new users. 403, not 500.
-    private void requireActiveTenant(Long tenantId) {
+    private Tenant requireActiveTenant(Long tenantId) {
         Tenant tenant = tenantRepository.findById(tenantId)
                 .orElseThrow(() -> new BusinessException(
                         "Your organization could not be found.", HttpStatus.FORBIDDEN));
 
-        if (tenant.isDeleted() || tenant.getStatus() != TenantStatus.ACTIVE) {
+        if (!tenant.isOperational()) {
+            String reason = tenant.isDeleted() ? "deleted" : tenant.getStatus().name();
             throw new BusinessException(
-                    "Your organization is " + tenant.getStatus()
-                            + "; new users cannot be created.",
+                    "Your organization is " + reason + "; new users cannot be created.",
                     HttpStatus.FORBIDDEN);
         }
+        return tenant;
     }
 
     // Resolves the optional managerPublicId to an internal manager id.

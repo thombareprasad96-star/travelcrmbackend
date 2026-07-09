@@ -14,7 +14,9 @@ public class SuperAdminDetailsService implements UserDetailsService {
 
     @Override
     public UserDetails loadUserByUsername(String email) throws UsernameNotFoundException {
-        return superAdminRepository.findByEmail(email)
+        // Soft-deleted platform accounts are never found — this runs on every authenticated
+        // request, so a deleted SuperAdmin's live tokens stop working immediately.
+        return superAdminRepository.findByEmailAndDeletedAtIsNull(email)
                 .orElseThrow(() -> new UsernameNotFoundException("SuperAdmin not found"));
     }
 }

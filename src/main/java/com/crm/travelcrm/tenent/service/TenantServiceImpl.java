@@ -1,25 +1,42 @@
-// tenant/service/impl/TenantServiceImpl.java
 package com.crm.travelcrm.tenent.service;
-
 
 import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.auth.enums.Role;
 import com.crm.travelcrm.auth.repository.UserRepository;
+import com.crm.travelcrm.common.context.PlatformActor;
+import com.crm.travelcrm.common.context.PlatformContext;
+import com.crm.travelcrm.common.exception.BusinessException;
+import com.crm.travelcrm.platform.audit.PlatformAuditRecorder;
+import com.crm.travelcrm.platform.audit.entity.PlatformAuditAction;
+import com.crm.travelcrm.platform.billing.enums.BillingStatus;
+import com.crm.travelcrm.platform.billing.repository.BillingRecordRepository;
+import com.crm.travelcrm.platform.subscription.entity.Plan;
+import com.crm.travelcrm.platform.subscription.repository.PlanRepository;
 import com.crm.travelcrm.tenent.dto.CreateTenantRequest;
 import com.crm.travelcrm.tenent.dto.TenantResponse;
+import com.crm.travelcrm.tenent.dto.TenantSummaryResponse;
 import com.crm.travelcrm.tenent.dto.UpdateTenantRequest;
 import com.crm.travelcrm.tenent.entity.Tenant;
+import com.crm.travelcrm.tenent.enums.TenantPlan;
+import com.crm.travelcrm.tenent.enums.TenantStatus;
 import com.crm.travelcrm.tenent.exception.DuplicateTenantException;
 import com.crm.travelcrm.tenent.exception.TenantNotFoundException;
 import com.crm.travelcrm.tenent.mapper.TenantMapper;
 import com.crm.travelcrm.tenent.tenentsRepository.TenantRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -29,12 +46,16 @@ public class TenantServiceImpl implements TenantService {
     private final TenantRepository tenantRepository;
     private final UserRepository userRepository;
     private final TenantMapper tenantMapper;
-    private final PasswordEncoder  passwordEncoder;
+    private final PasswordEncoder passwordEncoder;
+    private final PlatformAuditRecorder platformAuditRecorder;
+    private final PlanRepository planRepository;
+    private final BillingRecordRepository billingRecordRepository;
+
+    // ── create ────────────────────────────────────────────────────────────────
 
     @Override
     @Transactional
     public TenantResponse createTenant(CreateTenantRequest request) {
-
         log.info("Creating tenant: {}", request.getOrganizationCode());
 
         if (tenantRepository.existsByOrganizationCode(request.getOrganizationCode())) {
@@ -42,93 +63,236 @@ public class TenantServiceImpl implements TenantService {
                     "Organization code already exists: " + request.getOrganizationCode());
         }
         if (tenantRepository.existsByEmail(request.getEmail())) {
-            throw new DuplicateTenantException(
-                    "Email already registered: " + request.getEmail());
+            throw new DuplicateTenantException("Email already registered: " + request.getEmail());
         }
 
-        // 1. Save tenant
+        TenantPlan plan = request.getPlan() != null ? request.getPlan() : TenantPlan.STARTER;
+        TenantStatus status = request.getStatus() != null ? request.getStatus() : TenantStatus.TRIAL;
+        int maxUsers = request.getMaxUsers() != null ? request.getMaxUsers() : 5;
+
         Tenant tenant = Tenant.builder()
                 .organizationName(request.getOrganizationName())
                 .organizationCode(request.getOrganizationCode().toUpperCase())
                 .email(request.getEmail())
                 .phone(request.getPhone())
                 .address(request.getAddress())
+                .plan(plan)
+                .status(status)
+                .maxUsers(maxUsers)
                 .subscriptionStartDate(request.getSubscriptionStartDate())
                 .subscriptionEndDate(request.getSubscriptionEndDate())
                 .build();
 
-        Tenant savedTenant = tenantRepository.save(tenant);
-        log.info("Tenant saved with id: {}", savedTenant.getId());
+        // Seed plan entitlements (module access + lead cap) from the plan catalogue.
+        planRepository.findByCode(plan).ifPresent(p -> {
+            tenant.setMaxLeads(p.getMaxLeads());
+            tenant.setEnabledModules(new HashSet<>(p.getModules()));
+        });
 
-        // 2. Create admin user for this tenant
+        Tenant saved = tenantRepository.save(tenant);
+        log.info("Tenant saved with id: {}", saved.getId());
+
+        // First TENANT_ADMIN for this tenant.
         User adminUser = User.builder()
                 .name(request.getAdminUsername())
                 .email(request.getAdminEmail())
                 .password(passwordEncoder.encode(request.getAdminPassword()))
                 .role(Role.TENANT_ADMIN)
-                .tenantId(savedTenant.getId())
+                .tenantId(saved.getId())
                 .isActive(true)
                 .build();
-
         userRepository.save(adminUser);
-        log.info("Admin user created for tenant id: {}", savedTenant.getId());
+        log.info("Admin user created for tenant id: {}", saved.getId());
 
-        TenantResponse response = tenantMapper.toResponse(savedTenant);
+        audit(PlatformAuditAction.TENANT_CREATE, saved,
+                "Created tenant " + saved.getOrganizationName()
+                        + " (" + plan + "/" + status + ", admin " + request.getAdminEmail() + ")");
+
+        TenantResponse response = tenantMapper.toResponse(saved);
+        response.setUserCount(1L);
         response.setAdminUsername(request.getAdminUsername());
         response.setMessage("Tenant created successfully");
-
         return response;
     }
 
+    // ── read ──────────────────────────────────────────────────────────────────
+
     @Override
     @Transactional(readOnly = true)
-    public List<TenantResponse> getAllTenants() {
-        log.info("Fetching all tenants");
-        return tenantMapper.toResponseList(tenantRepository.findAll());
+    public Page<TenantSummaryResponse> listTenants(String search, TenantStatus status,
+                                                   boolean deleted, Pageable pageable) {
+        Page<Tenant> page = tenantRepository.search(
+                search == null ? "" : search.trim(), status, deleted, pageable);
+
+        List<Long> ids = page.getContent().stream().map(Tenant::getId).toList();
+        Map<Long, Long> userCounts = ids.isEmpty()
+                ? Map.of()
+                : userRepository.countActiveGroupedByTenant(ids).stream()
+                        .collect(Collectors.toMap(r -> (Long) r[0], r -> (Long) r[1]));
+        Map<Long, Long> unpaidCounts = ids.isEmpty()
+                ? Map.of()
+                : billingRecordRepository.countByStatusGroupedByTenant(BillingStatus.UNPAID, ids).stream()
+                        .collect(Collectors.toMap(r -> (Long) r[0], r -> (Long) r[1]));
+
+        return page.map(t -> tenantMapper.toSummary(t,
+                userCounts.getOrDefault(t.getId(), 0L),
+                unpaidCounts.getOrDefault(t.getId(), 0L)));
     }
 
     @Override
     @Transactional(readOnly = true)
-    public TenantResponse getTenantById(Long id) {
-        log.info("Fetching tenant by id: {}", id);
-        return tenantMapper.toResponse(findOrThrow(id));
+    public TenantResponse getTenant(UUID publicId) {
+        Tenant tenant = tenantRepository.findByPublicId(publicId)
+                .orElseThrow(() -> new TenantNotFoundException(publicId));
+        TenantResponse response = tenantMapper.toResponse(tenant);
+        response.setUserCount(userRepository.countByTenantIdAndDeletedAtIsNull(tenant.getId()));
+        return response;
     }
+
+    // ── update basics ──────────────────────────────────────────────────────────
 
     @Override
     @Transactional
-    public TenantResponse updateTenant(Long id, UpdateTenantRequest request) {
+    public TenantResponse updateTenant(UUID publicId, UpdateTenantRequest request) {
+        Tenant tenant = requireLive(publicId);
 
-        log.info("Updating tenant id: {}", id);
-
-        Tenant tenant = findOrThrow(id);
-
-        if (tenantRepository.existsByEmailAndIdNot(request.getEmail(), id)) {
-            throw new DuplicateTenantException(
-                    "Email already in use: " + request.getEmail());
+        if (tenantRepository.existsByEmailAndIdNot(request.getEmail(), tenant.getId())) {
+            throw new DuplicateTenantException("Email already in use: " + request.getEmail());
         }
 
         tenantMapper.updateEntity(request, tenant);
+        Tenant saved = tenantRepository.save(tenant);
 
-        return tenantMapper.toResponse(tenantRepository.save(tenant));
+        audit(PlatformAuditAction.TENANT_UPDATE, saved,
+                "Updated tenant " + saved.getOrganizationName());
+
+        TenantResponse response = tenantMapper.toResponse(saved);
+        response.setUserCount(userRepository.countByTenantIdAndDeletedAtIsNull(saved.getId()));
+        return response;
+    }
+
+    // ── plan assignment (upgrade / downgrade) ────────────────────────────────────
+
+    @Override
+    @Transactional
+    public TenantResponse changePlan(UUID publicId, TenantPlan planCode) {
+        Tenant tenant = requireLive(publicId);
+        Plan plan = planRepository.findByCode(planCode)
+                .orElseThrow(() -> new BusinessException(
+                        "Unknown plan: " + planCode, HttpStatus.BAD_REQUEST));
+
+        tenant.setPlan(planCode);
+        // Apply the plan's limits + module access as the tenant defaults (null users = unlimited).
+        tenant.setMaxUsers(plan.getMaxUsers() != null ? plan.getMaxUsers() : 1_000_000);
+        tenant.setMaxLeads(plan.getMaxLeads());
+        tenant.setEnabledModules(new HashSet<>(plan.getModules()));
+        Tenant saved = tenantRepository.save(tenant);
+
+        audit(PlatformAuditAction.PLAN_CHANGE, saved,
+                "Changed plan to " + planCode + " for " + saved.getOrganizationName());
+
+        TenantResponse response = tenantMapper.toResponse(saved);
+        response.setUserCount(userRepository.countByTenantIdAndDeletedAtIsNull(saved.getId()));
+        return response;
+    }
+
+    // ── lifecycle ───────────────────────────────────────────────────────────────
+
+    @Override
+    @Transactional
+    public void suspend(UUID publicId) {
+        Tenant tenant = requireLive(publicId);
+        tenant.setStatus(TenantStatus.SUSPENDED);
+        tenantRepository.save(tenant);
+        audit(PlatformAuditAction.TENANT_SUSPEND, tenant,
+                "Suspended tenant " + tenant.getOrganizationName());
     }
 
     @Override
     @Transactional
-    public void deleteTenant(Long id) {
-
-        log.info("Deleting tenant id: {}", id);
-
-        Tenant tenant = findOrThrow(id);
-
-        userRepository.deleteByTenantId(id);
-        log.info("Admin user deleted for tenant id: {}", id);
-
-        tenantRepository.delete(tenant);
-        log.info("Tenant deleted: {}", id);
+    public void reactivate(UUID publicId) {
+        Tenant tenant = requireLive(publicId);
+        tenant.setStatus(TenantStatus.ACTIVE);
+        tenantRepository.save(tenant);
+        audit(PlatformAuditAction.TENANT_REACTIVATE, tenant,
+                "Reactivated tenant " + tenant.getOrganizationName());
     }
 
-    private Tenant findOrThrow(Long id) {
-        return tenantRepository.findById(id)
-                .orElseThrow(() -> new TenantNotFoundException(id));
+    @Override
+    @Transactional
+    public void softDelete(UUID publicId) {
+        Tenant tenant = requireLive(publicId);
+        tenant.softDelete(currentActorEmail());
+        tenantRepository.save(tenant);
+        audit(PlatformAuditAction.TENANT_SOFT_DELETE, tenant,
+                "Soft-deleted tenant " + tenant.getOrganizationName());
+    }
+
+    @Override
+    @Transactional
+    public void restore(UUID publicId) {
+        Tenant tenant = tenantRepository.findByPublicId(publicId)
+                .orElseThrow(() -> new TenantNotFoundException(publicId));
+        if (!tenant.isDeleted()) {
+            throw new BusinessException("Tenant is not deleted.", HttpStatus.BAD_REQUEST);
+        }
+        tenant.restore();
+        tenantRepository.save(tenant);
+        audit(PlatformAuditAction.TENANT_RESTORE, tenant,
+                "Restored tenant " + tenant.getOrganizationName());
+    }
+
+    @Override
+    @Transactional
+    public void hardDelete(UUID publicId, String organizationCode) {
+        Tenant tenant = tenantRepository.findByPublicId(publicId)
+                .orElseThrow(() -> new TenantNotFoundException(publicId));
+
+        // Danger zone: only from Trash, and only with the exact org code echoed back.
+        if (!tenant.isDeleted()) {
+            throw new BusinessException(
+                    "Soft-delete the tenant first — a hard delete is only allowed from Trash.",
+                    HttpStatus.BAD_REQUEST);
+        }
+        if (organizationCode == null
+                || !organizationCode.trim().equalsIgnoreCase(tenant.getOrganizationCode())) {
+            throw new BusinessException(
+                    "Confirmation code does not match the organization code.", HttpStatus.BAD_REQUEST);
+        }
+
+        // Snapshot for the audit BEFORE the rows are gone.
+        Long tenantId = tenant.getId();
+        String code = tenant.getOrganizationCode();
+        String name = tenant.getOrganizationName();
+        UUID tenantPublicId = tenant.getPublicId();
+
+        // Deregister: physically remove the tenant + its user accounts. Billing/audit snapshots are
+        // retained by design; residual tenant-scoped rows are orphaned + unreachable (no tenant, no
+        // login), left for a separate DB cleanup job.
+        userRepository.deleteByTenantId(tenantId);
+        tenantRepository.delete(tenant);
+
+        platformAuditRecorder.safeRecord(PlatformAuditAction.TENANT_HARD_DELETE, true,
+                tenantId, code, "TENANT", tenantPublicId,
+                "HARD-DELETED tenant " + name + " (" + code + ") + its users; billing/audit retained");
+    }
+
+    // ── helpers ───────────────────────────────────────────────────────────────
+
+    /** Resolves a live (non-soft-deleted) tenant by publicId, or 404. */
+    private Tenant requireLive(UUID publicId) {
+        return tenantRepository.findByPublicIdAndDeletedAtIsNull(publicId)
+                .orElseThrow(() -> new TenantNotFoundException(publicId));
+    }
+
+    private void audit(PlatformAuditAction action, Tenant tenant, String description) {
+        platformAuditRecorder.safeRecord(action, true,
+                tenant.getId(), tenant.getOrganizationCode(),
+                "TENANT", tenant.getPublicId(), description);
+    }
+
+    private String currentActorEmail() {
+        PlatformActor actor = PlatformContext.getActor();
+        return actor != null ? actor.email() : "system";
     }
 }

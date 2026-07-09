@@ -8,6 +8,8 @@ import jakarta.persistence.*;
 import lombok.*;
 
 import java.time.LocalDate;
+import java.util.HashSet;
+import java.util.Set;
 
 @Entity
 @Table(name = "tenants", indexes = {
@@ -57,4 +59,28 @@ public class Tenant extends BaseEntity {
     @Column(name = "max_users", nullable = false)
     @Builder.Default
     private Integer maxUsers = 5;
+
+    // Max leads allowed under this tenant's plan; null = unlimited. Denormalized from Plan on
+    // create / plan-change (nullable so ddl-auto can add it to the existing tenants table).
+    @Column(name = "max_leads")
+    private Integer maxLeads;
+
+    // Effective module access — seeded from the plan, editable by the SuperAdmin (Feature Flags).
+    // Empty ⇒ the entitlement service falls back to the plan's modules (covers pre-existing tenants).
+    // LAZY: only the entitlement endpoints touch it, so tenant list / analytics never load it.
+    @Builder.Default
+    @ElementCollection(fetch = FetchType.LAZY)
+    @CollectionTable(name = "tenant_modules", joinColumns = @JoinColumn(name = "tenant_id"))
+    @Column(name = "module", length = 40)
+    private Set<String> enabledModules = new HashSet<>();
+
+    /**
+     * Operational = usable by its staff: not soft-deleted, and {@code ACTIVE} or {@code TRIAL}.
+     * The single source of truth for "can this tenant log in / create users / operate" — used by
+     * the login gate and user provisioning so a SuperAdmin suspend/expire/soft-delete takes effect.
+     */
+    public boolean isOperational() {
+        return !isDeleted()
+                && (status == TenantStatus.ACTIVE || status == TenantStatus.TRIAL);
+    }
 }

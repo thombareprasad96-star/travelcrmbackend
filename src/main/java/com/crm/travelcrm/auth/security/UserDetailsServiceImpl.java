@@ -7,6 +7,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.userdetails.*;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
+
 @Service
 @RequiredArgsConstructor
 public class UserDetailsServiceImpl implements UserDetailsService {
@@ -17,8 +19,19 @@ public class UserDetailsServiceImpl implements UserDetailsService {
     /** Fallback used only when no tenantId is available (e.g. SuperAdmin flow). */
     @Override
     public UserDetails loadUserByUsername(String email) throws UsernameNotFoundException {
-        User user = userRepository.findByEmailAndDeletedAtIsNull(email)
-                .orElseThrow(() -> new UsernameNotFoundException("User not found"));
+        // Email is unique only PER tenant (uq_user_email_tenant). With no tenant discriminator at
+        // login, a shared email matches multiple tenants — fail safe (deterministic reject) instead
+        // of letting the Optional finder throw NonUniqueResultException (a 500). The full fix
+        // (organization/subdomain at login) is a separate, product-gated task. See H2.
+        List<User> matches = userRepository.findAllByEmailAndDeletedAtIsNull(email);
+        if (matches.isEmpty()) {
+            throw new UsernameNotFoundException("User not found");
+        }
+        if (matches.size() > 1) {
+            throw new UsernameNotFoundException(
+                    "This email is registered under multiple organizations; sign in via your organization workspace.");
+        }
+        User user = matches.get(0);
         user.setEffectiveAuthorities(permissionResolver.resolve(user));
         return user;
     }

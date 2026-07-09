@@ -53,16 +53,16 @@ public class NotificationServiceImpl implements NotificationService {
 
     @Override
     @Transactional
-    public NotificationResponseDTO markRead(Long id) {
+    public NotificationResponseDTO markRead(UUID publicId) {
         Long userId = currentUserId();
         Notification n = notificationRepository
-                .findByIdAndRecipientUserIdAndDeletedAtIsNull(id, userId)
+                .findByPublicIdAndRecipientUserIdAndDeletedAtIsNull(publicId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException(
-                        "Notification not found: " + id));
+                        "Notification not found: " + publicId));
         if (n.getStatus() == NotificationStatus.UNREAD) {
             n.markRead();
             notificationRepository.save(n);
-            log.debug("Notification {} marked READ for user {}", id, userId);
+            log.debug("Notification {} marked READ for user {}", publicId, userId);
         }
         return NotificationResponseDTO.from(n);
     }
@@ -71,15 +71,15 @@ public class NotificationServiceImpl implements NotificationService {
 
     @Override
     @Transactional
-    public void delete(Long id) {
+    public void delete(UUID publicId) {
         Long userId = currentUserId();
         Notification n = notificationRepository
-                .findByIdAndRecipientUserIdAndDeletedAtIsNull(id, userId)
+                .findByPublicIdAndRecipientUserIdAndDeletedAtIsNull(publicId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException(
-                        "Notification not found: " + id));
+                        "Notification not found: " + publicId));
         n.softDelete(currentUserProvider.currentUsernameOrSystem());
         notificationRepository.save(n);
-        log.debug("Notification {} soft-deleted for user {}", id, userId);
+        log.debug("Notification {} soft-deleted for user {}", publicId, userId);
     }
 
     // ── Mark all read ─────────────────────────────────────────────────────────

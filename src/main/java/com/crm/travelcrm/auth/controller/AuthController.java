@@ -49,12 +49,15 @@ public class AuthController {
 
     @PostMapping("/superadmin/login")
     public ResponseEntity<LoginResponseDTO> superAdminLogin(
-            @RequestBody LoginRequestDTO request) {
+            @RequestBody LoginRequestDTO request, HttpServletRequest httpRequest) {
 
         log.info("SuperAdmin login request for {}", request.getEmail());
 
         return ResponseEntity.ok(
-                authService.superAdminLogin(request)
+                authService.superAdminLogin(
+                        request,
+                        ClientIp.resolve(httpRequest),
+                        httpRequest.getHeader("User-Agent"))
         );
     }
 

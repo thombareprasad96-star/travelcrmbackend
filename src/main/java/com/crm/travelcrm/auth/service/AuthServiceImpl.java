@@ -9,10 +9,14 @@ import com.crm.travelcrm.auth.repository.UserRepository;
 import com.crm.travelcrm.auth.security.JwtUtil;
 import com.crm.travelcrm.activity.audit.ActivityLogRecorder;
 import com.crm.travelcrm.activity.entity.ActivityAction;
+import com.crm.travelcrm.platform.audit.PlatformAuditRecorder;
+import com.crm.travelcrm.platform.audit.entity.PlatformAuditAction;
 import com.crm.travelcrm.common.entity.SuperAdmin;
 import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.EmailAlreadyExistsException;
 import com.crm.travelcrm.common.staffip.StaffIpService;
+import com.crm.travelcrm.tenent.entity.Tenant;
+import com.crm.travelcrm.tenent.tenentsRepository.TenantRepository;
 import lombok.RequiredArgsConstructor;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -35,6 +39,8 @@ public class AuthServiceImpl implements AuthService {
     private final JwtUtil jwtUtil;
     private final StaffIpService staffIpService;
     private final ActivityLogRecorder activityLogRecorder;
+    private final PlatformAuditRecorder platformAuditRecorder;
+    private final TenantRepository tenantRepository;
 
     // ------------------------------------------------------------------ register
 
@@ -68,24 +74,51 @@ public class AuthServiceImpl implements AuthService {
 
     // ----------------------------- login---------------------------------
     @Override
-    public LoginResponseDTO superAdminLogin(LoginRequestDTO request) {
+    public LoginResponseDTO superAdminLogin(LoginRequestDTO request, String clientIp, String userAgent) {
 
         logger.trace("Entered superAdminLogin()");
         logger.debug("Login request for email: {}", request.getEmail());
 
-        SuperAdmin superAdmin = superAdminRepository.findByEmail(request.getEmail())
-                .orElseThrow(() -> {
-                    logger.warn("SuperAdmin not found: {}", request.getEmail());
-                    return new BadCredentialsException("Invalid email or password");
-                });
+        // H1 — soft-deleted platform accounts are never found, so they can never authenticate
+        // (mirrors userLogin's findByEmailAndDeletedAtIsNull).
+        SuperAdmin superAdmin = superAdminRepository
+                .findByEmailAndDeletedAtIsNull(request.getEmail())
+                .orElse(null);
 
-        if (!passwordEncoder.matches(request.getPassword(), superAdmin.getPassword())) {
-            logger.warn("Password mismatch for SuperAdmin: {}", request.getEmail());
+        // Invalid email or wrong password are reported identically (no account-enumeration),
+        // but both are recorded to the platform audit trail (best-effort, never blocks).
+        if (superAdmin == null
+                || !passwordEncoder.matches(request.getPassword(), superAdmin.getPassword())) {
+            logger.warn("SuperAdmin login failed: {}", request.getEmail());
+            platformAuditRecorder.safeRecord(
+                    PlatformAuditAction.LOGIN_FAILED, false,
+                    superAdmin != null ? superAdmin.getId() : null, request.getEmail(),
+                    null, null, null, null,
+                    "Invalid credentials", clientIp, userAgent);
             throw new BadCredentialsException("Invalid email or password");
+        }
+
+        // Disabled platform account cannot log in (checked only after a correct password).
+        if (!superAdmin.isEnabled()) {
+            logger.warn("SuperAdmin login blocked (disabled): {}", request.getEmail());
+            platformAuditRecorder.safeRecord(
+                    PlatformAuditAction.LOGIN_FAILED, false,
+                    superAdmin.getId(), superAdmin.getEmail(),
+                    null, null, null, null,
+                    "Account disabled", clientIp, userAgent);
+            throw new BusinessException(
+                    "Your account is disabled. Please contact platform support.",
+                    HttpStatus.FORBIDDEN);
         }
 
         String token = jwtUtil.generateToken(superAdmin);
         logger.info("SuperAdmin logged in: {}", request.getEmail());
+
+        platformAuditRecorder.safeRecord(
+                PlatformAuditAction.LOGIN, true,
+                superAdmin.getId(), superAdmin.getEmail(),
+                null, null, null, null,
+                "SuperAdmin login", clientIp, userAgent);
 
         return new LoginResponseDTO(
                 superAdmin.getName(),
@@ -122,6 +155,17 @@ public class AuthServiceImpl implements AuthService {
             logger.warn("Login blocked for inactive user: {}", request.getEmail());
             throw new BusinessException(
                     "Your account is inactive. Please contact your administrator.",
+                    HttpStatus.FORBIDDEN);
+        }
+
+        // Tenant lifecycle gate — the teeth behind a SuperAdmin suspend/expire/soft-delete: a
+        // non-operational organization blocks ALL of its staff from logging in. Checked after a
+        // correct password so tenant state is never revealed to a non-credential-holder.
+        Tenant tenant = tenantRepository.findById(user.getTenantId()).orElse(null);
+        if (tenant == null || !tenant.isOperational()) {
+            logger.warn("Login blocked — organization not operational for user: {}", request.getEmail());
+            throw new BusinessException(
+                    "Your organization's account is not active. Please contact support.",
                     HttpStatus.FORBIDDEN);
         }
 

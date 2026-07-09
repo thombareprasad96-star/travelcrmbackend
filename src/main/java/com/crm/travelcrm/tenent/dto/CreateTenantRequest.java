@@ -1,6 +1,8 @@
 
 package com.crm.travelcrm.tenent.dto;
 
+import com.crm.travelcrm.tenent.enums.TenantPlan;
+import com.crm.travelcrm.tenent.enums.TenantStatus;
 import jakarta.validation.constraints.*;
 import lombok.Data;
 
@@ -32,6 +34,15 @@ public class CreateTenantRequest {
 
     @NotNull(message = "Subscription end date is required")
     private LocalDate subscriptionEndDate;
+
+    // Plan & limits (all optional). Defaults applied in the service: plan=STARTER,
+    // status=TRIAL, maxUsers=5. Rich plan entitlements arrive in the Subscriptions phase.
+    private TenantPlan plan;
+
+    private TenantStatus status;
+
+    @Min(value = 1, message = "Max users must be at least 1")
+    private Integer maxUsers;
 
     // Admin user fields
     @NotBlank(message = "Admin username is required")

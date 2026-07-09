@@ -1,0 +1,38 @@
+package com.crm.travelcrm.platform.subscription.dto;
+
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import lombok.Data;
+
+import java.math.BigDecimal;
+import java.util.Set;
+
+/**
+ * Edit a plan's entitlements/pricing. The plan {@code code} is immutable. {@code maxUsers} /
+ * {@code maxLeads} left null = unlimited.
+ */
+@Data
+public class UpdatePlanRequest {
+
+    @NotBlank(message = "Display name is required")
+    private String displayName;
+
+    @NotNull(message = "Monthly price is required")
+    @DecimalMin(value = "0.0", message = "Price cannot be negative")
+    private BigDecimal monthlyPrice;
+
+    @NotBlank(message = "Currency is required")
+    private String currency;
+
+    @Min(value = 1, message = "Max users must be at least 1")
+    private Integer maxUsers;
+
+    @Min(value = 1, message = "Max leads must be at least 1")
+    private Integer maxLeads;
+
+    private Set<String> modules;
+
+    private boolean active;
+}

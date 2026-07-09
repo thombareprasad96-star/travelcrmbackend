@@ -8,6 +8,7 @@ import lombok.*;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 
+import java.time.LocalDateTime;
 import java.util.Collection;
 
 @Entity
@@ -64,6 +65,25 @@ public class User extends BaseEntity implements UserDetails {
     @Column(name = "is_active", nullable = false)
     private Boolean isActive = true;
 
+    // SuperAdmin (platform) lock — distinct from the tenant admin's isActive toggle. Nullable so the
+    // column can be added to an existing users table under ddl-auto=update; null = not locked. A
+    // locked user is rejected at login AND on every request (JwtAuthFilter); a tenant admin's
+    // active-toggle cannot clear it (only a SuperAdmin unlock).
+    @Column(name = "locked")
+    private Boolean locked;
+
+    @Column(name = "locked_at")
+    private LocalDateTime lockedAt;
+
+    @Column(name = "locked_by", length = 150)
+    private String lockedBy;
+
+    // Bumped by a SuperAdmin force-reset / lock to invalidate every live JWT for this user
+    // ("reset + kick"): stamped into the token as the 'tv' claim and re-checked on every request
+    // (JwtAuthFilter). Nullable so ddl-auto can add it to the existing users table; null = 0.
+    @Column(name = "token_version")
+    private Integer tokenVersion;
+
     // NOTE: no @OneToMany(mappedBy = "assignedUser") here on purpose.
     // Lead.assignedUser (the FK side) fully defines the relationship;
     // lead counts come from aggregate queries in LeadRepository, never
@@ -90,11 +110,14 @@ public class User extends BaseEntity implements UserDetails {
     @JsonIgnore
     @Override public String getPassword()              { return password; }
     @Override public boolean isAccountNonExpired()     { return true; }
-    @Override public boolean isAccountNonLocked()      { return true; }
+    @Override public boolean isAccountNonLocked()      { return locked == null || !locked; }
     @Override public boolean isCredentialsNonExpired() { return true; }
     @Override public boolean isEnabled()               { return isActive != null && isActive; }
 
     // Convenience
     public boolean isSuperAdmin() { return role == Role.SUPERADMIN; }
     public boolean belongsToTenant(Long tid) { return tid.equals(this.tenantId); }
+
+    /** Current token version, treating a null (pre-migration) value as 0. */
+    public int getTokenVersionOrZero() { return tokenVersion == null ? 0 : tokenVersion; }
 }

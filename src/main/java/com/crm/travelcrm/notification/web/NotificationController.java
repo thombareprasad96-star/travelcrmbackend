@@ -80,11 +80,11 @@ public class NotificationController {
      * PUT /api/notifications/{publicId}/read
      * Marks one notification as read. Returns 404 if not owned by the current user.
      */
-    @PutMapping("/{id}/read")
+    @PutMapping("/{publicId}/read")
     public ResponseEntity<ApiResponse<NotificationResponseDTO>> markRead(
-            @PathVariable Long id) {
+            @PathVariable UUID publicId) {
 
-        NotificationResponseDTO dto = notificationService.markRead(id);
+        NotificationResponseDTO dto = notificationService.markRead(publicId);
         return ResponseEntity.ok(ApiResponse.success("Notification marked as read", dto));
     }
 
@@ -103,12 +103,12 @@ public class NotificationController {
     // ── Delete (soft) ───────────────────────────────────────────────────────────
 
     /**
-     * DELETE /api/notifications/{id}
+     * DELETE /api/notifications/{publicId}
      * Soft-delete one notification owned by the authenticated user.
      */
-    @DeleteMapping("/{id}")
-    public ResponseEntity<ApiResponse<Void>> delete(@PathVariable Long id) {
-        notificationService.delete(id);
+    @DeleteMapping("/{publicId}")
+    public ResponseEntity<ApiResponse<Void>> delete(@PathVariable UUID publicId) {
+        notificationService.delete(publicId);
         return ResponseEntity.ok(ApiResponse.success("Notification deleted"));
     }
 

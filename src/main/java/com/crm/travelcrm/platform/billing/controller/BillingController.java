@@ -1,0 +1,50 @@
+package com.crm.travelcrm.platform.billing.controller;
+
+import com.crm.travelcrm.common.dto.ApiResponse;
+import com.crm.travelcrm.platform.billing.dto.BillingRecordResponse;
+import com.crm.travelcrm.platform.billing.dto.CreateBillingRequest;
+import com.crm.travelcrm.platform.billing.service.BillingService;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+import java.util.UUID;
+
+/** Platform billing. Guarded by {@code ROLE_SUPER_ADMIN}; tenants keyed by {@code publicId}. */
+@RestController
+@RequestMapping("/api/super-admin")
+@PreAuthorize("hasRole('SUPER_ADMIN')")
+@RequiredArgsConstructor
+public class BillingController {
+
+    private final BillingService billingService;
+
+    @GetMapping("/tenants/{tenantPublicId}/billing")
+    public ResponseEntity<ApiResponse<List<BillingRecordResponse>>> list(@PathVariable UUID tenantPublicId) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Billing history fetched", billingService.listForTenant(tenantPublicId)));
+    }
+
+    @PostMapping("/tenants/{tenantPublicId}/billing")
+    public ResponseEntity<ApiResponse<BillingRecordResponse>> create(
+            @PathVariable UUID tenantPublicId, @Valid @RequestBody CreateBillingRequest request) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.success(
+                "Invoice issued", billingService.create(tenantPublicId, request)));
+    }
+
+    @PostMapping("/billing/{publicId}/mark-paid")
+    public ResponseEntity<ApiResponse<BillingRecordResponse>> markPaid(@PathVariable UUID publicId) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Invoice marked paid", billingService.markPaid(publicId)));
+    }
+
+    @PostMapping("/billing/{publicId}/mark-unpaid")
+    public ResponseEntity<ApiResponse<BillingRecordResponse>> markUnpaid(@PathVariable UUID publicId) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Invoice marked unpaid", billingService.markUnpaid(publicId)));
+    }
+}

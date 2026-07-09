@@ -69,7 +69,10 @@ import com.crm.travelcrm.permission.repository.PermissionTemplateRepository;
 import com.crm.travelcrm.reminder.entity.Reminder;
 import com.crm.travelcrm.reminder.entity.ReminderType;
 import com.crm.travelcrm.reminder.repository.ReminderRepository;
+import com.crm.travelcrm.platform.subscription.entity.Plan;
+import com.crm.travelcrm.platform.subscription.repository.PlanRepository;
 import com.crm.travelcrm.tenent.entity.Tenant;
+import com.crm.travelcrm.tenent.enums.TenantPlan;
 import com.crm.travelcrm.tenent.tenentsRepository.TenantRepository;
 import com.crm.travelcrm.vendor.entity.Vendor;
 import com.crm.travelcrm.vendor.repository.VendorRepository;
@@ -86,7 +89,9 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Dev-only demo-data seeder. Inserts 5 rows into each major domain table on startup,
@@ -110,6 +115,7 @@ public class DevDataSeeder implements CommandLineRunner {
     private final PasswordEncoder passwordEncoder;
     private final SuperAdminRepository superAdminRepository;
     private final TenantRepository tenantRepository;
+    private final PlanRepository planRepository;
     private final UserRepository userRepository;
     private final CountryRepository countryRepository;
     private final DestinationRepository destinationRepository;
@@ -144,6 +150,7 @@ public class DevDataSeeder implements CommandLineRunner {
         log.info("[DevDataSeeder] starting (app.seed.enabled=true)…");
 
         seedSuperAdmin();
+        seedPlans();
         Tenant tenant = getOrCreateTenant();
 
         // Everything below is tenant-scoped — stamp tenant_id via TenantContext.
@@ -192,6 +199,31 @@ public class DevDataSeeder implements CommandLineRunner {
                 .enabled(true)
                 .build());
         log.info("[DevDataSeeder] seeded SuperAdmin (superadmin@demo.crm / {})", PWD);
+    }
+
+    private void seedPlans() {
+        if (planRepository.count() > 0) return;
+        planRepository.save(Plan.builder()
+                .code(TenantPlan.STARTER).displayName("Basic")
+                .monthlyPrice(new BigDecimal("2999")).currency("INR")
+                .maxUsers(5).maxLeads(500)
+                .modules(new HashSet<>(Set.of("LEADS", "BOOKINGS", "QUOTATIONS", "CUSTOMERS", "MASTERS")))
+                .active(true).build());
+        planRepository.save(Plan.builder()
+                .code(TenantPlan.PRO).displayName("Pro")
+                .monthlyPrice(new BigDecimal("7999")).currency("INR")
+                .maxUsers(20).maxLeads(5000)
+                .modules(new HashSet<>(Set.of("LEADS", "BOOKINGS", "QUOTATIONS", "CUSTOMERS", "MASTERS",
+                        "VENDORS", "REPORTS", "FLEET", "WHATSAPP")))
+                .active(true).build());
+        planRepository.save(Plan.builder()
+                .code(TenantPlan.ENTERPRISE).displayName("Enterprise")
+                .monthlyPrice(new BigDecimal("19999")).currency("INR")
+                .maxUsers(null).maxLeads(null)
+                .modules(new HashSet<>(Set.of("LEADS", "BOOKINGS", "QUOTATIONS", "CUSTOMERS", "MASTERS",
+                        "VENDORS", "REPORTS", "FLEET", "WHATSAPP", "DISHA_AI", "PORTAL")))
+                .active(true).build());
+        log.info("[DevDataSeeder] seeded 3 plans (Basic/Pro/Enterprise)");
     }
 
     private Tenant getOrCreateTenant() {
