@@ -1,20 +1,19 @@
 package com.crm.travelcrm.portal.security;
 
 import com.crm.travelcrm.common.ratelimit.RateLimitFilter;
-import jakarta.servlet.http.HttpServletResponse;
+import com.crm.travelcrm.common.web.ApiAccessDeniedHandler;
+import com.crm.travelcrm.common.web.ApiAuthenticationEntryPoint;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpMethod;
-import org.springframework.http.HttpStatus;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 /**
@@ -35,6 +34,8 @@ public class PortalSecurityConfig {
 
     private final TravelerJwtAuthFilter travelerJwtAuthFilter;
     private final RateLimitFilter rateLimitFilter;
+    private final ApiAuthenticationEntryPoint apiAuthenticationEntryPoint;
+    private final ApiAccessDeniedHandler apiAccessDeniedHandler;
 
     @Bean
     @Order(1)
@@ -52,10 +53,11 @@ public class PortalSecurityConfig {
                 )
                 .addFilterBefore(rateLimitFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(travelerJwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                // Shared with the staff chain. Safe to share: both emit the same realm-agnostic copy,
+                // so a traveler 401 and a staff 401 are indistinguishable — which is the point.
                 .exceptionHandling(e -> e
-                        .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED))
-                        .accessDeniedHandler((req, res, ex) ->
-                                res.sendError(HttpServletResponse.SC_FORBIDDEN, "Access denied"))
+                        .authenticationEntryPoint(apiAuthenticationEntryPoint)
+                        .accessDeniedHandler(apiAccessDeniedHandler)
                 )
                 .build();
     }

@@ -1,6 +1,8 @@
 package com.crm.travelcrm.platform.config.filter;
 
 import com.crm.travelcrm.common.context.TenantContext;
+import com.crm.travelcrm.common.exception.ApiErrorWriter;
+import com.crm.travelcrm.common.exception.ErrorCode;
 import com.crm.travelcrm.platform.config.service.PlatformConfigService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -27,36 +29,17 @@ import java.io.IOException;
 public class MaintenanceModeFilter extends OncePerRequestFilter {
 
     private final PlatformConfigService configService;
+    private final ApiErrorWriter errorWriter;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
         if (TenantContext.getTenantId() != null && configService.isMaintenanceEnabled()) {
-            response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
-            response.setContentType("application/json;charset=UTF-8");
+            // Retry-After survives write() — it only resets the body buffer.
             response.setHeader("Retry-After", "300");
-            response.getWriter().write(
-                    "{\"success\":false,\"message\":" + jsonString(configService.maintenanceMessage()) + "}");
+            errorWriter.write(response, ErrorCode.MAINTENANCE, configService.maintenanceMessage());
             return;
         }
         filterChain.doFilter(request, response);
-    }
-
-    /** Minimal JSON string escaping for the maintenance message. */
-    private static String jsonString(String s) {
-        if (s == null) return "\"\"";
-        StringBuilder sb = new StringBuilder("\"");
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            switch (c) {
-                case '"'  -> sb.append("\\\"");
-                case '\\' -> sb.append("\\\\");
-                case '\n' -> sb.append("\\n");
-                case '\r' -> sb.append("\\r");
-                case '\t' -> sb.append("\\t");
-                default   -> sb.append(c);
-            }
-        }
-        return sb.append('"').toString();
     }
 }

@@ -4,12 +4,18 @@
 
     <Appenders>
 
+        <!--
+          %X{traceId} prints the per-request correlation id that TraceIdFilter puts into the
+          ThreadContext. It is also returned to the client in the X-Trace-Id header and in the
+          ApiError body, so a support ticket quoting an id can be grepped straight to the stack
+          trace. Requests outside the filter (schedulers, startup) print an empty value.
+        -->
         <Console name="Console" target="SYSTEM_OUT">
-            <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss} [%t] %-5level %c - %msg%n"/>
+            <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss} [%t] %-5level [%X{traceId}] %c - %msg%n"/>
         </Console>
 
         <File name="OtpFile" fileName="logs/otp.log">
-            <PatternLayout pattern="%d %-5p %c - %m%n"/>
+            <PatternLayout pattern="%d %-5p [%X{traceId}] %c - %m%n"/>
         </File>
 
     </Appenders>

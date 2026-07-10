@@ -1,7 +1,7 @@
 package com.crm.travelcrm.common.ratelimit;
 
-import com.crm.travelcrm.common.exception.ErrorResponse;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.crm.travelcrm.common.exception.ApiErrorWriter;
+import com.crm.travelcrm.common.exception.ErrorCode;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -9,14 +9,11 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.time.Duration;
-import java.time.LocalDateTime;
 
 @Component
 @RequiredArgsConstructor
@@ -34,7 +31,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private static final Duration SIGNUP_WIN  = Duration.ofMinutes(10);
 
     private final RateLimitService rateLimitService;
-    private final ObjectMapper     objectMapper;
+    private final ApiErrorWriter   errorWriter;
 
     // Comma-separated IPs of trusted reverse proxies / load balancers. X-Forwarded-For is
     // ONLY honored when the direct peer is one of these — otherwise a client could spoof the
@@ -98,18 +95,14 @@ public class RateLimitFilter extends OncePerRequestFilter {
         return remoteAddr;
     }
 
+    /**
+     * Retry-After is set before {@code write()}, which only resets the body buffer — status and
+     * headers survive.
+     */
     private void rejectRequest(HttpServletResponse response, Duration retryAfter)
             throws IOException {
-        response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
-        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.setHeader("Retry-After", String.valueOf(retryAfter.getSeconds()));
-
-        ErrorResponse body = new ErrorResponse(
-                429,
-                "TOO_MANY_REQUESTS",
-                "Too many requests. Please slow down and try again later.",
-                LocalDateTime.now()
-        );
-        response.getWriter().write(objectMapper.writeValueAsString(body));
+        errorWriter.write(response, ErrorCode.RATE_LIMITED,
+                "Too many requests. Please slow down and try again later.");
     }
 }

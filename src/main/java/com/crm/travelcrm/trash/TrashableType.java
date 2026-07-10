@@ -16,6 +16,7 @@ import com.crm.travelcrm.master.geography.entity.Country;
 import com.crm.travelcrm.master.geography.entity.Destination;
 import com.crm.travelcrm.master.hotel.Hotel;
 import com.crm.travelcrm.master.sightseeing.Sightseeing;
+import com.crm.travelcrm.master.testimonial.Testimonial;
 import com.crm.travelcrm.master.vehicle.VehicleEntity;
 import com.crm.travelcrm.quotation.entity.Quotation;
 import com.crm.travelcrm.reminder.entity.Reminder;
@@ -63,6 +64,8 @@ public enum TrashableType {
     ADDON("ADDON", "Add-ons", Addon.class),
     SIGHTSEEING("SIGHTSEEING", "Sightseeing", Sightseeing.class),
     VEHICLE("VEHICLE", "Vehicles", VehicleEntity.class),
+    // No FK of its own — position within the master block is free.
+    TESTIMONIAL("TESTIMONIAL", "Testimonials", Testimonial.class),
     CITY("CITY", "Cities", City.class),
     DESTINATION("DESTINATION", "Destinations", Destination.class),
     COUNTRY("COUNTRY", "Countries", Country.class),

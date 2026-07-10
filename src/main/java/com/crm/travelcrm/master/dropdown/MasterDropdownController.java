@@ -2,6 +2,7 @@ package com.crm.travelcrm.master.dropdown;
 
 import com.crm.travelcrm.common.dto.ApiResponse;
 import com.crm.travelcrm.common.dto.DropdownDto;
+import com.crm.travelcrm.common.exception.BadRequestException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -85,7 +86,9 @@ public class MasterDropdownController {
         if (countryId != null) {
             return ok("Cities", masterDropdownService.getCitiesByCountry(countryId));
         }
-        throw new IllegalArgumentException("Provide either destinationId or countryId");
+        // BadRequestException, not IllegalArgumentException: this message is written for the caller,
+        // and only BadRequestException's handler is allowed to echo a message verbatim.
+        throw new BadRequestException("Provide either destinationId or countryId");
     }
 
     // ── Hotel hierarchy ───────────────────────────────────────────────────────

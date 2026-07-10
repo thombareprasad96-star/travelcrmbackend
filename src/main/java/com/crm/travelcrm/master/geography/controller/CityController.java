@@ -68,6 +68,35 @@ public class CityController {
         return ResponseEntity.ok(ApiResponse.success("City fetched", cityService.getById(cityId)));
     }
 
+    // Flat filter routes the frontend's CityService already calls
+    // (cityService.getCitiesByDestination / getCitiesByCountry). They delegate to the same
+    // service methods as the /api/v1 nested routes below — two paths, one behaviour.
+    // Two path segments, so neither collides with /api/cities/{cityId}.
+
+    @GetMapping("/api/cities/destination/{destinationId}")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<PagedApiResponse<CityDto>> getByDestinationFlat(
+            @PathVariable Long destinationId,
+            @RequestParam(defaultValue = "0")         int page,
+            @RequestParam(defaultValue = "100")       int size,
+            @RequestParam(defaultValue = "createdAt") String sortBy,
+            @RequestParam(defaultValue = "desc")      String sortDir) {
+        return ResponseEntity.ok(
+                cityService.getByDestination(destinationId, page, size, sortBy, sortDir));
+    }
+
+    @GetMapping("/api/cities/country/{countryId}")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<PagedApiResponse<CityDto>> getByCountryFlat(
+            @PathVariable Long countryId,
+            @RequestParam(defaultValue = "0")         int page,
+            @RequestParam(defaultValue = "100")       int size,
+            @RequestParam(defaultValue = "createdAt") String sortBy,
+            @RequestParam(defaultValue = "desc")      String sortDir) {
+        return ResponseEntity.ok(
+                cityService.getByCountry(countryId, page, size, sortBy, sortDir));
+    }
+
     // ── Nested endpoints by country (/api/v1/countries/{id}/cities) ───────────
 
     @GetMapping("/api/v1/countries/{countryId}/cities")

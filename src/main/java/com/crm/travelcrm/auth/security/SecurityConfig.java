@@ -1,15 +1,15 @@
 package com.crm.travelcrm.auth.security;
 
 import com.crm.travelcrm.common.ratelimit.RateLimitFilter;
+import com.crm.travelcrm.common.web.ApiAccessDeniedHandler;
+import com.crm.travelcrm.common.web.ApiAuthenticationEntryPoint;
 import com.crm.travelcrm.platform.config.filter.MaintenanceModeFilter;
 import com.crm.travelcrm.platform.entitlement.filter.ModuleAccessFilter;
-import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
-import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
@@ -22,7 +22,6 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
@@ -42,6 +41,8 @@ public class SecurityConfig {
     private final RateLimitFilter rateLimitFilter;
     private final MaintenanceModeFilter maintenanceModeFilter;
     private final ModuleAccessFilter moduleAccessFilter;
+    private final ApiAuthenticationEntryPoint apiAuthenticationEntryPoint;
+    private final ApiAccessDeniedHandler apiAccessDeniedHandler;
 
     // Comma-separated allowed origins; override per environment (add the prod URL there).
     @org.springframework.beans.factory.annotation.Value(
@@ -93,10 +94,12 @@ public class SecurityConfig {
                 .addFilterAfter(maintenanceModeFilter, JwtAuthFilter.class)
                 // Module entitlement gate — 403s a tenant hitting a module its plan/flags exclude.
                 .addFilterAfter(moduleAccessFilter, MaintenanceModeFilter.class)
+                // Both render the standard ApiError envelope. The entry point previously wrote an
+                // empty body and the access-denied handler forwarded to Boot's /error page, so the
+                // frontend read `undefined` for message on every 401 and every filter-level 403.
                 .exceptionHandling(e -> e
-                        .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED))
-                        .accessDeniedHandler((req, res, ex) ->
-                                res.sendError(HttpServletResponse.SC_FORBIDDEN, "Access denied"))
+                        .authenticationEntryPoint(apiAuthenticationEntryPoint)
+                        .accessDeniedHandler(apiAccessDeniedHandler)
                 )
                 .build();
     }

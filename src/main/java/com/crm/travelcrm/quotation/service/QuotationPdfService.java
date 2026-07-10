@@ -178,9 +178,12 @@ public class QuotationPdfService {
                     dto.getPublicId(), pdf.length, (System.nanoTime() - startNanos) / 1_000_000);
             return pdf;
         } catch (Exception ex) {
+            // The cause stays in the log. Concatenating ex.getMessage() into a BusinessException
+            // would ship it straight to the client, since that handler echoes the message verbatim —
+            // and here the cause is renderer internals (iText/font/resource paths).
             log.error("Failed to render quotation PDF for {}: {}",
                     dto.getPublicId(), ex.getMessage(), ex);
-            throw new BusinessException("Failed to generate quotation PDF: " + ex.getMessage(),
+            throw new BusinessException("We couldn't generate the quotation PDF. Please try again.",
                     HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }

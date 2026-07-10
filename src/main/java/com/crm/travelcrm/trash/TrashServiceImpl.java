@@ -16,6 +16,7 @@ import com.crm.travelcrm.master.geography.entity.Country;
 import com.crm.travelcrm.master.geography.entity.Destination;
 import com.crm.travelcrm.master.hotel.Hotel;
 import com.crm.travelcrm.master.sightseeing.Sightseeing;
+import com.crm.travelcrm.master.testimonial.Testimonial;
 import com.crm.travelcrm.master.vehicle.VehicleEntity;
 import com.crm.travelcrm.quotation.entity.Quotation;
 import com.crm.travelcrm.reminder.entity.Reminder;
@@ -213,6 +214,7 @@ public class TrashServiceImpl implements TrashService {
         if (e instanceof Cruise c)       return c.getName();
         if (e instanceof Addon a)        return a.getName();
         if (e instanceof Sightseeing s)  return s.getTitle();
+        if (e instanceof Testimonial t)  return t.getClientName();
         if (e instanceof VehicleEntity v) return v.getName();
         if (e instanceof City c)         return c.getName();
         if (e instanceof Destination d)  return d.getName();

@@ -1,6 +1,8 @@
 package com.crm.travelcrm.platform.entitlement.filter;
 
 import com.crm.travelcrm.common.context.TenantContext;
+import com.crm.travelcrm.common.exception.ApiErrorWriter;
+import com.crm.travelcrm.common.exception.ErrorCode;
 import com.crm.travelcrm.platform.entitlement.service.TenantEntitlementService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -36,6 +38,7 @@ import java.util.Map;
 public class ModuleAccessFilter extends OncePerRequestFilter {
 
     private final TenantEntitlementService entitlementService;
+    private final ApiErrorWriter errorWriter;
 
     /** Path prefix → required module key. First match wins (LinkedHashMap keeps order). */
     private static final Map<String, String> RULES = new LinkedHashMap<>();
@@ -55,6 +58,7 @@ public class ModuleAccessFilter extends OncePerRequestFilter {
         RULES.put("/api/vehicles", "MASTERS");
         RULES.put("/api/addons", "MASTERS");
         RULES.put("/api/sightseeings", "MASTERS");
+        RULES.put("/api/testimonials", "MASTERS");
         RULES.put("/api/masters", "MASTERS");
     }
 
@@ -65,12 +69,12 @@ public class ModuleAccessFilter extends OncePerRequestFilter {
         String required = tenantId == null ? null : requiredModule(request.getRequestURI());
 
         if (required != null && !entitlementService.effectiveModulesFor(tenantId).contains(required)) {
-            response.setStatus(HttpServletResponse.SC_FORBIDDEN);
-            response.setContentType("application/json");
-            response.setCharacterEncoding("UTF-8");
-            response.getWriter().write(
-                    "{\"success\":false,\"message\":\"The '" + required
-                    + "' module is not enabled for your organization's plan. Contact your administrator.\"}");
+            // MODULE_NOT_ENABLED, not PERMISSION_DENIED: same 403, different screen. The user's
+            // permissions are fine — their organization's plan is what excludes this module, so the
+            // client shows an upgrade prompt rather than "ask your administrator for access".
+            errorWriter.write(response, ErrorCode.MODULE_NOT_ENABLED,
+                    "The '" + required + "' module is not enabled for your organization's plan. "
+                            + "Contact your administrator.");
             return;
         }
         chain.doFilter(request, response);

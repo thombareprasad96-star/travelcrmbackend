@@ -379,9 +379,11 @@ public class QuotationServiceImpl implements QuotationService {
             emailAudit.record(request.getToEmail(), subject, true, null);
             log.info("Quotation {} emailed to {} (from {})", publicId, request.getToEmail(), mail.from());
         } catch (Exception ex) {
+            // The audit row keeps the real cause; the client does not. A mail failure's message names
+            // the SMTP host, port and auth outcome — infrastructure detail a tenant user must not see.
             log.error("Failed to email quotation {}: {}", publicId, ex.getMessage(), ex);
             emailAudit.record(request.getToEmail(), subject, false, ex.getMessage());
-            throw new BusinessException("Failed to send quotation email: " + ex.getMessage(),
+            throw new BusinessException("We couldn't send that email. Please try again shortly.",
                     HttpStatus.BAD_GATEWAY);
         }
     }
