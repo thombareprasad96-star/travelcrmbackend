@@ -42,6 +42,13 @@ public enum Permission {
     BOOKING_UPDATE ("Bookings",       "Edit booking"),
     BOOKING_CANCEL ("Bookings",       "Cancel booking"),
     BOOKING_DELETE ("Bookings",       "Delete booking"),
+    // High-privilege financial gate: disburse a refund AND override/waive a computed cancellation
+    // charge. Like LEAD_PERMANENT_DELETE it is in no role default — only TENANT_ADMIN holds it (via
+    // the resolver bypass) until explicitly granted, since it moves money and overrides the books.
+    BOOKING_REFUND ("Bookings",       "Refund a booking / override cancellation charges"),
+    // Manage the tenant's cancellation-charge policies (the tiered slabs + tax switches). Config,
+    // not a per-booking action — TENANT_ADMIN by default (via bypass) until granted to others.
+    CANCELLATION_POLICY_MANAGE ("Bookings", "Manage cancellation policies"),
 
     // ── Customers ───────────────────────────────────────────────────────────
     CUSTOMER_READ   ("Customers",     "View customers"),

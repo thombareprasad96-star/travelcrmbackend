@@ -9,8 +9,6 @@ import com.crm.travelcrm.settings.dto.WhatsAppConfigDTO;
 import com.crm.travelcrm.settings.dto.WhatsAppConfigRequest;
 import com.crm.travelcrm.settings.dto.WhatsAppStatsDTO;
 import com.crm.travelcrm.settings.entity.TenantSettings;
-import com.crm.travelcrm.settings.entity.WaMessageLog;
-import com.crm.travelcrm.settings.provider.WhatsAppSender;
 import com.crm.travelcrm.settings.repository.TenantSettingsRepository;
 import com.crm.travelcrm.settings.repository.WaMessageLogRepository;
 import lombok.RequiredArgsConstructor;
@@ -44,7 +42,7 @@ public class WhatsAppConfigService {
     private final TenantSettingsRepository repo;
     private final WaMessageLogRepository waLogRepo;
     private final AesSecretCipher cipher;
-    private final WhatsAppSender sender;
+    private final WhatsAppMessagingService messaging;
 
     @Transactional(readOnly = true)
     public WhatsAppConfigDTO getConfig(Long tenantId) {
@@ -69,30 +67,25 @@ public class WhatsAppConfigService {
 
     @Transactional
     public TestWhatsAppResponse sendTest(TestWhatsAppRequest req, Long tenantId) {
-        TenantSettings ts = repo.findByTenantId(tenantId).orElse(null);
-        if (ts == null || !StringUtils.hasText(ts.getWhatsAppApiKeyEnc())) {
+        if (!messaging.isConfigured(tenantId)) {
             throw new BusinessException("WhatsApp is not configured. Save configuration first.",
                     HttpStatus.UNPROCESSABLE_ENTITY);
         }
-        String e164 = "+91" + req.getPhoneNumber().replaceAll("\\D", "");
-        try {
-            sender.send(ts, e164, List.of("Test User"));
-            ts.setWaLastTestedAt(LocalDateTime.now());
-            repo.save(ts);
-            waLogRepo.save(WaMessageLog.builder()
-                    .phone(e164).template(ts.getWaTemplateName())
-                    .status("SENT").sentAt(LocalDateTime.now()).build());
-            return new TestWhatsAppResponse(true, "Test message sent successfully to " + e164,
+        // Delivery + the whatsapp_logs audit row are handled by the messaging facade.
+        WhatsAppMessagingService.Result result =
+                messaging.sendWithTenantTemplate(tenantId, req.getPhoneNumber(), List.of("Test User"));
+        if (result.success()) {
+            repo.findByTenantId(tenantId).ifPresent(ts -> {
+                ts.setWaLastTestedAt(LocalDateTime.now());
+                repo.save(ts);
+            });
+            return new TestWhatsAppResponse(true, "Test message sent successfully",
                     null, LocalDateTime.now().format(DATETIME_FMT));
-        } catch (Exception ex) {
-            log.warn("Test WhatsApp failed for tenant {}: {}", tenantId, ex.getMessage());
-            waLogRepo.save(WaMessageLog.builder()
-                    .phone(e164).template(ts.getWaTemplateName())
-                    .status("FAILED").errorMsg(ex.getMessage()).sentAt(LocalDateTime.now()).build());
-            return new TestWhatsAppResponse(false,
-                    "Failed to send test message. Check your API key and template name.",
-                    ex.getMessage(), null);
         }
+        log.warn("Test WhatsApp failed for tenant {}: {}", tenantId, result.errorMessage());
+        return new TestWhatsAppResponse(false,
+                "Failed to send test message. Check your API key and template name.",
+                result.errorMessage(), null);
     }
 
     @Transactional(readOnly = true)

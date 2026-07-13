@@ -39,6 +39,18 @@ public class Booking extends BaseTenantEntity {
     @Column(name = "booking_code", nullable = false, length = 20)
     private String bookingCode;
 
+    // ───────────────── Concurrency ─────────────────
+    // Optimistic lock. Every financial mutation (add/delete payment, PATCH /payment) is a
+    // read-modify-write on paidAmount with no DB-level serialization; without this, two concurrent
+    // receipts (or a double-click) both read the same paidAmount and one increment is silently lost,
+    // and the overpayment guard — computed from the stale read — can be jointly bypassed. With
+    // @Version the losing transaction fails with OptimisticLockException (mapped to 409 by
+    // GlobalExceptionHandler) instead of clobbering. Not audited — version bumps are not business data.
+    @NotAudited
+    @Version
+    @Column(name = "version")
+    private Long version;
+
     // ───────────────── Relationships ─────────────────
 
     // No DB-level FK — cross-aggregate reference to customers.id, enforced at the application layer.
@@ -69,6 +81,18 @@ public class Booking extends BaseTenantEntity {
     @Column(name = "source_quotation_public_id")
     private java.util.UUID sourceQuotationPublicId;
 
+    // ── Cancellation-policy pin (anti-retroactivity) ──────────────────────────
+    // Resolved and stamped ONCE at create/convert: the exact CancellationPolicy version that
+    // governs this booking's cancellation charges. Because policy versions are immutable, editing
+    // the tenant's policy tomorrow produces a NEW version and can never change how this booking —
+    // made today — is charged. Null only on legacy rows created before this feature; the cancel
+    // flow then resolves the company default as-of bookingDate and pins it on first cancel.
+    @Column(name = "cancellation_policy_public_id")
+    private java.util.UUID cancellationPolicyPublicId;
+
+    @Column(name = "cancellation_policy_version")
+    private Integer cancellationPolicyVersion;
+
     // ───────────────── Financials ─────────────────
 
     @Builder.Default
@@ -94,6 +118,14 @@ public class Booking extends BaseTenantEntity {
     @Builder.Default
     @Column(name = "paid_amount", nullable = false, precision = 12, scale = 2)
     private BigDecimal paidAmount = BigDecimal.ZERO;
+
+    // Gross amount refunded to the customer (money OUT), accumulated by the refund flow. This is the
+    // single, @Version-guarded source of refund truth — refund ledger rows (entryType REFUND) sum
+    // into it and it is deliberately SEPARATE from paidAmount, which stays the historical gross
+    // received so pendingAmount, the payment status and existing receipts aggregates are unaffected.
+    @Builder.Default
+    @Column(name = "refunded_amount", nullable = false, precision = 12, scale = 2)
+    private BigDecimal refundedAmount = BigDecimal.ZERO;
 
     @Builder.Default
     @Column(name = "net_profit", nullable = false, precision = 12, scale = 2)

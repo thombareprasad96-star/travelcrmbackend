@@ -1,4 +1,4 @@
-package com.crm.travelcrm.config;
+package com.crm.travelcrm.common.config;
 
 import com.crm.travelcrm.auth.repository.SuperAdminRepository;
 import com.crm.travelcrm.common.entity.SuperAdmin;

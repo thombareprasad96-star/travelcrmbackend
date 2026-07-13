@@ -32,4 +32,15 @@ public interface TravelerDocumentRepository extends JpaRepository<TravelerDocume
     @Modifying(clearAutomatically = true)
     @Query("UPDATE TravelerDocument d SET d.lastReminderDayThreshold = :threshold WHERE d.id = :id")
     void markReminded(@Param("id") Long id, @Param("threshold") Integer threshold);
+
+    // ── Storage metering (SuperAdmin usage dashboard) ─────────────────────────────
+    /** Stored document bytes grouped by tenant across ALL tenants. Row = {@code [tenantId, sumBytes]}. */
+    @Query("SELECT d.tenantId, COALESCE(SUM(d.sizeBytes), 0) FROM TravelerDocument d " +
+            "WHERE d.deletedAt IS NULL GROUP BY d.tenantId")
+    List<Object[]> sumBytesGroupedByTenant();
+
+    /** Stored document bytes for one tenant. */
+    @Query("SELECT COALESCE(SUM(d.sizeBytes), 0) FROM TravelerDocument d " +
+            "WHERE d.deletedAt IS NULL AND d.tenantId = :tenantId")
+    long sumBytesByTenant(@Param("tenantId") Long tenantId);
 }

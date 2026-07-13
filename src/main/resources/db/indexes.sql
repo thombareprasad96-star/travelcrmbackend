@@ -14,6 +14,23 @@
 -- Plain tenant/status indexes already exist as @Index on the entities.
 -- ============================================================================
 
+-- ── Refund ledger: idempotency + legacy entry_type backfill ─────────────────
+-- The refund flow writes booking_payments rows with entry_type = 'REFUND' and an optional
+-- idempotency_key; a resubmit with the same key must collapse onto the original payout rather than
+-- double-pay. A PARTIAL unique index (only where the key is set) enforces that without touching the
+-- many receipt rows that carry no key. Scoped per tenant.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bkpay_idem
+        ON booking_payments (tenant_id, idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
+
+-- entry_type was added to an existing table, so pre-existing rows are NULL. They are all ordinary
+-- receipts — backfill them so aggregates/filters that key off the column behave. Idempotent.
+UPDATE booking_payments SET entry_type = 'RECEIPT' WHERE entry_type IS NULL;
+
+-- bookings.refunded_amount (the refund counter) was likewise added to an existing table; any legacy
+-- NULL must read as 0 so SUM()/comparisons don't NPE or skew. Idempotent.
+UPDATE bookings SET refunded_amount = 0 WHERE refunded_amount IS NULL;
+
 -- ── Logical-FK / hot-path indexes not already declared via @Index ───────────
 CREATE INDEX IF NOT EXISTS idx_bookings_destination ON bookings(destination_id);
 CREATE INDEX IF NOT EXISTS idx_bookings_lead        ON bookings(lead_id);
@@ -98,3 +115,20 @@ UPDATE vendors SET row_version = 0 WHERE row_version IS NULL;
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
 ALTER TABLE users ADD CONSTRAINT users_role_check
         CHECK (role IN ('SUPERADMIN','TENANT_ADMIN','MANAGER','TRAVEL_AGENT','STAFF','ACCOUNTANT'));
+
+-- ── PlatformAuditAction enum CHECK constraint refresh ────────────────────────
+-- Same story as users_role_check: Hibernate generated platform_audit_logs_action_check from
+-- PlatformAuditAction when the table was first created, and ddl-auto=update never alters an
+-- existing constraint. Action values added later (QUOTA_OVERRIDE, USAGE_LIMIT_EXCEEDED) are
+-- rejected at the DB level; because the audit recorder writes best-effort, that rejection would
+-- otherwise surface as a failed platform operation. Drop + recreate with the full current set.
+ALTER TABLE platform_audit_logs DROP CONSTRAINT IF EXISTS platform_audit_logs_action_check;
+ALTER TABLE platform_audit_logs ADD CONSTRAINT platform_audit_logs_action_check
+        CHECK (action IN ('LOGIN','LOGIN_FAILED','LOGOUT',
+                'TENANT_CREATE','TENANT_UPDATE','TENANT_SUSPEND','TENANT_REACTIVATE',
+                'TENANT_SOFT_DELETE','TENANT_RESTORE','TENANT_HARD_DELETE',
+                'PLAN_ASSIGN','PLAN_CHANGE','PLAN_UPDATE','SUBSCRIPTION_EXPIRED',
+                'BILLING_ISSUE','BILLING_MARK_PAID','BILLING_MARK_UNPAID',
+                'IMPERSONATION_START','IMPERSONATION_END','USER_FORCE_RESET','USER_LOCK','USER_UNLOCK',
+                'FEATURE_FLAG_CHANGE','CONFIG_CHANGE','QUOTA_OVERRIDE','USAGE_LIMIT_EXCEEDED',
+                'ANNOUNCEMENT_SEND','MAINTENANCE_TOGGLE','DATA_EXPORT'));

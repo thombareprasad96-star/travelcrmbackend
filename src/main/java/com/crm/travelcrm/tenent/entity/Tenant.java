@@ -6,6 +6,7 @@ import com.crm.travelcrm.tenent.enums.TenantPlan;
 import com.crm.travelcrm.tenent.enums.TenantStatus;
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.ColumnDefault;
 
 import java.time.LocalDate;
 import java.util.HashSet;
@@ -64,6 +65,21 @@ public class Tenant extends BaseEntity {
     // create / plan-change (nullable so ddl-auto can add it to the existing tenants table).
     @Column(name = "max_leads")
     private Integer maxLeads;
+
+    // Max NEW bookings allowed per calendar month; null = unlimited. Denormalized from Plan.
+    @Column(name = "max_bookings_per_month")
+    private Integer maxBookingsPerMonth;
+
+    // Storage cap in megabytes (Cloudinary assets + traveler documents); null = unlimited.
+    @Column(name = "max_storage_mb")
+    private Integer maxStorageMb;
+
+    // When true, a SuperAdmin has manually overridden this tenant's quota limits, so a later
+    // plan-change must NOT overwrite them with the plan defaults (the override wins until cleared).
+    @Column(name = "quota_override", nullable = false)
+    @ColumnDefault("false")
+    @Builder.Default
+    private boolean quotaOverride = false;
 
     // Effective module access — seeded from the plan, editable by the SuperAdmin (Feature Flags).
     // Empty ⇒ the entitlement service falls back to the plan's modules (covers pre-existing tenants).

@@ -32,6 +32,12 @@ public class UpdatePlanRequest {
     @Min(value = 1, message = "Max leads must be at least 1")
     private Integer maxLeads;
 
+    @Min(value = 1, message = "Max bookings per month must be at least 1")
+    private Integer maxBookingsPerMonth;
+
+    @Min(value = 1, message = "Max storage (MB) must be at least 1")
+    private Integer maxStorageMb;
+
     private Set<String> modules;
 
     private boolean active;

@@ -101,6 +101,9 @@ public class TrashServiceImpl implements TrashService {
         TrashableType type = resolveType(entityTypeKey);
         BaseTenantEntity entity = findTrashedRow(type, publicId, tenantId);
 
+
+        assertParentNotTrashed(entity, tenantId);
+
         entity.restore();                 // managed entity — flush persists deletedAt/by = null
         em.flush();
         log.info("Restored {} {} from trash | tenantId: {}", type.key(), publicId, tenantId);
@@ -220,6 +223,33 @@ public class TrashServiceImpl implements TrashService {
         if (e instanceof Destination d)  return d.getName();
         if (e instanceof Country c)      return c.getName();
         return "Record";
+    }
+
+    /**
+     * Refuse restoring a child whose logical parent is itself still in Trash — that would leave a
+     * live child dangling under a soft-deleted parent. A Quotation is cascade-trashed with its Lead
+     * ({@code QuotationEventListener}); restoring the quotation alone must be blocked until the lead
+     * is back. Recovery is not lost: restoring the lead cascades its quotations back.
+     *
+     * <p>The parent lookup uses an explicit {@code deletedAt IS NOT NULL} predicate — it must NOT go
+     * through the {@code …DeletedAtIsNull} finders, which hide trashed leads and would wrongly report
+     * "no trashed parent". {@code softDeleteFilter} is already disabled here (see {@link #restore}).
+     */
+    private void assertParentNotTrashed(BaseTenantEntity entity, Long tenantId) {
+        if (entity instanceof Quotation q && q.getLeadId() != null) {
+            long trashedParent = em.createQuery(
+                            "SELECT COUNT(l) FROM Lead l WHERE l.id = :pid AND l.tenantId = :tid"
+                                    + " AND l.deletedAt IS NOT NULL", Long.class)
+                    .setParameter("pid", q.getLeadId())
+                    .setParameter("tid", tenantId)
+                    .getSingleResult();
+            if (trashedParent > 0) {
+                throw new BusinessException(
+                        "Cannot restore this quotation while its lead is still in Trash. "
+                                + "Restore the lead instead — its quotations come back with it.",
+                        HttpStatus.CONFLICT);
+            }
+        }
     }
 
     private TrashableType resolveType(String key) {

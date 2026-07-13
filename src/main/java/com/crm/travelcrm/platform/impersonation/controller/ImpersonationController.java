@@ -1,8 +1,10 @@
 package com.crm.travelcrm.platform.impersonation.controller;
 
 import com.crm.travelcrm.common.dto.ApiResponse;
+import com.crm.travelcrm.common.util.ClientIp;
 import com.crm.travelcrm.platform.impersonation.dto.ImpersonationResponse;
 import com.crm.travelcrm.platform.impersonation.service.ImpersonationService;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -24,17 +26,21 @@ public class ImpersonationController {
 
     @PostMapping("/api/super-admin/users/{publicId}/impersonate")
     @PreAuthorize("hasRole('SUPER_ADMIN')")
-    public ResponseEntity<ApiResponse<ImpersonationResponse>> start(@PathVariable UUID publicId) {
+    public ResponseEntity<ApiResponse<ImpersonationResponse>> start(
+            @PathVariable UUID publicId, HttpServletRequest request) {
         return ResponseEntity.ok(ApiResponse.success(
-                "Impersonation session created", impersonationService.start(publicId)));
+                "Impersonation session created",
+                impersonationService.start(publicId,
+                        ClientIp.resolve(request), request.getHeader("User-Agent"))));
     }
 
     @PostMapping("/api/impersonation/end")
     public ResponseEntity<ApiResponse<Void>> end(
-            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            HttpServletRequest request) {
         String token = (authHeader != null && authHeader.startsWith("Bearer "))
                 ? authHeader.substring(7) : null;
-        impersonationService.end(token);
+        impersonationService.end(token, ClientIp.resolve(request), request.getHeader("User-Agent"));
         return ResponseEntity.ok(ApiResponse.success("Impersonation ended"));
     }
 }

@@ -35,4 +35,8 @@ build/
 
 logs/
 *.log
-logs/ 
+logs/
+
+### Local secrets — never commit (Groq key, etc.) ###
+application-local.properties
+**/application-local.properties

@@ -11,11 +11,21 @@ import com.crm.travelcrm.booking.dto.response.BookingPageSummaryResponseDTO;
 import com.crm.travelcrm.booking.dto.response.BookingResponseDTO;
 import com.crm.travelcrm.booking.dto.response.BookingStatsResponseDTO;
 import com.crm.travelcrm.booking.entity.Booking;
+import com.crm.travelcrm.booking.entity.BookingPayment;
 import com.crm.travelcrm.booking.enums.BookingStatus;
 import com.crm.travelcrm.booking.enums.PaymentStatus;
 import com.crm.travelcrm.booking.exception.BookingNotFoundException;
 import com.crm.travelcrm.booking.mapper.BookingMapper;
+import com.crm.travelcrm.booking.repository.BookingPaymentRepository;
 import com.crm.travelcrm.booking.repository.BookingRepository;
+import com.crm.travelcrm.booking.cancellation.dto.CancellationQuote;
+import com.crm.travelcrm.booking.cancellation.entity.BookingCancellation;
+import com.crm.travelcrm.booking.cancellation.entity.CancellationPolicy;
+import com.crm.travelcrm.booking.cancellation.enums.RefundStatus;
+import com.crm.travelcrm.booking.cancellation.repository.BookingCancellationRepository;
+import com.crm.travelcrm.booking.cancellation.service.CancellationCalculator;
+import com.crm.travelcrm.booking.cancellation.service.CancellationDocumentService;
+import com.crm.travelcrm.booking.cancellation.service.CancellationPolicyResolver;
 import com.crm.travelcrm.booking.specification.BookingSpecification;
 import com.crm.travelcrm.booking.util.BookingCodeGenerator;
 import com.crm.travelcrm.auth.entity.User;
@@ -38,6 +48,8 @@ import com.crm.travelcrm.notification.domain.enums.DeliveryChannel;
 import com.crm.travelcrm.notification.domain.enums.NotificationType;
 import com.crm.travelcrm.quotation.entity.Quotation;
 import com.crm.travelcrm.quotation.repository.QuotationRepository;
+import com.crm.travelcrm.tenent.entity.Tenant;
+import com.crm.travelcrm.tenent.tenentsRepository.TenantRepository;
 import lombok.RequiredArgsConstructor;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -53,6 +65,8 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -82,7 +96,8 @@ public class BookingServiceImpl implements BookingService {
     @Value("${app.booking.tcs-rate:0.05}")
     private BigDecimal tcsRate;
 
-    private final BookingRepository    bookingRepository;
+    private final BookingRepository        bookingRepository;
+    private final BookingPaymentRepository paymentRepository;
     private final BookingMapper        bookingMapper;
     private final BookingCodeGenerator bookingCodeGenerator;
     private final ApplicationEventPublisher eventPublisher;
@@ -91,6 +106,11 @@ public class BookingServiceImpl implements BookingService {
     private final LeadRepository       leadRepository;
     private final LeadAccessGuard      leadAccessGuard;
     private final QuotationRepository  quotationRepository;
+    private final TenantRepository     tenantRepository;
+    private final CancellationPolicyResolver policyResolver;
+    private final CancellationCalculator cancellationCalculator;
+    private final BookingCancellationRepository cancellationRepository;
+    private final CancellationDocumentService cancellationDocumentService;
 
     // ── Create ───────────────────────────────────────────────────────────────
 
@@ -105,6 +125,9 @@ public class BookingServiceImpl implements BookingService {
         booking.setTenantId(tenantId);
         booking.setBookingCode(bookingCodeGenerator.generate(tenantId));
         booking.setStatus(BookingStatus.PENDING);
+
+        // Monthly booking-quota gate (hard 403 once the plan cap for the target month is reached).
+        enforceBookingQuota(tenantId, booking.getBookingDate());
 
         // Validate cross-aggregate references (no DB FK) and snapshot the resolved values.
         Customer customer = customerRepository
@@ -124,15 +147,53 @@ public class BookingServiceImpl implements BookingService {
             booking.setLeadId(request.getLeadId());
         }
 
+        BigDecimal initialPaid = request.getPaidAmount() != null
+                ? request.getPaidAmount() : BigDecimal.ZERO;
         calculateAndApplyFinancials(booking, request.getCustomerAmount(),
-                request.getVendorCost(), request.getPaidAmount());
+                request.getVendorCost(), initialPaid);
+
+        // Pin the governing cancellation policy NOW (immune to later policy edits). A direct booking
+        // has no source quotation, so the tenant company default (as-of the booking date) applies.
+        pinCancellationPolicy(booking, null, tenantId);
 
         Booking saved = bookingRepository.save(booking);
+        // An initial payment entered on the create form must appear in the ledger too, or the invoice
+        // would show "Paid ₹X" over an empty Payments-Received table (paidAmount vs ledger divergence).
+        if (initialPaid.signum() > 0) {
+            recordPaymentLedgerRow(saved, initialPaid, "Opening balance",
+                    saved.getBookingDate(), null, "Initial payment recorded at booking creation");
+        }
         log.info("Booking created successfully with code: {}", saved.getBookingCode());
         publishBookingEvent(NotificationType.BOOKING_CREATED, saved,
                 "New Booking: " + saved.getBookingCode(),
                 "A new booking " + saved.getBookingCode() + " was created");
         return bookingMapper.toResponse(saved);
+    }
+
+    /**
+     * Monthly booking-quota gate. Rejects a new booking that would exceed the tenant's
+     * {@code maxBookingsPerMonth} for the target booking's calendar month ({@code null}/≤0 =
+     * unlimited). Mirrors the user-seat cap in {@code UserServiceImpl}; soft-alerting as the tenant
+     * approaches the limit is handled separately by the usage-alert scheduler. {@code Tenant} is
+     * platform-level (no tenant filter), so a direct {@code findById} is correct here.
+     */
+    private void enforceBookingQuota(Long tenantId, LocalDate bookingDate) {
+        Tenant tenant = tenantRepository.findById(tenantId).orElse(null);
+        if (tenant == null) return;
+        Integer limit = tenant.getMaxBookingsPerMonth();
+        if (limit == null || limit <= 0) return;   // unlimited
+
+        LocalDate date = bookingDate != null ? bookingDate : LocalDate.now();
+        LocalDate monthStart = date.withDayOfMonth(1);
+        LocalDate nextMonthStart = monthStart.plusMonths(1);
+        long used = bookingRepository.countByTenantForMonth(tenantId, monthStart, nextMonthStart);
+        if (used >= limit) {
+            throw new BusinessException(
+                    "Your plan allows up to " + limit + " new bookings for "
+                            + monthStart.getMonth() + " " + monthStart.getYear()
+                            + ". Upgrade your plan or contact support to add more.",
+                    HttpStatus.FORBIDDEN);
+        }
     }
 
     // ── Convert Lead → Booking ────────────────────────────────────────────────
@@ -142,6 +203,9 @@ public class BookingServiceImpl implements BookingService {
     public BookingResponseDTO convertLeadToBooking(UUID leadPublicId, LeadConversionRequestDTO request) {
         Long tenantId = requireTenantId();
         log.info("Converting lead {} to booking", leadPublicId);
+
+        // Monthly booking-quota gate (same cap as direct create; convert also produces a new booking).
+        enforceBookingQuota(tenantId, request.getBookingDate());
 
         // Tenant + row-level scope (LEAD_UPDATE — converting mutates the lead). Returns the
         // managed Lead so the stage flip below participates in this same transaction.
@@ -163,6 +227,7 @@ public class BookingServiceImpl implements BookingService {
 
         // Optional source quotation — validate it belongs to this lead + tenant before linking.
         UUID sourceQuotationPublicId = null;
+        UUID quotationPolicyPublicId = null;   // the structured cancellation policy the quote was priced under
         if (request.getQuotationPublicId() != null) {
             Quotation quotation = quotationRepository
                     .findByPublicIdAndTenantIdAndDeletedAtIsNull(request.getQuotationPublicId(), tenantId)
@@ -175,6 +240,7 @@ public class BookingServiceImpl implements BookingService {
                         "The selected quotation does not belong to this lead.", HttpStatus.BAD_REQUEST);
             }
             sourceQuotationPublicId = quotation.getPublicId();
+            quotationPolicyPublicId = quotation.getCancellationPolicyPublicId();
         }
 
         // Resolve or create the customer from the lead (phone is the per-tenant natural key).
@@ -204,7 +270,16 @@ public class BookingServiceImpl implements BookingService {
         BigDecimal paid = request.getPaidAmount() != null ? request.getPaidAmount() : BigDecimal.ZERO;
         calculateAndApplyFinancials(booking, request.getCustomerAmount(), request.getVendorCost(), paid);
 
+        // Pin the governing cancellation policy: the exact version the quotation was priced under
+        // (so the customer is charged the terms they were quoted), else the company default.
+        pinCancellationPolicy(booking, quotationPolicyPublicId, tenantId);
+
         Booking saved = bookingRepository.save(booking);
+        // Carry an initial payment into the ledger so paidAmount and the receipts table reconcile.
+        if (paid.signum() > 0) {
+            recordPaymentLedgerRow(saved, paid, "Opening balance",
+                    saved.getBookingDate(), null, "Initial payment recorded during lead conversion");
+        }
 
         // Flip the lead to CONVERTED — keep it for history, stamp the back-link to the booking.
         lead.setLeadStage(LeadStage.CONVERTED);
@@ -340,27 +415,15 @@ public class BookingServiceImpl implements BookingService {
         // edit can never silently skip the cancel() flow or mutate a locked booking.
         boolean statusChanged = applyStatusOnUpdate(booking, request.getStatus());
 
-        // paidAmount is server-owned too — apply it as an ABSOLUTE set when the client sends it.
-        // Recalculate whenever ANY financial input (amount / vendor cost / paid) changed so
-        // gst / tcs / totalPayable / paymentStatus — and thus the derived pendingAmount — stay
-        // consistent. Note totalPayable depends only on customerAmount, so a paid-only edit
-        // leaves it unchanged and simply moves paymentStatus + pendingAmount.
-        if (request.getCustomerAmount() != null
-                || request.getVendorCost() != null
-                || request.getPaidAmount() != null) {
+        // paidAmount is owned by the payment ledger (POST/DELETE /payments, PATCH /payment), NOT by
+        // this edit form — recording payments here as an absolute set is what let paidAmount diverge
+        // from the itemised ledger rows. A booking edit only recomputes the DERIVED money fields: when
+        // the amounts change, refresh gst / tcs / totalPayable / netProfit and re-derive paymentStatus
+        // from the current (ledger-owned) paidAmount. Any paidAmount sent by the client is ignored.
+        if (request.getCustomerAmount() != null || request.getVendorCost() != null) {
+            recomputeTotals(booking, booking.getCustomerAmount(), booking.getVendorCost());
 
-            BigDecimal newPaid = request.getPaidAmount() != null
-                    ? request.getPaidAmount()
-                    : booking.getPaidAmount();
-
-            calculateAndApplyFinancials(
-                    booking,
-                    booking.getCustomerAmount(),  // post-mapper value
-                    booking.getVendorCost(),       // post-mapper value
-                    newPaid
-            );
-
-            // Never let paid exceed what's owed (mirrors updatePayment()). Throwing rolls back.
+            // Reducing the amount below what has already been paid is inconsistent. Throwing rolls back.
             if (booking.getPaidAmount().compareTo(booking.getTotalPayable()) > 0) {
                 throw new BusinessException(
                         "Paid amount ₹" + booking.getPaidAmount()
@@ -417,7 +480,17 @@ public class BookingServiceImpl implements BookingService {
         log.info("Updating status for booking publicId: {} to {}", publicId, request.getStatus());
 
         Booking booking = findActiveByPublicId(publicId);
-        booking.setStatus(request.getStatus());
+
+        // Route through the SAME lifecycle guard the general PUT uses. This refuses a CANCELLED
+        // transition (cancel must go through cancel() → moveBackToLead + derived-customer cleanup,
+        // and is gated by the stricter BOOKING_CANCEL), locks terminal COMPLETED/CANCELLED, and
+        // no-ops a same-status request — so a plain BOOKING_UPDATE user can no longer cancel,
+        // un-cancel, or reopen a terminal booking through this endpoint.
+        boolean statusChanged = applyStatusOnUpdate(booking, request.getStatus());
+        if (!statusChanged) {
+            return bookingMapper.toResponse(booking);   // requested status == current: nothing to do
+        }
+
         Booking saved = bookingRepository.save(booking);
         publishBookingEvent(statusEventType(saved.getStatus()), saved,
                 "Booking " + saved.getStatus() + ": " + saved.getBookingCode(),
@@ -438,16 +511,51 @@ public class BookingServiceImpl implements BookingService {
             throw new BusinessException(
                     "A completed booking cannot be cancelled.", HttpStatus.CONFLICT);
         }
-        if (booking.getStatus() == BookingStatus.CANCELLED) {
+        // Advisory pre-check (fast, friendly). The authoritative double-cancel guard is the UNIQUE
+        // booking_id on booking_cancellations + the @Version bump on the booking row below.
+        if (booking.getStatus() == BookingStatus.CANCELLED
+                || cancellationRepository.existsByBookingIdAndDeletedAtIsNull(booking.getId())) {
             throw new BusinessException("This booking is already cancelled.", HttpStatus.CONFLICT);
         }
 
-        // Derived-customer cleanup runs first — while the customer link is still intact and
-        // before the lead cascade (below) may clear the persistence context.
-        handleDerivedCustomerOnCancel(booking, tenantId);
+        // ── Compute the cancellation charge under the booking's governing policy ──
+        CancellationPolicy policy = resolveGoverningPolicyForCancel(booking, tenantId);
 
+        BigDecimal override = request.getOverrideChargeBase();
+        if (override != null) {
+            // Overriding/waiving the computed charge moves money vs the policy — elevated gate.
+            requireAuthority("BOOKING_REFUND",
+                    "Overriding or waiving the cancellation charge requires refund permission.");
+        }
+        CancellationQuote quote = cancellationCalculator.calculate(
+                booking, policy, LocalDate.now(), override, request.getVendorRecoverable());
+
+        // No configured policy ⇒ a zero charge / full refund — must not be a silent default.
+        if (quote.isNoPolicy()) {
+            requireAuthority("BOOKING_REFUND",
+                    "No cancellation policy is configured for this booking; cancelling it requires "
+                            + "refund permission so the zero-charge/full-refund is an explicit decision.");
+        }
+
+        // Persist the immutable financial record. The UNIQUE booking_id makes a concurrent/double
+        // cancel fail here (rolling back the whole transaction), so a refund can never be issued twice.
+        BookingCancellation record = buildCancellationRecord(booking, quote, policy, request);
+        cancellationRepository.save(record);
+
+        // Mint the credit/debit note (number + frozen snapshot) inside this transaction so the number
+        // is reserved atomically with the money; the PDF bytes render lazily on first fetch. Sets the
+        // note number + doc id back on the record.
+        cancellationDocumentService.issueCancellationNote(booking, record, quote);
+
+        // Legacy booking with no pinned policy: freeze the resolved version now so it's reproducible.
+        if (booking.getCancellationPolicyPublicId() == null && policy != null) {
+            booking.setCancellationPolicyPublicId(policy.getPublicId());
+            booking.setCancellationPolicyVersion(policy.getVersion());
+        }
+
+        // ── Lead / derived-customer disposition (unchanged behaviour) ──
+        handleDerivedCustomerOnCancel(booking, tenantId);
         if (request.getAction() == CancelAction.PERMANENT_DELETE_LEAD) {
-            // High-privilege gate on top of the endpoint's BOOKING_CANCEL. Friendly 403 if missing.
             requireAuthority("LEAD_PERMANENT_DELETE",
                     "You don't have permission to remove this lead. Please contact your administrator.");
             trashLeadOnCancel(booking, tenantId);
@@ -455,19 +563,84 @@ public class BookingServiceImpl implements BookingService {
             moveBackToLead(booking, tenantId);
         }
 
-        // The booking is ALWAYS retained — only its status changes. Snapshots (customer name /
-        // destination) already live on the row, so a lead-less cancelled booking stays meaningful.
+        // The booking is ALWAYS retained — only its status changes. Setting status + refundedAmount
+        // dirties the row so the @Version optimistic lock serializes two concurrent cancels (the
+        // loser gets a 409 instead of a second cancellation record).
         booking.setStatus(BookingStatus.CANCELLED);
+        booking.setRefundedAmount(BigDecimal.ZERO);   // nothing disbursed yet; the refund flow accrues it
         Booking saved = bookingRepository.save(booking);
 
-        publishBookingEvent(NotificationType.BOOKING_CANCELLED, saved,
+        // Notify only AFTER the money + record commit, so a rolled-back cancel never pushes a
+        // "cancelled" SSE / notification row.
+        publishBookingEventAfterCommit(NotificationType.BOOKING_CANCELLED, saved,
                 "Booking cancelled: " + saved.getBookingCode(),
-                "Booking " + saved.getBookingCode() + " was cancelled ("
-                        + (request.getAction() == CancelAction.PERMANENT_DELETE_LEAD
-                            ? "lead moved to Trash" : "moved back to lead") + ")");
-        log.info("Booking {} cancelled via {} (tenant {})",
-                saved.getBookingCode(), request.getAction(), tenantId);
+                "Booking " + saved.getBookingCode() + " was cancelled — retained "
+                        + quote.getTotalRetained() + ", "
+                        + (quote.isCustomerOwes()
+                            ? "customer owes " + quote.getCustomerBalanceOwed()
+                            : "refund due " + quote.getRefundToCustomer()));
+        log.info("Booking {} cancelled (tenant {}) — retained {}, refundDue {} [{}]",
+                saved.getBookingCode(), tenantId, quote.getTotalRetained(),
+                quote.getRefundDue(), record.getRefundStatus());
         return bookingMapper.toResponse(saved);
+    }
+
+    /**
+     * The policy governing this booking's cancellation: the exact version pinned at creation, else
+     * (legacy/unpinned) the company default in force as of the booking date. May be null.
+     */
+    private CancellationPolicy resolveGoverningPolicyForCancel(Booking booking, Long tenantId) {
+        CancellationPolicy policy = null;
+        if (booking.getCancellationPolicyPublicId() != null) {
+            policy = policyResolver.loadPinned(tenantId, booking.getCancellationPolicyPublicId()).orElse(null);
+        }
+        if (policy == null) {
+            policy = policyResolver.companyDefaultAsOf(tenantId, booking.getBookingDate()).orElse(null);
+        }
+        return policy;
+    }
+
+    /** Freeze the computed quote + provenance + who/when into the immutable cancellation record. */
+    private BookingCancellation buildCancellationRecord(Booking booking, CancellationQuote quote,
+                                                        CancellationPolicy policy,
+                                                        CancelBookingRequestDTO request) {
+        boolean refundDueOwed = quote.getRefundDue() != null && quote.getRefundDue().signum() > 0;
+        Long actorId = currentUserId();
+        return BookingCancellation.builder()
+                .tenantId(booking.getTenantId())
+                .bookingId(booking.getId())
+                .bookingCode(booking.getBookingCode())
+                .cancelledByUserId(actorId)
+                .cancelledByEmail(currentUserEmail())
+                .cancelledAt(LocalDateTime.now())
+                .cancelDate(quote.getCancelDate())
+                .reason(request.getReason())
+                .leadAction(request.getAction())
+                .policyPublicId(policy != null ? policy.getPublicId() : null)
+                .policyVersion(policy != null ? policy.getVersion() : null)
+                .noPolicy(quote.isNoPolicy())
+                .appliedBandMinDays(quote.getAppliedBandMinDays())
+                .appliedDeductionType(quote.getAppliedDeductionType())
+                .appliedDeductionValue(quote.getAppliedDeductionValue())
+                .daysBeforeDeparture(quote.getDaysBeforeDeparture())
+                .baseConsidered(quote.getBaseConsidered())
+                .systemComputedChargeBase(quote.getSystemComputedChargeBase())
+                .finalChargeBase(quote.getChargeBase())
+                .overrideApplied(quote.isOverrideApplied())
+                .overriddenByUserId(quote.isOverrideApplied() ? actorId : null)
+                .overrideReason(quote.isOverrideApplied() ? request.getOverrideReason() : null)
+                .gstOnCharge(quote.getGstOnCharge())
+                .tcsRetained(quote.getTcsRetained())
+                .totalRetained(quote.getTotalRetained())
+                .paidAtCancel(quote.getPaidAmount())
+                .refundDue(quote.getRefundDue())
+                .customerBalanceOwed(quote.getCustomerBalanceOwed())
+                .customerOwes(quote.isCustomerOwes())
+                .refundStatus(refundDueOwed ? RefundStatus.PENDING : RefundStatus.NOT_APPLICABLE)
+                .sunkVendorCost(quote.getSunkVendorCost())
+                .vendorRecoverable(quote.getVendorRecoverable())
+                .revisedNetProfit(quote.getRevisedNetProfit())
+                .build();
     }
 
     /** MOVE_TO_LEAD: re-activate the source lead (REOPENED), keeping the booking↔lead link. */
@@ -582,10 +755,15 @@ public class BookingServiceImpl implements BookingService {
         }
 
         booking.setPaidAmount(newPaidAmount);
-        // ✅ REMOVED: setPendingAmount() — @Transient computed via entity getter
-        booking.setPaymentStatus(derivePaymentStatus(newPaidAmount, booking.getTotalPayable()));
+        // pendingAmount is a @Transient getter; paymentStatus never downgrades a terminal REFUNDED.
+        booking.setPaymentStatus(
+                derivePaymentStatus(newPaidAmount, booking.getTotalPayable(), booking.getPaymentStatus()));
 
         Booking saved = bookingRepository.save(booking);
+        // Record the receipt in the ledger so it shows in GET /payments and the invoice's
+        // Payments-Received table — this PATCH path used to move paidAmount without a ledger row.
+        recordPaymentLedgerRow(saved, request.getAmount(), "Payment",
+                request.getPaymentDate(), request.getPaymentReference(), request.getNotes());
         publishBookingEvent(NotificationType.BOOKING_PAYMENT_UPDATED, saved,
                 "Payment updated: " + saved.getBookingCode(),
                 "₹" + request.getAmount() + " received for booking " + saved.getBookingCode()
@@ -698,7 +876,13 @@ public class BookingServiceImpl implements BookingService {
         Page<Booking> bookingPage = bookingRepository.findAll(
                 BookingSpecification.isActive(), pageable);
 
-        List<Booking> bookings = bookingPage.getContent();
+        // Money summary excludes CANCELLED/REFUNDED (mirrors the /stats aggregates) so a cancelled
+        // booking's amount/balance never inflates revenue or receivables. isActive() is deliberately
+        // left alone — the paginated list, search and CSV export must still SHOW cancelled bookings.
+        List<Booking> bookings = bookingPage.getContent().stream()
+                .filter(b -> b.getStatus() != BookingStatus.CANCELLED
+                        && b.getStatus() != BookingStatus.REFUNDED)
+                .toList();
 
         BigDecimal pageRevenue = bookings.stream()
                 .map(Booking::getCustomerAmount)
@@ -776,7 +960,29 @@ public class BookingServiceImpl implements BookingService {
 
     /** Fan-out to tenant admins (recipients resolved in the notification module), actor excluded. */
     private void publishBookingEvent(NotificationType type, Booking booking, String title, String message) {
-        eventPublisher.publishEvent(NotifyEvent.builder()
+        eventPublisher.publishEvent(buildBookingEvent(type, booking, title, message));
+    }
+
+    /**
+     * Publish a booking notification only once the surrounding transaction commits. The in-app
+     * channel SSE-pushes and writes a DB row synchronously, so publishing inline would fire the
+     * notification even when the transaction later rolls back (e.g. the losing side of two concurrent
+     * cancels). Falls back to immediate publish if no transaction is active.
+     */
+    private void publishBookingEventAfterCommit(NotificationType type, Booking booking,
+                                                String title, String message) {
+        NotifyEvent event = buildBookingEvent(type, booking, title, message);
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override public void afterCommit() { eventPublisher.publishEvent(event); }
+            });
+        } else {
+            eventPublisher.publishEvent(event);
+        }
+    }
+
+    private NotifyEvent buildBookingEvent(NotificationType type, Booking booking, String title, String message) {
+        return NotifyEvent.builder()
                 .type(type.name())
                 .tenantId(booking.getTenantId())
                 .actorUserId(currentUserId())
@@ -785,13 +991,16 @@ public class BookingServiceImpl implements BookingService {
                 .referenceType("BOOKING")
                 .referencePublicId(booking.getPublicId())
                 .channels(Set.of(DeliveryChannel.IN_APP))
-                .build());
+                .build();
     }
 
-    private void calculateAndApplyFinancials(Booking booking,
-                                             BigDecimal customerAmount,
-                                             BigDecimal vendorCost,
-                                             BigDecimal paidAmount) {
+    /**
+     * Recompute the derived money fields (gst / tcs / totalPayable / netProfit) and re-derive
+     * paymentStatus from the booking's CURRENT paidAmount. Deliberately does NOT touch paidAmount —
+     * that is owned by the payment ledger (POST/DELETE /payments, PATCH /payment), never by an edit
+     * of the booking's amounts. Keeps totals consistent when customerAmount / vendorCost change.
+     */
+    private void recomputeTotals(Booking booking, BigDecimal customerAmount, BigDecimal vendorCost) {
         BigDecimal gst          = customerAmount.multiply(gstRate).setScale(2, RoundingMode.HALF_UP);
         BigDecimal tcs          = customerAmount.multiply(tcsRate).setScale(2, RoundingMode.HALF_UP);
         BigDecimal totalPayable = customerAmount.add(gst).add(tcs);
@@ -800,12 +1009,58 @@ public class BookingServiceImpl implements BookingService {
         booking.setGst(gst);
         booking.setTcs(tcs);
         booking.setTotalPayable(totalPayable);
-        booking.setPaidAmount(paidAmount);
         booking.setNetProfit(netProfit);
-        booking.setPaymentStatus(derivePaymentStatus(paidAmount, totalPayable));
+        booking.setPaymentStatus(
+                derivePaymentStatus(booking.getPaidAmount(), totalPayable, booking.getPaymentStatus()));
     }
 
-    private PaymentStatus derivePaymentStatus(BigDecimal paidAmount, BigDecimal totalPayable) {
+    /**
+     * Resolve and stamp the cancellation-policy version that governs this booking, once, at creation.
+     * {@code quotationPolicyPublicId} is the structured policy the source quotation was priced under
+     * (null for a direct booking, which falls back to the tenant company default as-of the booking
+     * date). If the tenant somehow has no company default yet, the pin is left null and the cancel
+     * flow resolves + pins it on first cancel — the pin is never silently skipped without a trace.
+     */
+    private void pinCancellationPolicy(Booking booking, UUID quotationPolicyPublicId, Long tenantId) {
+        policyResolver.resolveForNewBooking(tenantId, quotationPolicyPublicId, booking.getBookingDate())
+                .ifPresentOrElse(p -> {
+                    booking.setCancellationPolicyPublicId(p.getPublicId());
+                    booking.setCancellationPolicyVersion(p.getVersion());
+                }, () -> log.warn("No cancellation policy resolved for booking {} (tenant {}); "
+                        + "it will be resolved and pinned at cancel time", booking.getBookingCode(), tenantId));
+    }
+
+    /** Create/convert path: set the initial paidAmount, then compute totals + status. */
+    private void calculateAndApplyFinancials(Booking booking,
+                                             BigDecimal customerAmount,
+                                             BigDecimal vendorCost,
+                                             BigDecimal paidAmount) {
+        booking.setPaidAmount(paidAmount);
+        recomputeTotals(booking, customerAmount, vendorCost);
+    }
+
+    /**
+     * Append a receipt to the payment ledger so {@code booking.paidAmount} and the itemised
+     * {@code booking_payments} rows (the invoice's "Payments Received" table + {@code GET /payments})
+     * stay reconciled. Does NOT mutate paidAmount — the caller already owns that. {@code tenantId} is
+     * auto-stamped by {@code TenantEntityListener}.
+     */
+    private void recordPaymentLedgerRow(Booking booking, BigDecimal amount, String type,
+                                        LocalDate date, String reference, String notes) {
+        paymentRepository.save(BookingPayment.builder()
+                .bookingId(booking.getId())
+                .amount(amount)
+                .paymentType(type)
+                .paymentDate(date != null ? date : LocalDate.now())
+                .reference(reference)
+                .notes(notes)
+                .build());
+    }
+
+    private PaymentStatus derivePaymentStatus(
+            BigDecimal paidAmount, BigDecimal totalPayable, PaymentStatus current) {
+        // REFUNDED is terminal — never let a totals recompute or a ledger op downgrade it.
+        if (current == PaymentStatus.REFUNDED)          return PaymentStatus.REFUNDED;
         if (paidAmount.compareTo(BigDecimal.ZERO) == 0) return PaymentStatus.UNPAID;
         if (paidAmount.compareTo(totalPayable) >= 0)    return PaymentStatus.PAID;
         return PaymentStatus.PARTIAL;

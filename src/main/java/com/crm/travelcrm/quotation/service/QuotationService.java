@@ -1,6 +1,8 @@
 package com.crm.travelcrm.quotation.service;
 
+import com.crm.travelcrm.quotation.dto.PublicQuotationResponseDto;
 import com.crm.travelcrm.quotation.dto.QuotationEmailRequestDto;
+import com.crm.travelcrm.quotation.dto.QuotationWhatsAppRequestDto;
 import com.crm.travelcrm.quotation.dto.QuotationPdfResource;
 import com.crm.travelcrm.quotation.dto.QuotationRefDto;
 import com.crm.travelcrm.quotation.dto.QuotationRequestDto;
@@ -55,10 +57,13 @@ public interface QuotationService {
     QuotationPdfResource getPublicPdf(UUID publicId);
 
     /** Public (unauthenticated) quotation JSON for the web-format share page (/q/{publicId}). */
-    QuotationResponseDto getPublicByPublicId(UUID publicId);
+    PublicQuotationResponseDto getPublicByPublicId(UUID publicId);
 
     /** Email the generated PDF to the given recipient. */
     void sendEmail(UUID publicId, QuotationEmailRequestDto request);
+
+    /** Send the shareable quotation link to the customer over WhatsApp. */
+    void sendWhatsApp(UUID publicId, QuotationWhatsAppRequestDto request);
 
     /** Build a shareable link that resolves to the quotation PDF. */
     String getShareLink(UUID publicId);

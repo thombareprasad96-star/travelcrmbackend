@@ -3,8 +3,8 @@ package com.crm.travelcrm.quotation.controller;
 import com.crm.travelcrm.common.dto.ApiResponse;
 import com.crm.travelcrm.common.util.ClientIp;
 import com.crm.travelcrm.quotation.analytics.WeblinkAnalyticsService;
+import com.crm.travelcrm.quotation.dto.PublicQuotationResponseDto;
 import com.crm.travelcrm.quotation.dto.QuotationPdfResource;
-import com.crm.travelcrm.quotation.dto.QuotationResponseDto;
 import com.crm.travelcrm.quotation.service.QuotationService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
@@ -39,10 +39,10 @@ public class PublicQuotationController {
 
     /** Public quotation JSON for the web-format share page (/q/{publicId}). */
     @GetMapping("/{publicId}")
-    public ResponseEntity<ApiResponse<QuotationResponseDto>> getQuotation(
+    public ResponseEntity<ApiResponse<PublicQuotationResponseDto>> getQuotation(
             @PathVariable UUID publicId, HttpServletRequest request) {
         log.info("GET /api/public/quotations/{} (web view)", publicId);
-        QuotationResponseDto dto = quotationService.getPublicByPublicId(publicId);
+        PublicQuotationResponseDto dto = quotationService.getPublicByPublicId(publicId);
         // Record the weblink view — async + best-effort, never affects this response.
         weblinkAnalyticsService.recordView(publicId, ClientIp.resolve(request), request.getHeader("User-Agent"));
         return ResponseEntity.ok(ApiResponse.success("Quotation fetched", dto));

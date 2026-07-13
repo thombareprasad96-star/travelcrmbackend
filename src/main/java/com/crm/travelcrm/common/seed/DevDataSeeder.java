@@ -34,10 +34,15 @@ import com.crm.travelcrm.fleet.repository.FleetMaintenanceLogRepository;
 import com.crm.travelcrm.fleet.repository.FleetTripRepository;
 import com.crm.travelcrm.fleet.repository.FleetVehicleRepository;
 import com.crm.travelcrm.lead.entity.Lead;
+import com.crm.travelcrm.lead.entity.LeadItinerary;
 import com.crm.travelcrm.lead.enums.LeadSource;
 import com.crm.travelcrm.lead.enums.LeadStage;
 import com.crm.travelcrm.lead.enums.LeadType;
 import com.crm.travelcrm.lead.repository.LeadRepository;
+import com.crm.travelcrm.quotationtemplate.entity.QuotationTemplate;
+import com.crm.travelcrm.quotationtemplate.entity.QuotationTemplateHotel;
+import com.crm.travelcrm.quotationtemplate.entity.QuotationTemplateItinerary;
+import com.crm.travelcrm.quotationtemplate.repository.QuotationTemplateRepository;
 import com.crm.travelcrm.master.addon.Addon;
 import com.crm.travelcrm.master.addon.AddonRepository;
 import com.crm.travelcrm.master.airline.Airline;
@@ -89,8 +94,10 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -144,6 +151,7 @@ public class DevDataSeeder implements CommandLineRunner {
     private final FleetTripRepository fleetTripRepository;
     private final FleetFuelLogRepository fleetFuelLogRepository;
     private final FleetMaintenanceLogRepository fleetMaintenanceLogRepository;
+    private final QuotationTemplateRepository quotationTemplateRepository;
 
     @Override
     public void run(String... args) {
@@ -167,14 +175,13 @@ public class DevDataSeeder implements CommandLineRunner {
             seedVehicles(cities);
             seedAddons(cities);
             seedSightseeings(cities);
+            seedQuotationTemplates(cities);
 
             List<Customer> customers = seedCustomers();
             seedVendors();
             List<Lead> leads = seedLeads(users);
             seedBookings(customers, destinations, leads);
-
             seedFleet();
-
             seedReminders();
             seedBookingReminders();
             seedPermissionTemplates();
@@ -207,12 +214,14 @@ public class DevDataSeeder implements CommandLineRunner {
                 .code(TenantPlan.STARTER).displayName("Basic")
                 .monthlyPrice(new BigDecimal("2999")).currency("INR")
                 .maxUsers(5).maxLeads(500)
+                .maxBookingsPerMonth(50).maxStorageMb(512)
                 .modules(new HashSet<>(Set.of("LEADS", "BOOKINGS", "QUOTATIONS", "CUSTOMERS", "MASTERS")))
                 .active(true).build());
         planRepository.save(Plan.builder()
                 .code(TenantPlan.PRO).displayName("Pro")
                 .monthlyPrice(new BigDecimal("7999")).currency("INR")
                 .maxUsers(20).maxLeads(5000)
+                .maxBookingsPerMonth(500).maxStorageMb(5120)
                 .modules(new HashSet<>(Set.of("LEADS", "BOOKINGS", "QUOTATIONS", "CUSTOMERS", "MASTERS",
                         "VENDORS", "REPORTS", "FLEET", "WHATSAPP")))
                 .active(true).build());
@@ -220,6 +229,7 @@ public class DevDataSeeder implements CommandLineRunner {
                 .code(TenantPlan.ENTERPRISE).displayName("Enterprise")
                 .monthlyPrice(new BigDecimal("19999")).currency("INR")
                 .maxUsers(null).maxLeads(null)
+                .maxBookingsPerMonth(null).maxStorageMb(null)
                 .modules(new HashSet<>(Set.of("LEADS", "BOOKINGS", "QUOTATIONS", "CUSTOMERS", "MASTERS",
                         "VENDORS", "REPORTS", "FLEET", "WHATSAPP", "DISHA_AI", "PORTAL")))
                 .active(true).build());
@@ -457,17 +467,51 @@ public class DevDataSeeder implements CommandLineRunner {
                 LeadType.VIP, LeadType.FRESH_LEAD };
         LeadStage[] stages = { LeadStage.NEW_LEAD, LeadStage.CONTACTED, LeadStage.FOLLOW_UP,
                 LeadStage.QUALIFIED, LeadStage.PROPOSAL_SENT };
+
+        // Travel month, rooms, and itinerary legs per lead. Without a travelDate and an itinerary a
+        // lead can only be scored on budget, so the package matcher would look broken on seed data.
+        // The legs use the same destination/city names seedDestinations + seedCities create, which is
+        // what lets TemplateMatchService resolve them back to real City ids.
+        int[] travelMonths = { 10, 12, 3, 7, 11 };
+        int[] rooms = { 1, 2, 1, 2, 3 };
+        String[][][] itineraries = {
+                { { "Goa", "Panaji", "3" } },
+                { { "Manali", "Shimla", "4" } },
+                { { "Dubai", "Dubai City", "5" } },
+                { { "Phuket", "Phuket Town", "4" }, { "Sentosa", "Singapore City", "2" } },
+                { { "Goa", "Panaji", "2" }, { "Manali", "Shimla", "3" } },
+        };
+
         List<Lead> out = new ArrayList<>();
         for (int i = 0; i < N; i++) {
-            out.add(leadRepository.save(Lead.builder()
+            Lead lead = Lead.builder()
                     .customerName(names[i]).phone("+91 91234 5000" + i).email("lead" + i + "@demo.crm")
                     .leadSource(sources[i]).leadType(types[i]).leadStage(stages[i])
                     .assignedUser(users.get(i % users.size()))
                     .budget(BigDecimal.valueOf(50000L + i * 10000L))
-                    .adults(2).children(i % 2).build()));
+                    .travelDate(nextOccurrenceOf(travelMonths[i]))
+                    .rooms(rooms[i]).adults(2).children(i % 2)
+                    .build();
+
+            int dayNumber = 1;
+            for (String[] leg : itineraries[i]) {
+                lead.addItinerary(LeadItinerary.builder()
+                        .destination(leg[0]).city(leg[1])
+                        .nights(Integer.parseInt(leg[2]))
+                        .dayNumber(dayNumber++)
+                        .build());
+            }
+            out.add(leadRepository.save(lead));   // cascade = ALL carries the legs
         }
-        log.info("[DevDataSeeder] seeded {} leads", out.size());
+        log.info("[DevDataSeeder] seeded {} leads with itineraries", out.size());
         return out;
+    }
+
+    /** Mid-month, this year if it hasn't passed yet, else next year — so demo leads are never stale. */
+    private static LocalDate nextOccurrenceOf(int month) {
+        LocalDate today = LocalDate.now();
+        LocalDate candidate = LocalDate.of(today.getYear(), month, 15);
+        return candidate.isBefore(today) ? candidate.plusYears(1) : candidate;
     }
 
     private void seedBookings(List<Customer> customers, List<Destination> destinations, List<Lead> leads) {
@@ -840,5 +884,177 @@ public class DevDataSeeder implements CommandLineRunner {
                     .notes("Auto-seeded maintenance log").build());
         }
         log.info("[DevDataSeeder] seeded {} fleet maintenance logs", spec.length);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  Quotation templates
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /** City name → the destination {@code seedDestinations} paired it with. */
+    private static final Map<String, String> DEMO_CITY_DESTINATIONS = Map.of(
+            "Panaji", "Goa",
+            "Shimla", "Manali",
+            "Dubai City", "Dubai",
+            "Phuket Town", "Phuket",
+            "Singapore City", "Sentosa");
+
+    /**
+     * Six templates chosen so the five seeded leads produce a visibly different score on each of the
+     * matcher's dimensions rather than a wall of 100 %:
+     *
+     * <ul>
+     *   <li><b>Goa &amp; Manali Grand Tour</b> is a near-perfect fit for Neha (same two cities, same
+     *       5 nights, ₹88 k against her ₹90 k, November) — a ~100 % badge.</li>
+     *   <li><b>Dubai City Break</b> and <b>Phuket &amp; Singapore Combo</b> match their leads on
+     *       destination, duration and season but cost roughly twice the budget, so they land around
+     *       76 % — the clearest demonstration that budget is scored, and that over-budget hurts.</li>
+     *   <li><b>Goa Beach Escape</b> also surfaces for Neha at ~65 %: it covers one of her two cities
+     *       and is two nights short. Good for eyeballing partial coverage.</li>
+     *   <li><b>Kerala Backwaters</b> is archived, and must never appear in a match result.</li>
+     * </ul>
+     */
+    private void seedQuotationTemplates(List<City> cities) {
+        if (quotationTemplateRepository.count() > 0) return;
+
+        Map<String, City> byName = new HashMap<>();
+        for (City c : cities) byName.put(c.getName(), c);
+
+        City panaji = byName.get("Panaji");
+        City shimla = byName.get("Shimla");
+        City dubaiCity = byName.get("Dubai City");
+        City phuketTown = byName.get("Phuket Town");
+        City singaporeCity = byName.get("Singapore City");
+        if (panaji == null || shimla == null || dubaiCity == null
+                || phuketTown == null || singaporeCity == null) {
+            log.warn("[DevDataSeeder] expected demo cities missing — skipping quotation templates");
+            return;
+        }
+
+        // 1 ─ Goa Beach Escape
+        QuotationTemplate goa = newTemplate("Goa Beach Escape",
+                "Three unhurried nights on the North Goa coast: beaches, the Latin quarter, "
+                        + "and a day out at Dudhsagar falls.",
+                3, 4, 55_000, Set.of(10, 11, 12, 1, 2), true);
+        addDay(goa, 1, panaji, 3, "Arrival & Baga Beach sunset", 1_200);
+        addDay(goa, 2, panaji, 0, "Old Goa churches and the Panjim Latin quarter", 1_800);
+        addDay(goa, 3, panaji, 0, "Dudhsagar Falls jeep safari", 2_500);
+        addHotel(goa, 0, "Taj Holiday Village", "Panaji", 4, "Deluxe Garden View", "Breakfast", 9_500, 3);
+        goa.getInclusions().addAll(List.of("Airport transfers", "Daily breakfast", "Dudhsagar jeep safari"));
+        goa.getExclusions().addAll(List.of("Airfare", "Water sports", "Personal expenses"));
+        quotationTemplateRepository.save(goa);
+
+        // 2 ─ Manali Snow Retreat
+        QuotationTemplate manali = newTemplate("Manali Snow Retreat",
+                "Four nights in the Himalayas — Solang valley, Rohtang pass and the old town.",
+                4, 3, 62_000, Set.of(12, 1, 2, 3), true);
+        addDay(manali, 1, shimla, 4, "Arrival and Mall Road evening", 900);
+        addDay(manali, 2, shimla, 0, "Solang Valley adventure day", 2_200);
+        addDay(manali, 3, shimla, 0, "Rohtang Pass excursion", 3_000);
+        addDay(manali, 4, shimla, 0, "Hadimba temple and old Manali cafés", 1_100);
+        addHotel(manali, 0, "Snow Valley Resorts", "Shimla", 3, "Valley View", "Half Board", 6_800, 4);
+        manali.getInclusions().addAll(List.of("Volvo coach transfers", "Daily breakfast & dinner", "Rohtang permit"));
+        manali.getExclusions().addAll(List.of("Snow gear rental", "Ropeway tickets", "Personal expenses"));
+        quotationTemplateRepository.save(manali);
+
+        // 3 ─ Dubai City Break (year-round: no season months)
+        QuotationTemplate dubai = newTemplate("Dubai City Break",
+                "Five nights of skyline, desert and souk. Sold year-round.",
+                5, 5, 145_000, Set.of(), true);
+        addDay(dubai, 1, dubaiCity, 5, "Arrival and Dubai Marina cruise", 4_500);
+        addDay(dubai, 2, dubaiCity, 0, "Burj Khalifa and Dubai Mall fountains", 5_200);
+        addDay(dubai, 3, dubaiCity, 0, "Desert safari with BBQ dinner", 4_800);
+        addDay(dubai, 4, dubaiCity, 0, "Old Dubai souks and abra ride", 2_400);
+        addDay(dubai, 5, dubaiCity, 0, "Palm Jumeirah and departure", 2_000);
+        addHotel(dubai, 0, "Address Downtown", "Dubai City", 5, "Skyline King", "Breakfast", 24_000, 5);
+        dubai.getInclusions().addAll(List.of("Visa assistance", "Daily breakfast", "Desert safari", "All transfers"));
+        dubai.getExclusions().addAll(List.of("Airfare", "Travel insurance", "Optional tours"));
+        quotationTemplateRepository.save(dubai);
+
+        // 4 ─ Phuket & Singapore Combo (two cities)
+        QuotationTemplate combo = newTemplate("Phuket & Singapore Combo",
+                "Six nights across two countries — Andaman beaches, then the island city.",
+                6, 4, 165_000, Set.of(6, 7, 8, 9), true);
+        addDay(combo, 1, phuketTown, 4, "Arrival, Patong beach evening", 2_100);
+        addDay(combo, 2, phuketTown, 0, "Phi Phi islands speedboat tour", 4_600);
+        addDay(combo, 3, phuketTown, 0, "Phang Nga bay and James Bond island", 4_200);
+        addDay(combo, 4, phuketTown, 0, "Old Phuket town and free evening", 1_500);
+        addDay(combo, 5, singaporeCity, 2, "Fly to Singapore, Gardens by the Bay", 3_800);
+        addDay(combo, 6, singaporeCity, 0, "Sentosa and Universal Studios", 6_500);
+        addHotel(combo, 0, "Novotel Phuket Resort", "Phuket Town", 4, "Superior Pool View", "Breakfast", 8_200, 4);
+        addHotel(combo, 1, "Village Hotel Sentosa", "Singapore City", 4, "Deluxe", "Breakfast", 13_500, 2);
+        combo.getInclusions().addAll(List.of("Inter-country flight", "Daily breakfast", "Island tours", "All transfers"));
+        combo.getExclusions().addAll(List.of("International airfare", "Visa fees", "Universal Studios tickets"));
+        quotationTemplateRepository.save(combo);
+
+        // 5 ─ Goa & Manali Grand Tour (two cities, the near-perfect fit for lead #5)
+        QuotationTemplate grand = newTemplate("Goa & Manali Grand Tour",
+                "Beach then mountain: two nights in Goa, three in the Himalayas.",
+                5, 3, 88_000, Set.of(10, 11, 12), true);
+        addDay(grand, 1, panaji, 2, "Arrival in Goa, Candolim beach", 1_000);
+        addDay(grand, 2, panaji, 0, "Panjim heritage walk and river cruise", 1_600);
+        addDay(grand, 3, shimla, 3, "Fly north, arrive Manali", 1_200);
+        addDay(grand, 4, shimla, 0, "Solang Valley and Hadimba temple", 2_200);
+        addDay(grand, 5, shimla, 0, "Old Manali and departure", 900);
+        addHotel(grand, 0, "Fairfield by Marriott Goa", "Panaji", 3, "Superior", "Breakfast", 6_400, 2);
+        addHotel(grand, 1, "Manuallaya Resort", "Shimla", 3, "Mountain View", "Half Board", 7_100, 3);
+        grand.getInclusions().addAll(List.of("Domestic flight Goa→Delhi", "Daily breakfast", "All transfers"));
+        grand.getExclusions().addAll(List.of("Airfare to Goa", "Adventure activities", "Personal expenses"));
+        quotationTemplateRepository.save(grand);
+
+        // 6 ─ Archived: must never surface in a match result.
+        QuotationTemplate retired = newTemplate("Kerala Backwaters (retired)",
+                "Superseded by the 2026 Kerala catalogue. Kept for reference only.",
+                4, 4, 74_000, Set.of(9, 10, 11), false);
+        // No cityId here on purpose: it also exercises the name-only city path in the scorer.
+        retired.addItineraryDay(QuotationTemplateItinerary.builder()
+                .dayNumber(1).cityName("Alleppey").destinationName("Kerala")
+                .nights(4).title("Houseboat on the backwaters")
+                .description("Overnight houseboat through the Alleppey canals.")
+                .pricePerPax(BigDecimal.valueOf(3_400)).build());
+        quotationTemplateRepository.save(retired);
+
+        log.info("[DevDataSeeder] seeded 6 quotation templates (1 archived)");
+    }
+
+    private QuotationTemplate newTemplate(String name, String description, int nights, int hotelTier,
+                                          long basePrice, Set<Integer> seasonMonths, boolean active) {
+        QuotationTemplate template = QuotationTemplate.builder()
+                .name(name)
+                .description(description)
+                .active(active)
+                .durationNights(nights)
+                .hotelTier(hotelTier)
+                .basePrice(BigDecimal.valueOf(basePrice))
+                .build();
+        template.getSeasonMonths().addAll(seasonMonths);
+        return template;
+    }
+
+    private void addDay(QuotationTemplate template, int dayNumber, City city, int nights,
+                        String title, long pricePerPax) {
+        template.addItineraryDay(QuotationTemplateItinerary.builder()
+                .dayNumber(dayNumber)
+                .cityId(city.getId())
+                .cityName(city.getName())
+                // Read from the constant, not city.getDestination(): when the cities already existed
+                // this list came back from findAll() detached, and the association is a lazy proxy.
+                .destinationName(DEMO_CITY_DESTINATIONS.get(city.getName()))
+                .nights(nights)
+                .title(title)
+                .description(title + ".")
+                .pricePerPax(BigDecimal.valueOf(pricePerPax))
+                .build());
+    }
+
+    private void addHotel(QuotationTemplate template, int sortOrder, String hotel, String city,
+                          int stars, String roomType, String mealPlan, long pricePerRoom, int nights) {
+        template.addHotel(QuotationTemplateHotel.builder()
+                .sortOrder(sortOrder)
+                .name(hotel).city(city).stars(stars)
+                .roomType(roomType).mealPlan(mealPlan).refundable(true)
+                .pricePerRoom(BigDecimal.valueOf(pricePerRoom))
+                .rooms(null)          // null ⇒ "however many rooms the lead needs", filled at apply time
+                .nights(nights)
+                .build());
     }
 }

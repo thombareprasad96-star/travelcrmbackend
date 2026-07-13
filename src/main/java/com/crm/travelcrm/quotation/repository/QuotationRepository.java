@@ -32,6 +32,9 @@ public interface QuotationRepository
     // ── List ──────────────────────────────────────────────────────────────────
     Page<Quotation> findAllByTenantIdAndDeletedAtIsNull(Long tenantId, Pageable pageable);
 
+    // Onboarding checklist: does this tenant have at least one live quotation? (CREATE_QUOTATION signal)
+    boolean existsByTenantIdAndDeletedAtIsNull(Long tenantId);
+
     // ── By lead ────────────────────────────────────────────────────────────────
     List<Quotation> findAllByLeadPublicIdAndTenantIdAndDeletedAtIsNullOrderByCreatedAtDesc(
             UUID leadPublicId, Long tenantId);

@@ -32,11 +32,14 @@ public interface BookingMapper {
     @Mapping(target = "destinationSnapshot",    ignore = true)  // resolved by service
     @Mapping(target = "sourceLeadPublicId",     ignore = true)  // set by conversion flow only
     @Mapping(target = "sourceQuotationPublicId", ignore = true) // set by conversion flow only
+    @Mapping(target = "cancellationPolicyPublicId", ignore = true) // resolved + pinned by service
+    @Mapping(target = "cancellationPolicyVersion",  ignore = true) // resolved + pinned by service
     @Mapping(target = "gst",                    ignore = true)  // calculated by service
     @Mapping(target = "tcs",                    ignore = true)  // calculated by service
     @Mapping(target = "totalPayable",           ignore = true)  // calculated by service
     @Mapping(target = "netProfit",              ignore = true)  // GENERATED column, DB owns this
     @Mapping(target = "paidAmount",             ignore = true)  // starts at 0
+    @Mapping(target = "refundedAmount",         ignore = true)  // starts at 0; owned by the refund flow
     @Mapping(target = "status",                 ignore = true)  // starts as PENDING
     @Mapping(target = "paymentStatus",          ignore = true)  // starts as UNPAID
     @Mapping(target = "services",               ignore = true)  // mapped separately below
@@ -46,6 +49,7 @@ public interface BookingMapper {
     @Mapping(target = "updatedAt",              ignore = true)  // set by @UpdateTimestamp
     @Mapping(target = "deletedAt",              ignore = true)
     @Mapping(target = "deletedBy",              ignore = true)
+    @Mapping(target = "version",                ignore = true)  // optimistic-lock version, DB owns this
     Booking toEntity(CreateBookingRequestDTO dto);
 
     // ── UpdateBookingRequestDTO → Booking (partial patch) ─────────────────────
@@ -66,10 +70,13 @@ public interface BookingMapper {
     @Mapping(target = "leadId",                 ignore = true)  // never changeable
     @Mapping(target = "sourceLeadPublicId",     ignore = true)  // never changeable after creation
     @Mapping(target = "sourceQuotationPublicId", ignore = true) // never changeable after creation
+    @Mapping(target = "cancellationPolicyPublicId", ignore = true) // pinned once at creation, immutable
+    @Mapping(target = "cancellationPolicyVersion",  ignore = true) // pinned once at creation, immutable
     @Mapping(target = "gst",                    ignore = true)  // recalculated by service
     @Mapping(target = "tcs",                    ignore = true)  // recalculated by service
     @Mapping(target = "totalPayable",           ignore = true)  // recalculated by service
     @Mapping(target = "paidAmount",             ignore = true)  // updated via payment endpoint only
+    @Mapping(target = "refundedAmount",         ignore = true)  // updated via refund flow only
     @Mapping(target = "netProfit",              ignore = true)  // GENERATED column
     @Mapping(target = "status",                 ignore = true)  // via transitionStatus() only
     @Mapping(target = "paymentStatus",          ignore = true)  // derived from paidAmount
@@ -80,6 +87,7 @@ public interface BookingMapper {
     @Mapping(target = "updatedAt",              ignore = true)
     @Mapping(target = "deletedAt",              ignore = true)
     @Mapping(target = "deletedBy",              ignore = true)
+    @Mapping(target = "version",                ignore = true)  // optimistic-lock version, DB owns this
     void updateEntity(UpdateBookingRequestDTO dto, @MappingTarget Booking booking);
 
     // ── Booking → BookingResponseDTO (full detail) ────────────────────────────

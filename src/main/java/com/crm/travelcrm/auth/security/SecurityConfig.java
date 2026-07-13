@@ -5,6 +5,7 @@ import com.crm.travelcrm.common.web.ApiAccessDeniedHandler;
 import com.crm.travelcrm.common.web.ApiAuthenticationEntryPoint;
 import com.crm.travelcrm.platform.config.filter.MaintenanceModeFilter;
 import com.crm.travelcrm.platform.entitlement.filter.ModuleAccessFilter;
+import jakarta.servlet.DispatcherType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
@@ -79,6 +80,12 @@ public class SecurityConfig {
                 .sessionManagement(s ->
                         s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        // SSE endpoints (e.g. Disha chat) complete on an async worker; when the
+                        // container re-dispatches the finished response through the filter chain the
+                        // SecurityContext is already cleared, so re-authorizing would 403 a response
+                        // that's already committed. The original REQUEST dispatch was authorized, so
+                        // permit the internal ASYNC/ERROR re-dispatches.
+                        .dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll()
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers("/api/auth/**").permitAll()
                         // Public quotation share links (capability URL by publicId) — read-only PDF

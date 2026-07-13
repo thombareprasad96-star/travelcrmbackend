@@ -47,6 +47,11 @@ public class ModuleAccessFilter extends OncePerRequestFilter {
         RULES.put("/api/bookings", "BOOKINGS");
         RULES.put("/api/booking-reminders", "BOOKINGS");
         RULES.put("/api/quotations", "QUOTATIONS");
+        // Templates exist only to seed quotations, so they ride the QUOTATIONS entitlement. The
+        // prefix match is exact-or-followed-by-slash, so this needs its own rule: "/api/quotations"
+        // does not cover "/api/quotation-templates". Without it the endpoint would be reachable by a
+        // tenant whose plan excludes quotations entirely.
+        RULES.put("/api/quotation-templates", "QUOTATIONS");
         RULES.put("/api/customers", "CUSTOMERS");
         RULES.put("/api/vendors", "VENDORS");
         RULES.put("/api/reports", "REPORTS");
@@ -85,6 +90,11 @@ public class ModuleAccessFilter extends OncePerRequestFilter {
         if (path == null || !path.startsWith("/api/")) return null;
         // Shared master dropdowns feed forms across modules — never gate them.
         if (path.startsWith("/api/masters/dropdown")) return null;
+        // A lead→booking conversion CREATES a booking, so it must ride the BOOKINGS entitlement
+        // even though it is hosted under /api/leads. The discriminating segment sits AFTER the
+        // variable {publicId}, so it cannot be expressed as a prefix rule in RULES — special-case
+        // it here, before the generic /api/leads rule below would otherwise claim it for LEADS.
+        if (path.startsWith("/api/leads/") && path.endsWith("/convert-to-booking")) return "BOOKINGS";
         for (Map.Entry<String, String> e : RULES.entrySet()) {
             String prefix = e.getKey();
             if (path.equals(prefix) || path.startsWith(prefix + "/")) return e.getValue();

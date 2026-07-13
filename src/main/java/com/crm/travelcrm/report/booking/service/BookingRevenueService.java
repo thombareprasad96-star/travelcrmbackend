@@ -92,7 +92,7 @@ public class BookingRevenueService {
                 .tcs(sum(all, Booking::getTcs))
                 .totalPayable(sum(all, Booking::getTotalPayable))
                 .paidAmount(sum(all, Booking::getPaidAmount))
-                .refunded(BigDecimal.ZERO)
+                .refunded(sum(all, Booking::getRefundedAmount))
                 .build();
     }
 

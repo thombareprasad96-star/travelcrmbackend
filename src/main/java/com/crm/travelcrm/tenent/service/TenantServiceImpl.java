@@ -3,6 +3,7 @@ package com.crm.travelcrm.tenent.service;
 import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.auth.enums.Role;
 import com.crm.travelcrm.auth.repository.UserRepository;
+import com.crm.travelcrm.booking.cancellation.service.CancellationPolicySeeder;
 import com.crm.travelcrm.common.context.PlatformActor;
 import com.crm.travelcrm.common.context.PlatformContext;
 import com.crm.travelcrm.common.exception.BusinessException;
@@ -50,6 +51,7 @@ public class TenantServiceImpl implements TenantService {
     private final PlatformAuditRecorder platformAuditRecorder;
     private final PlanRepository planRepository;
     private final BillingRecordRepository billingRecordRepository;
+    private final CancellationPolicySeeder cancellationPolicySeeder;
 
     // ── create ────────────────────────────────────────────────────────────────
 
@@ -83,9 +85,11 @@ public class TenantServiceImpl implements TenantService {
                 .subscriptionEndDate(request.getSubscriptionEndDate())
                 .build();
 
-        // Seed plan entitlements (module access + lead cap) from the plan catalogue.
+        // Seed plan entitlements (module access + lead/booking/storage caps) from the plan catalogue.
         planRepository.findByCode(plan).ifPresent(p -> {
             tenant.setMaxLeads(p.getMaxLeads());
+            tenant.setMaxBookingsPerMonth(p.getMaxBookingsPerMonth());
+            tenant.setMaxStorageMb(p.getMaxStorageMb());
             tenant.setEnabledModules(new HashSet<>(p.getModules()));
         });
 
@@ -103,6 +107,10 @@ public class TenantServiceImpl implements TenantService {
                 .build();
         userRepository.save(adminUser);
         log.info("Admin user created for tenant id: {}", saved.getId());
+
+        // Seed the conservative tiered cancellation-charge default so the tenant can cancel/refund
+        // from day one (without it, resolution would fall through to a zero charge). Same transaction.
+        cancellationPolicySeeder.ensureCompanyDefault(saved.getId());
 
         audit(PlatformAuditAction.TENANT_CREATE, saved,
                 "Created tenant " + saved.getOrganizationName()
@@ -182,10 +190,16 @@ public class TenantServiceImpl implements TenantService {
                         "Unknown plan: " + planCode, HttpStatus.BAD_REQUEST));
 
         tenant.setPlan(planCode);
-        // Apply the plan's limits + module access as the tenant defaults (null users = unlimited).
-        tenant.setMaxUsers(plan.getMaxUsers() != null ? plan.getMaxUsers() : 1_000_000);
-        tenant.setMaxLeads(plan.getMaxLeads());
+        // Module access always re-syncs to the new plan. Numeric limits re-sync from the plan too,
+        // UNLESS a SuperAdmin has pinned this tenant's quota via an override (then the override wins).
         tenant.setEnabledModules(new HashSet<>(plan.getModules()));
+        if (!tenant.isQuotaOverride()) {
+            // null users = unlimited (kept as the historical 1_000_000 sentinel used by the seat cap).
+            tenant.setMaxUsers(plan.getMaxUsers() != null ? plan.getMaxUsers() : 1_000_000);
+            tenant.setMaxLeads(plan.getMaxLeads());
+            tenant.setMaxBookingsPerMonth(plan.getMaxBookingsPerMonth());
+            tenant.setMaxStorageMb(plan.getMaxStorageMb());
+        }
         Tenant saved = tenantRepository.save(tenant);
 
         audit(PlatformAuditAction.PLAN_CHANGE, saved,

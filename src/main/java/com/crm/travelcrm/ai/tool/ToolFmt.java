@@ -35,8 +35,13 @@ final class ToolFmt {
         return (page == null || page < 0) ? 0 : page;
     }
 
+    /**
+     * Page size for tool results. Kept small on purpose: every returned row is fed back into the LLM
+     * prompt, so large pages inflate token usage and trip Groq's free-tier tokens-per-minute limit.
+     * A chat answer rarely needs more than a handful of rows; the model can page for more if asked.
+     */
     static int sizeOrDefault(Integer size) {
-        if (size == null || size < 1) return 20;
-        return Math.min(size, 50);
+        if (size == null || size < 1) return 10;
+        return Math.min(size, 20);
     }
 }

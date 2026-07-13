@@ -1,6 +1,7 @@
 package com.crm.travelcrm.portal.payment;
 
 import com.crm.travelcrm.booking.entity.Booking;
+import com.crm.travelcrm.booking.enums.BookingStatus;
 import com.crm.travelcrm.booking.repository.BookingRepository;
 import com.crm.travelcrm.common.exception.BadRequestException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
@@ -32,6 +33,12 @@ public class PortalPaymentService {
         Booking booking = bookingRepository
                 .findByPublicIdAndCustomerIdAndDeletedAtIsNull(bookingPublicId, me.customerId())
                 .orElseThrow(() -> new ResourceNotFoundException("Booking not found: " + bookingPublicId));
+
+        // A cancelled/refunded booking must not be payable — its stored pendingAmount (totalPayable −
+        // paidAmount) is stale after cancellation and would otherwise let a traveler pay a dead booking.
+        if (booking.getStatus() == BookingStatus.CANCELLED || booking.getStatus() == BookingStatus.REFUNDED) {
+            throw new BadRequestException("This booking has been cancelled and can no longer be paid.");
+        }
 
         BigDecimal pending = booking.getPendingAmount();
         if (pending == null || pending.signum() <= 0) {

@@ -55,6 +55,20 @@ public interface UserRepository extends JpaRepository<User, Long> {
             """)
     List<Object[]> countActiveGroupedByTenant(@Param("tenantIds") List<Long> tenantIds);
 
+    /**
+     * Active (isActive + non-deleted) tenant-user counts grouped by tenant across ALL tenants —
+     * one query for the SuperAdmin usage dashboard. {@code User} extends {@code BaseEntity} (no
+     * tenant filter), so this returns every tenant regardless of {@code TenantContext}. Each row is
+     * {@code [tenantId (Long), count (Long)]}. Unlike {@link #countActiveGroupedByTenant} this also
+     * requires {@code isActive = true} (seat usage, not just provisioned).
+     */
+    @Query("""
+            SELECT u.tenantId, COUNT(u) FROM User u
+            WHERE u.deletedAt IS NULL AND u.isActive = true AND u.tenantId IS NOT NULL
+            GROUP BY u.tenantId
+            """)
+    List<Object[]> countActiveUsersByTenant();
+
     // Free-text search over name / email / phone within the caller's tenant.
     @Query("""
             SELECT u FROM User u

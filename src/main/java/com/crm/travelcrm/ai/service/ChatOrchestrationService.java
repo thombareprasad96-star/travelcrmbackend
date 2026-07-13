@@ -11,6 +11,8 @@ import com.crm.travelcrm.ai.tool.LeadTools;
 import com.crm.travelcrm.ai.tool.QuotationTools;
 import com.crm.travelcrm.ai.tool.ReminderTools;
 import com.crm.travelcrm.common.context.TenantContext;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -55,6 +57,7 @@ public class ChatOrchestrationService {
     private final AiAuditService audit;
     private final DishaProperties properties;
     private final Executor dishaTaskExecutor;
+    private final ObjectMapper objectMapper;
 
     private final LeadTools leadTools;
     private final BookingTools bookingTools;
@@ -68,6 +71,7 @@ public class ChatOrchestrationService {
                                     AiAuditService audit,
                                     DishaProperties properties,
                                     Executor dishaTaskExecutor,
+                                    ObjectMapper objectMapper,
                                     LeadTools leadTools,
                                     BookingTools bookingTools,
                                     QuotationTools quotationTools,
@@ -79,6 +83,7 @@ public class ChatOrchestrationService {
         this.audit = audit;
         this.properties = properties;
         this.dishaTaskExecutor = dishaTaskExecutor;
+        this.objectMapper = objectMapper;
         this.leadTools = leadTools;
         this.bookingTools = bookingTools;
         this.quotationTools = quotationTools;
@@ -137,7 +142,7 @@ public class ChatOrchestrationService {
             audit.recordTurn(sessionPk, userMessage, AiCallStatus.ERROR, ex.getMessage(),
                     System.currentTimeMillis() - start);
             try {
-                emitter.send(SseEmitter.event().name("error").data(friendlyError(ex)));
+                emitter.send(SseEmitter.event().name("error").data(sseData(friendlyError(ex))));
                 emitter.complete();
             } catch (IOException ignore) {
                 emitter.completeWithError(ex);
@@ -165,17 +170,50 @@ public class ChatOrchestrationService {
     private void emitChunks(SseEmitter emitter, String text) throws IOException {
         for (int i = 0; i < text.length(); i += CHUNK_SIZE) {
             String part = text.substring(i, Math.min(text.length(), i + CHUNK_SIZE));
-            emitter.send(SseEmitter.event().name("token").data(part));
+            emitter.send(SseEmitter.event().name("token").data(sseData(part)));
         }
     }
 
+    /**
+     * JSON-encode an SSE data payload so embedded newlines survive the wire. Spring's {@code SseEmitter}
+     * does NOT re-prefix newlines inside a {@code data:} value, so a raw multi-line chunk would be
+     * truncated at the first newline on the client. Encoding to a JSON string literal (newlines become
+     * {@code \n}) keeps each event on a single physical line; the client {@code JSON.parse}s it back.
+     */
+    private String sseData(String text) {
+        try {
+            return objectMapper.writeValueAsString(text);
+        } catch (JsonProcessingException e) {
+            return "\"\"";
+        }
+    }
+
+    /**
+     * Turns a low-level failure from the Groq call into a short, user-safe message. We match on the
+     * exception type + message text (Spring AI wraps the HTTP status/body into the message) so the
+     * agent gets an actionable hint instead of a stack trace.
+     */
     private String friendlyError(Exception ex) {
         String type = ex.getClass().getName().toLowerCase();
         String msg = ex.getMessage() == null ? "" : ex.getMessage().toLowerCase();
+
+        // Missing / invalid API key (blank key falls back to the MISSING_GROQ_API_KEY placeholder).
+        if (msg.contains("401") || msg.contains("unauthorized") || msg.contains("invalid api key")
+                || msg.contains("invalid_api_key") || msg.contains("missing_groq_api_key")
+                || msg.contains("api key")) {
+            return "Disha isn't configured yet — the Groq API key is missing or invalid. "
+                    + "Please set the GROQ_API_KEY environment variable on the server.";
+        }
+        // Rate limit / quota exhausted on the free tier.
+        if (msg.contains("429") || msg.contains("rate limit") || msg.contains("rate_limit")
+                || msg.contains("too many requests") || msg.contains("quota")) {
+            return "Disha is busy right now (AI rate limit reached). Please try again in a moment.";
+        }
+        // Network / connectivity to Groq.
         if (type.contains("resourceaccess") || msg.contains("connection refused")
-                || msg.contains("connect") || msg.contains("timed out")) {
-            return "Disha's AI service is unavailable. Please ensure Ollama is running "
-                    + "(http://localhost:11434) and the model is pulled.";
+                || msg.contains("connect") || msg.contains("timed out") || msg.contains("unknownhost")) {
+            return "Disha's AI service is unreachable right now. Please check the server's internet "
+                    + "connection and try again.";
         }
         return "Sorry, I couldn't complete that request right now.";
     }

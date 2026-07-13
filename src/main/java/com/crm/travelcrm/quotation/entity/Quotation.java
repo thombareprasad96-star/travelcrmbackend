@@ -255,6 +255,17 @@ public class Quotation extends BaseTenantEntity {
     @Builder.Default
     private List<String> cancellationPolicies = new ArrayList<>();
 
+    /**
+     * The STRUCTURED (computable) cancellation policy this quotation was priced under — the publicId
+     * of a {@code CancellationPolicy} version. Distinct from the free-text {@link #cancellationPolicies}
+     * bullets above, which are display-only. When a booking is converted from this quotation, this
+     * exact version is pinned onto the booking so the customer is charged under the terms they were
+     * quoted. Null → the booking falls back to the tenant's company default. Optional; set when the
+     * quotation is built from a package/template that carries a policy.
+     */
+    @Column(name = "cancellation_policy_public_id")
+    private java.util.UUID cancellationPolicyPublicId;
+
     @ElementCollection(fetch = FetchType.LAZY)
     @CollectionTable(name = "quotation_booking_terms", joinColumns = @JoinColumn(name = "quotation_id"))
     @Column(name = "item", columnDefinition = "TEXT")

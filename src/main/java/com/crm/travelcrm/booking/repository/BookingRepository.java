@@ -39,6 +39,10 @@ public interface BookingRepository extends JpaRepository<Booking, Long>,
     long countByCustomerIdAndTenantIdAndDeletedAtIsNullAndIdNot(
             Long customerId, Long tenantId, Long id);
 
+    // How many live bookings pin a given cancellation-policy version — guards the policy delete so a
+    // version a booking still relies on for its cancellation math can never be physically removed.
+    long countByCancellationPolicyPublicIdAndDeletedAtIsNull(java.util.UUID cancellationPolicyPublicId);
+
     // Referential-integrity guard for master data: is any active (non-trashed) booking still
     // pointing at this destination (Booking.destinationId is a logical FK to destination master)?
     boolean existsByDestinationIdAndTenantIdAndDeletedAtIsNull(Long destinationId, Long tenantId);
@@ -62,25 +66,33 @@ public interface BookingRepository extends JpaRepository<Booking, Long>,
 
     long countByStatusAndDeletedAtIsNull(BookingStatus status);
 
-    @Query("SELECT COALESCE(SUM(b.customerAmount), 0) FROM Booking b WHERE b.deletedAt IS NULL")
+    // Money aggregates exclude CANCELLED and REFUNDED so the finance dashboard reflects real
+    // earned revenue / receivables — a cancelled booking is retained (status=CANCELLED, not
+    // soft-deleted) with its money fields intact, so filtering on deletedAt alone would count its
+    // balance as receivables and its amount as revenue. The status is stored as EnumType.STRING,
+    // so the string-literal NOT IN mirrors the existing sumTotalRefund predicate.
+    @Query("SELECT COALESCE(SUM(b.customerAmount), 0) FROM Booking b WHERE b.deletedAt IS NULL AND b.status NOT IN ('CANCELLED', 'REFUNDED')")
     BigDecimal sumTotalRevenue();
 
-    @Query("SELECT COALESCE(SUM(b.paidAmount), 0) FROM Booking b WHERE b.deletedAt IS NULL")
+    @Query("SELECT COALESCE(SUM(b.paidAmount), 0) FROM Booking b WHERE b.deletedAt IS NULL AND b.status NOT IN ('CANCELLED', 'REFUNDED')")
     BigDecimal sumTotalCollected();
 
-    @Query("SELECT COALESCE(SUM(b.totalPayable - b.paidAmount), 0) FROM Booking b WHERE b.deletedAt IS NULL")
+    @Query("SELECT COALESCE(SUM(b.totalPayable - b.paidAmount), 0) FROM Booking b WHERE b.deletedAt IS NULL AND b.status NOT IN ('CANCELLED', 'REFUNDED')")
     BigDecimal sumTotalPending();
 
-    @Query("SELECT COALESCE(SUM(b.customerAmount), 0) FROM Booking b WHERE b.deletedAt IS NULL AND b.status = 'REFUNDED'")
+    // The real money disbursed back to customers — sum of the actual refunded counter across all
+    // bookings (0 on any booking that was never refunded). Status-independent on purpose: a partially
+    // refunded booking is still CANCELLED but its payout must still count here.
+    @Query("SELECT COALESCE(SUM(b.refundedAmount), 0) FROM Booking b WHERE b.deletedAt IS NULL")
     BigDecimal sumTotalRefund();
 
-    @Query("SELECT COALESCE(SUM(b.netProfit), 0) FROM Booking b WHERE b.deletedAt IS NULL")
+    @Query("SELECT COALESCE(SUM(b.netProfit), 0) FROM Booking b WHERE b.deletedAt IS NULL AND b.status NOT IN ('CANCELLED', 'REFUNDED')")
     BigDecimal sumNetProfit();
 
-    @Query("SELECT COALESCE(SUM(b.gst), 0) FROM Booking b WHERE b.deletedAt IS NULL")
+    @Query("SELECT COALESCE(SUM(b.gst), 0) FROM Booking b WHERE b.deletedAt IS NULL AND b.status NOT IN ('CANCELLED', 'REFUNDED')")
     BigDecimal sumGstCollected();
 
-    @Query("SELECT COALESCE(SUM(b.tcs), 0) FROM Booking b WHERE b.deletedAt IS NULL")
+    @Query("SELECT COALESCE(SUM(b.tcs), 0) FROM Booking b WHERE b.deletedAt IS NULL AND b.status NOT IN ('CANCELLED', 'REFUNDED')")
     BigDecimal sumTcsCollected();
 
     // ── Customer-module aggregates (tenant-scoped) ─────────────────────────────
@@ -131,6 +143,26 @@ public interface BookingRepository extends JpaRepository<Booking, Long>,
     /** Total active bookings for one tenant. */
     @Query("SELECT COUNT(b) FROM Booking b WHERE b.deletedAt IS NULL AND b.tenantId = :tenantId")
     long countByTenant(@Param("tenantId") Long tenantId);
+
+    /**
+     * New-bookings-this-month grouped by tenant across ALL tenants (SuperAdmin usage dashboard).
+     * <b>NATIVE</b> so the Hibernate {@code @Filter("tenantFilter")} never rewrites it — a guaranteed
+     * cross-tenant count even if ever invoked inside a tenant context (a JPQL query would be silently
+     * scoped). Keyed on {@code booking_date} (the business date) within {@code [monthStart, nextMonthStart)}.
+     * Each row is {@code [tenant_id (Long), count (Long)]}.
+     */
+    @Query(value = "SELECT b.tenant_id, COUNT(*) FROM bookings b " +
+            "WHERE b.deleted_at IS NULL AND b.booking_date >= :monthStart AND b.booking_date < :nextMonthStart " +
+            "GROUP BY b.tenant_id", nativeQuery = true)
+    List<Object[]> countBookingsByTenantForMonth(@Param("monthStart") LocalDate monthStart,
+                                                 @Param("nextMonthStart") LocalDate nextMonthStart);
+
+    /** New bookings in {@code [monthStart, nextMonthStart)} for ONE tenant — the monthly-quota gate count. */
+    @Query("SELECT COUNT(b) FROM Booking b WHERE b.deletedAt IS NULL AND b.tenantId = :tenantId " +
+            "AND b.bookingDate >= :monthStart AND b.bookingDate < :nextMonthStart")
+    long countByTenantForMonth(@Param("tenantId") Long tenantId,
+                               @Param("monthStart") LocalDate monthStart,
+                               @Param("nextMonthStart") LocalDate nextMonthStart);
 
     /** Distinct customer ids with 3+ active bookings — feeds "repeat customers". */
     @Query("""

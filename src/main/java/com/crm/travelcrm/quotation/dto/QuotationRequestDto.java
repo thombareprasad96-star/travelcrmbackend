@@ -53,6 +53,13 @@ public class QuotationRequestDto {
     private List<String> cancellationPolicies;
     private List<String> bookingTerms;
 
+    /**
+     * Optional publicId of a structured {@code CancellationPolicy} version (e.g. from the chosen
+     * package/template) this quote is priced under. Carried onto the booking at conversion so the
+     * customer is charged the exact terms quoted. Null → the tenant company default governs.
+     */
+    private UUID cancellationPolicyPublicId;
+
     @Valid private Pricing pricing;
 
     // ── Flight ────────────────────────────────────────────────────────────────

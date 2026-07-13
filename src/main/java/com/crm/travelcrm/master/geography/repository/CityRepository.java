@@ -38,6 +38,17 @@ public interface CityRepository extends JpaRepository<City, Long> {
     Optional<City> findByTenantIdAndDestination_NameIgnoreCaseAndNameIgnoreCase(
             Long tenantId, String destinationName, String cityName);
 
+    /**
+     * Name-only fallback, used when resolving a {@code LeadItinerary} leg to a real {@link City}:
+     * the lead stores free-typed {@code destination} + {@code city} strings, and the destination is
+     * often blank or spelled differently, so the destination-qualified finder above misses.
+     *
+     * <p>{@code findFirst…OrderByIdAsc} rather than a plain {@code Optional} finder: a city name is
+     * only unique per {@code (tenant, country)}, so "Springfield" in two countries would otherwise
+     * throw {@code IncorrectResultSizeDataAccessException}. Oldest row wins, deterministically.
+     */
+    Optional<City> findFirstByTenantIdAndNameIgnoreCaseOrderByIdAsc(Long tenantId, String name);
+
     List<City> findByTenantIdAndDestination_NameIgnoreCase(Long tenantId, String destinationName);
 
     /** Dropdown: all cities under a specific destination for this tenant, ordered by name. */

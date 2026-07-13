@@ -16,10 +16,23 @@ import java.util.List;
 public interface WhatsAppSender {
 
     /**
-     * @param ts          the tenant's settings (contains encrypted API key, template name/lang)
-     * @param toPhoneE164 destination in E.164, e.g. "+919099097103"
-     * @param bodyValues  ordered template body substitutions ({{1}}, {{2}}, …)
+     * Deliver one templated message using the tenant's credentials.
+     *
+     * @param ts      the tenant's settings (contains the encrypted API key + phone)
+     * @param message the template, destination and body substitutions to send
      * @throws RuntimeException if delivery fails (caller logs FAILED + returns a structured error)
      */
-    void send(TenantSettings ts, String toPhoneE164, List<String> bodyValues);
+    void send(TenantSettings ts, WaTemplateMessage message);
+
+    /**
+     * Convenience overload that sends using the tenant's own default template
+     * (Settings → WhatsApp) — used by the "Send test" button.
+     *
+     * @param toPhoneE164 destination in E.164, e.g. "+919099097103"
+     * @param bodyValues  ordered template body substitutions ({{1}}, {{2}}, …)
+     */
+    default void send(TenantSettings ts, String toPhoneE164, List<String> bodyValues) {
+        send(ts, new WaTemplateMessage(toPhoneE164, ts.getWaTemplateName(),
+                ts.getWaTemplateLanguage(), bodyValues, ts.getWaHeaderImageUrl()));
+    }
 }

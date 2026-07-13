@@ -16,6 +16,8 @@ import java.util.Map;
 public class CloudinaryService {
 
     private final Cloudinary cloudinary;
+    /** Records per-tenant storage usage (impl in the platform usage module); best-effort. */
+    private final StorageMeter storageMeter;
 
     public String uploadImage(MultipartFile file, String folder) {
         try {
@@ -26,7 +28,9 @@ public class CloudinaryService {
                             "resource_type", "auto"
                     )
             );
-            return (String) result.get("secure_url");
+            String url = (String) result.get("secure_url");
+            meterUpload(result, folder);
+            return url;
         } catch (IOException e) {
             log.error("Cloudinary upload failed for folder '{}': {}", folder, e.getMessage());
             throw new RuntimeException("Image upload failed: " + e.getMessage(), e);
@@ -52,10 +56,31 @@ public class CloudinaryService {
                             "overwrite",     true
                     )
             );
-            return (String) result.get("secure_url");
+            String url = (String) result.get("secure_url");
+            // Overwrite semantics: drop any prior row for this fixed public id before re-recording,
+            // so re-generating a PDF at the same id doesn't double-count.
+            storageMeter.recordDelete(publicId);
+            meterUpload(result, null);
+            return url;
         } catch (IOException e) {
             log.error("Cloudinary raw upload failed for publicId '{}': {}", publicId, e.getMessage());
             throw new RuntimeException("File upload failed: " + e.getMessage(), e);
+        }
+    }
+
+    /** Best-effort per-tenant storage metering from a Cloudinary upload result map. */
+    private void meterUpload(Map<?, ?> result, String folder) {
+        try {
+            Object publicId = result.get("public_id");
+            if (publicId == null) return;
+            Object bytes = result.get("bytes");
+            long sizeBytes = (bytes instanceof Number n) ? n.longValue() : 0L;
+            Object rt = result.get("resource_type");
+            String resourceType = rt != null ? rt.toString() : "image";
+            storageMeter.recordUpload(publicId.toString(),
+                    (String) result.get("secure_url"), sizeBytes, resourceType, folder);
+        } catch (Exception e) {
+            log.warn("Storage metering skipped for upload: {}", e.getMessage());
         }
     }
 
@@ -65,6 +90,7 @@ public class CloudinaryService {
         }
         try {
             cloudinary.uploader().destroy(publicId, ObjectUtils.emptyMap());
+            storageMeter.recordDelete(publicId);
         } catch (IOException e) {
             log.error("Cloudinary delete failed for publicId '{}': {}", publicId, e.getMessage());
             throw new RuntimeException("Image deletion failed: " + e.getMessage(), e);

@@ -9,6 +9,7 @@ import com.crm.travelcrm.bookingreminder.repository.BookingReminderRepository;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
+import com.crm.travelcrm.settings.service.WhatsAppMessagingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -16,6 +17,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -27,6 +29,7 @@ import java.util.List;
 public class BookingReminderService {
 
     private final BookingReminderRepository repository;
+    private final WhatsAppMessagingService whatsAppMessaging;
 
     // ── Queries ──────────────────────────────────────────────────────────────
 
@@ -127,15 +130,40 @@ public class BookingReminderService {
     }
 
     /**
-     * Dispatch placeholder: real WhatsApp/SMS/Email sending is not wired yet (Twilio
-     * credentials are placeholders), so this just marks the reminder as Sent.
+     * Send the reminder to the customer over WhatsApp (via the tenant's configured provider) and mark
+     * it Sent. Fails loudly — with a message the UI can show — when there is no phone, WhatsApp isn't
+     * configured, or the provider rejects the send, so the reminder is not marked Sent on failure.
      */
     @Transactional
     public BookingReminderResponseDto sendNow(Long id) {
         BookingReminder r = findOrThrow(id);
+        if (!StringUtils.hasText(r.getPhone())) {
+            throw new BusinessException("This reminder has no phone number to send to.",
+                    HttpStatus.UNPROCESSABLE_ENTITY);
+        }
+        Long tenantId = currentTenantId();
+        if (!whatsAppMessaging.isConfigured(tenantId)) {
+            throw new BusinessException(
+                    "WhatsApp is not configured. Set it up in Settings → WhatsApp first.",
+                    HttpStatus.UNPROCESSABLE_ENTITY);
+        }
+        List<String> body = List.of(
+                nz(r.getCustomerName(), "Customer"),
+                nz(r.getBookingCode(), ""),
+                r.getAmount() != null ? r.getAmount().toString() : "");
+        WhatsAppMessagingService.Result result = whatsAppMessaging.sendPurpose(
+                tenantId, WhatsAppMessagingService.Purpose.REMINDER, r.getPhone(), body);
+        if (!result.success()) {
+            throw new BusinessException("Couldn't send WhatsApp reminder: " + result.errorMessage(),
+                    HttpStatus.BAD_GATEWAY);
+        }
         r.setStatus(BookingReminderStatus.Sent);
-        log.info("BookingReminder send-now (stub dispatch) | id: {} | code: {}", id, r.getBookingCode());
+        log.info("BookingReminder sent via WhatsApp | id: {} | code: {}", id, r.getBookingCode());
         return toDto(repository.save(r));
+    }
+
+    private static String nz(String value, String fallback) {
+        return StringUtils.hasText(value) ? value : fallback;
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────

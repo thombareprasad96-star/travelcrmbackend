@@ -52,6 +52,14 @@ public class Plan extends BaseEntity {
     @Column(name = "max_leads")
     private Integer maxLeads;
 
+    /** Max NEW bookings allowed per calendar month on this plan; {@code null} = unlimited. */
+    @Column(name = "max_bookings_per_month")
+    private Integer maxBookingsPerMonth;
+
+    /** Storage cap in megabytes (Cloudinary assets + traveler documents); {@code null} = unlimited. */
+    @Column(name = "max_storage_mb")
+    private Integer maxStorageMb;
+
     @Builder.Default
     @ElementCollection(fetch = FetchType.EAGER)
     @CollectionTable(name = "plan_modules", joinColumns = @JoinColumn(name = "plan_id"))

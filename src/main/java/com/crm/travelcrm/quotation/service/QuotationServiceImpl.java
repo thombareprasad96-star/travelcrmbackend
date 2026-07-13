@@ -1,18 +1,23 @@
 package com.crm.travelcrm.quotation.service;
 
-import com.crm.travelcrm.common.cloudinary.CloudinaryService;
+import com.crm.travelcrm.common.cloudinary
+
+        .CloudinaryService;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.settings.service.EmailAuditService;
 import com.crm.travelcrm.settings.service.TenantMailSenderFactory;
+import com.crm.travelcrm.settings.service.WhatsAppMessagingService;
 import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.lead.entity.Lead;
 import com.crm.travelcrm.lead.entity.LeadItinerary;
 import com.crm.travelcrm.lead.service.LeadAccessGuard;
 import com.crm.travelcrm.quotation.dto.QuotationEmailRequestDto;
+import com.crm.travelcrm.quotation.dto.QuotationWhatsAppRequestDto;
 import com.crm.travelcrm.quotation.dto.QuotationPdfResource;
 import com.crm.travelcrm.quotation.dto.QuotationRefDto;
 import com.crm.travelcrm.quotation.dto.QuotationRequestDto;
+import com.crm.travelcrm.quotation.dto.PublicQuotationResponseDto;
 import com.crm.travelcrm.quotation.dto.QuotationResponseDto;
 import com.crm.travelcrm.quotation.dto.QuotationSummaryDto;
 import com.crm.travelcrm.quotation.entity.*;
@@ -56,6 +61,7 @@ public class QuotationServiceImpl implements QuotationService {
     private final LeadAccessGuard leadAccessGuard;
     private final TenantMailSenderFactory tenantMailSenderFactory;
     private final EmailAuditService emailAudit;
+    private final WhatsAppMessagingService whatsAppMessaging;
 
     @Value("${app.public-base-url:http://localhost:8080}")
     private String publicBaseUrl;
@@ -326,15 +332,62 @@ public class QuotationServiceImpl implements QuotationService {
 
     @Override
     @Transactional(readOnly = true)
-    public QuotationResponseDto getPublicByPublicId(UUID publicId) {
+    public PublicQuotationResponseDto getPublicByPublicId(UUID publicId) {
         // Capability-URL access (no auth/tenant) — lookup by the globally-unique publicId.
         Quotation q = quotationRepository.findByPublicIdAndDeletedAtIsNull(publicId)
                 .orElseThrow(() -> new ResourceNotFoundException("Quotation not found: " + publicId));
-        QuotationResponseDto dto = quotationMapper.toResponse(q);
-        // Strip internal/agent-only fields from the public, customer-facing payload.
-        dto.setCreatedBy(null);
-        dto.setLeadId(null);
-        return dto;
+        // Project onto a customer-safe WHITELIST DTO — never blacklist-strip the internal one, which
+        // still serializes the agent's markup (totals.markup + the pricing block) and internal metadata.
+        return toPublic(quotationMapper.toResponse(q));
+    }
+
+    /** Copy only the customer-safe fields; markup / pricing / internal metadata are never carried over. */
+    private PublicQuotationResponseDto toPublic(QuotationResponseDto d) {
+        // Redact free-text notes on the reused section objects (they may hold internal remarks). Safe to
+        // mutate: this full DTO is built only to feed the public projection and is discarded afterwards.
+        if (d.getHotel() != null)       d.getHotel().setNotes(null);
+        if (d.getSightseeing() != null) d.getSightseeing().setNotes(null);
+
+        QuotationResponseDto.Totals t = d.getTotals();
+        PublicQuotationResponseDto.PublicTotals totals = t == null ? null
+                : PublicQuotationResponseDto.PublicTotals.builder()
+                        .subtotal(t.getSubtotal())
+                        .discountType(t.getDiscountType())
+                        .discount(t.getDiscount())
+                        .discountAmount(t.getDiscountAmount())
+                        .taxPercent(t.getTaxPercent())
+                        .taxAmount(t.getTaxAmount())
+                        .grandTotal(t.getGrandTotal())
+                        .addonsTotal(t.getAddonsTotal())
+                        .perAdult(t.getPerAdult())
+                        // markup deliberately omitted
+                        .build();
+
+        return PublicQuotationResponseDto.builder()
+                .publicId(d.getPublicId())
+                .title(d.getTitle())
+                .version(d.getVersion())
+                .versionNumber(d.getVersionNumber())
+                .pdfUrl(d.getPdfUrl())
+                .coverImageUrl(d.getCoverImageUrl())
+                .quoteNo(d.getQuoteNo())
+                .nights(d.getNights())
+                .days(d.getDays())
+                .rooms(d.getRooms())
+                .customer(d.getCustomer())
+                .flight(d.getFlight())
+                .hotel(d.getHotel())
+                .sightseeing(d.getSightseeing())
+                .cruise(d.getCruise())
+                .vehicle(d.getVehicle())
+                .addons(d.getAddons())
+                .inclusions(d.getInclusions())
+                .exclusions(d.getExclusions())
+                .paymentPolicies(d.getPaymentPolicies())
+                .cancellationPolicies(d.getCancellationPolicies())
+                .bookingTerms(d.getBookingTerms())
+                .totals(totals)
+                .build();
     }
 
     // ── Email ─────────────────────────────────────────────────────────────────
@@ -400,6 +453,40 @@ public class QuotationServiceImpl implements QuotationService {
                 : publicBaseUrl;
         // Public, shareable link (no auth) — recipients open it directly from WhatsApp/email.
         return base + "/api/public/quotations/" + publicId + "/pdf";
+    }
+
+    // ── WhatsApp ────────────────────────────────────────────────────────────────
+
+    @Override
+    @Transactional
+    public void sendWhatsApp(UUID publicId, QuotationWhatsAppRequestDto request) {
+        Quotation q = loadOwned(publicId);
+        String phone = request != null && StringUtils.hasText(request.getToPhone())
+                ? request.getToPhone() : q.getCustomerPhone();
+        if (!StringUtils.hasText(phone)) {
+            throw new BusinessException("No phone number to send this quotation to.",
+                    HttpStatus.UNPROCESSABLE_ENTITY);
+        }
+        Long tenantId = currentTenantId();
+        if (!whatsAppMessaging.isConfigured(tenantId)) {
+            throw new BusinessException(
+                    "WhatsApp is not configured. Set it up in Settings → WhatsApp first.",
+                    HttpStatus.UNPROCESSABLE_ENTITY);
+        }
+        // Reuse the canonical share-link builder (also re-checks ownership).
+        String shareLink = getShareLink(publicId);
+        List<String> body = List.of(
+                safe(q.getCustomerName(), "Customer"),
+                safe(q.getTitle(), "your trip"),
+                shareLink);
+        WhatsAppMessagingService.Result result = whatsAppMessaging.sendPurpose(
+                tenantId, WhatsAppMessagingService.Purpose.QUOTATION, phone, body);
+        if (!result.success()) {
+            log.error("Failed to WhatsApp quotation {}: {}", publicId, result.errorMessage());
+            throw new BusinessException("We couldn't send that WhatsApp message. Please try again shortly.",
+                    HttpStatus.BAD_GATEWAY);
+        }
+        log.info("Quotation {} sent via WhatsApp to {}", publicId, phone);
     }
 
     // ════════════════════════════════════════════════════════════════════════

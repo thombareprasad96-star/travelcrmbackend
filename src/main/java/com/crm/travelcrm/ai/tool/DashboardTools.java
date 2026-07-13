@@ -20,6 +20,7 @@ public class DashboardTools {
 
     private final ReportService reportService;
     private final AiAuditService audit;
+    private final AiToolAuthorizer authorizer;
 
     public record DashboardCounts(long reportTypes, long activeUsers, long leadsInPeriod,
                                   String revenueTracked, String period, String generatedAt) {}
@@ -31,6 +32,7 @@ public class DashboardTools {
                     "Period: 'today', 'week', 'month' (default), 'year'") String period) {
         return audit.recordToolCall("getDashboardCounts", Map.of("period", ToolFmt.str(period)),
                 () -> {
+                    authorizer.require("CRM_FULL");
                     ReportSummaryDTO s = reportService.getSummary(period == null ? "month" : period, null, null);
                     return new DashboardCounts(
                             s.getTotalReports(), s.getActiveUsers(), s.getThisMonthLeads(),

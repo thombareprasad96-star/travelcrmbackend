@@ -43,6 +43,8 @@ public class PlanServiceImpl implements PlanService {
         plan.setCurrency(request.getCurrency());
         plan.setMaxUsers(request.getMaxUsers());
         plan.setMaxLeads(request.getMaxLeads());
+        plan.setMaxBookingsPerMonth(request.getMaxBookingsPerMonth());
+        plan.setMaxStorageMb(request.getMaxStorageMb());
         plan.setModules(request.getModules() != null ? new HashSet<>(request.getModules()) : new HashSet<>());
         plan.setActive(request.isActive());
 
@@ -67,6 +69,8 @@ public class PlanServiceImpl implements PlanService {
                 .currency(p.getCurrency())
                 .maxUsers(p.getMaxUsers())
                 .maxLeads(p.getMaxLeads())
+                .maxBookingsPerMonth(p.getMaxBookingsPerMonth())
+                .maxStorageMb(p.getMaxStorageMb())
                 .modules(p.getModules())
                 .active(p.isActive())
                 .build();

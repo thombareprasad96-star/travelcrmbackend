@@ -54,6 +54,13 @@ public class QuotationMapper {
         replaceList(q.getCancellationPolicies(), req.getCancellationPolicies());
         replaceList(q.getBookingTerms(), req.getBookingTerms());
 
+        // Structured (computable) cancellation policy the quote is priced under — pinned onto the
+        // booking at conversion. Only overwrite when the client sends one, so an update that omits
+        // it doesn't silently unlink a package policy already attached.
+        if (req.getCancellationPolicyPublicId() != null) {
+            q.setCancellationPolicyPublicId(req.getCancellationPolicyPublicId());
+        }
+
         QuotationRequestDto.Pricing p = req.getPricing();
         if (p != null) {
             q.setDiscount(p.getDiscount());

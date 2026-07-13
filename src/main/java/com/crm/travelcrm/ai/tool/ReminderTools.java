@@ -21,6 +21,7 @@ public class ReminderTools {
 
     private final ReminderService reminderService;
     private final AiAuditService audit;
+    private final AiToolAuthorizer authorizer;
 
     public record ReminderSummary(String title, String description, String type, String priority,
                                   String status, String leadName, String phone, String dueDate,
@@ -33,19 +34,28 @@ public class ReminderTools {
             @ToolParam(required = false, description =
                     "Optional status filter, e.g. PENDING, COMPLETED, DISMISSED") String status) {
         return audit.recordToolCall("getMyReminders", Map.of("status", ToolFmt.str(status)),
-                () -> map(reminderService.getAll(status, null, null)));
+                () -> {
+                    authorizer.require("REMINDER_READ");
+                    return map(reminderService.getAll(status, null, null));
+                });
     }
 
     @Tool(description = "List reminders that are overdue (past their due date and not completed).")
     public List<ReminderSummary> getOverdueReminders() {
         return audit.recordToolCall("getOverdueReminders", Map.of(),
-                () -> map(reminderService.getOverdue()));
+                () -> {
+                    authorizer.require("REMINDER_READ");
+                    return map(reminderService.getOverdue());
+                });
     }
 
     @Tool(description = "List reminders that are due today.")
     public List<ReminderSummary> getDueTodayReminders() {
         return audit.recordToolCall("getDueTodayReminders", Map.of(),
-                () -> map(reminderService.getDueToday()));
+                () -> {
+                    authorizer.require("REMINDER_READ");
+                    return map(reminderService.getDueToday());
+                });
     }
 
     private static List<ReminderSummary> map(List<ReminderResponseDto> list) {

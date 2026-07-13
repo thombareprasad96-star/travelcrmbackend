@@ -17,8 +17,10 @@ public class PlanResponse {
     private String displayName;
     private BigDecimal monthlyPrice;
     private String currency;
-    private Integer maxUsers;   // null = unlimited
-    private Integer maxLeads;   // null = unlimited
+    private Integer maxUsers;             // null = unlimited
+    private Integer maxLeads;             // null = unlimited
+    private Integer maxBookingsPerMonth;  // null = unlimited
+    private Integer maxStorageMb;         // null = unlimited
     private Set<String> modules;
     private boolean active;
 }

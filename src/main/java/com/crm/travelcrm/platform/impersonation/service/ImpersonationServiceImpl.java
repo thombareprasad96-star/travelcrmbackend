@@ -31,7 +31,7 @@ public class ImpersonationServiceImpl implements ImpersonationService {
 
     @Override
     @Transactional  // read-write: records a PlatformAuditLog (IMPERSONATION_START) — never read-only
-    public ImpersonationResponse start(UUID userPublicId) {
+    public ImpersonationResponse start(UUID userPublicId, String ipAddress, String userAgent) {
         // H1: a soft-deleted user is never resolvable → can never be impersonated.
         User target = userRepository.findByPublicIdAndDeletedAtIsNull(userPublicId)
                 .orElseThrow(() -> new ResourceNotFoundException("User not found: " + userPublicId));
@@ -56,11 +56,15 @@ public class ImpersonationServiceImpl implements ImpersonationService {
         String token = jwtUtil.generateImpersonationToken(target, actor.superAdminId(), actor.email());
         Tenant tenant = tenantRepository.findById(target.getTenantId()).orElse(null);
 
+        // Explicit-actor overload (not the PlatformContext one) so we can also stamp the origin
+        // ip/user-agent — "who, whom, when, from where" — onto the audit row.
         platformAuditRecorder.safeRecord(PlatformAuditAction.IMPERSONATION_START, true,
+                actor.superAdminId(), actor.email(),
                 target.getTenantId(), tenant != null ? tenant.getOrganizationCode() : null,
                 "USER", target.getPublicId(),
                 "Started impersonating " + target.getEmail()
-                        + (tenant != null ? " @ " + tenant.getOrganizationCode() : ""));
+                        + (tenant != null ? " @ " + tenant.getOrganizationCode() : ""),
+                ipAddress, userAgent);
 
         return ImpersonationResponse.builder()
                 .token(token)
@@ -75,7 +79,7 @@ public class ImpersonationServiceImpl implements ImpersonationService {
 
     @Override
     @Transactional  // read-write: records a PlatformAuditLog (IMPERSONATION_END) — never read-only
-    public void end(String impersonationToken) {
+    public void end(String impersonationToken, String ipAddress, String userAgent) {
         // Only a valid impersonation token produces an END record; anything else is a no-op.
         if (impersonationToken == null
                 || !jwtUtil.isTokenValid(impersonationToken)
@@ -101,6 +105,6 @@ public class ImpersonationServiceImpl implements ImpersonationService {
         platformAuditRecorder.safeRecord(PlatformAuditAction.IMPERSONATION_END, true,
                 impersonatorId, impersonatorEmail,
                 tenantId, tenantCode, "USER", targetPublicId,
-                "Ended impersonating " + targetEmail, null, null);
+                "Ended impersonating " + targetEmail, ipAddress, userAgent);
     }
 }

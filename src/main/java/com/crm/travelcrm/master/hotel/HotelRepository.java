@@ -42,6 +42,9 @@ public interface HotelRepository extends JpaRepository<Hotel, Long> {
     // Referential guard: any (non-trashed, via softDeleteFilter) hotel still in this city?
     boolean existsByTenantIdAndCity_Id(Long tenantId, Long cityId);
 
+    // Onboarding checklist: does this tenant have at least one hotel master? (ADD_MASTER signal)
+    boolean existsByTenantId(Long tenantId);
+
     // ── Dropdown ──────────────────────────────────────────────────────────────
 
     @Query("SELECT h FROM Hotel h WHERE h.tenantId = :tenantId ORDER BY h.name ASC")

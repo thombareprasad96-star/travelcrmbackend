@@ -8,12 +8,17 @@ import lombok.Data;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.UUID;
 
 @Data
 @Builder
 public class VendorResponseDTO {
 
     private Long id;
+
+    // External-facing identifier (UUID). Consumers that must not touch the internal Long id
+    // (e.g. booking service-line vendor assignment) key off this.
+    private UUID publicId;
     private String vendorCode;
     private String vendorName;
     private String vendorType;

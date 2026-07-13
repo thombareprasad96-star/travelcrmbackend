@@ -1,0 +1,194 @@
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8" />
+    <title>Booking Voucher</title>
+    <!--
+      BOOKING CONFIRMATION VOUCHER (Flying Saucer + OpenPDF / Thymeleaf, XML mode)
+      FS-safe: tables + inline-block only. NO flex / grid / calc() / var() / box-shadow.
+      Model: ${doc} (BookingDocumentModel) + company* vars + ${fmt}
+      Customer-facing: NO vendorCost / netProfit anywhere.
+      Palette: gold #eeda92 (band) + deep gold #b8891f (accents/text)
+    -->
+    <style th:inline="none">
+        @page { size: A4; margin: 14mm 13mm 16mm 13mm; }
+        * { box-sizing: border-box; }
+        body { font-family: "DejaVu Sans", Helvetica, Arial, sans-serif;
+               font-size: 10px; line-height: 1.5; color: #2b2b2b; margin: 0; padding: 0; }
+        table { border-collapse: collapse; width: 100%; }
+        td, th { vertical-align: top; }
+        .r { text-align: right; } .c { text-align: center; }
+
+        /* Header band */
+        .band { background-color: #eeda92; border-radius: 10px; padding: 16px 18px; }
+        .band td { vertical-align: middle; }
+        .brand-name { font-size: 20px; font-weight: bold; color: #4a370c; letter-spacing: 0.3px; }
+        .brand-logo { height: 44px; }
+        .brand-sub  { font-size: 8.5px; color: #6b5518; margin-top: 3px; }
+        .v-kicker { font-size: 8px; font-weight: bold; letter-spacing: 3px; color: #6b4e12; text-transform: uppercase; }
+        .v-title  { font-size: 22px; font-weight: bold; color: #4a370c; letter-spacing: 1px; }
+        .stamp { display: inline-block; border: 2px solid #15803d; color: #15803d; border-radius: 6px;
+                 font-size: 12px; font-weight: bold; letter-spacing: 2px; padding: 4px 12px;
+                 text-transform: uppercase; margin-top: 5px; }
+        .stamp-cancel { border-color: #b91c1c; color: #b91c1c; }
+        .stamp-pending { border-color: #92600b; color: #92600b; }
+
+        /* Ref line */
+        .refline { margin-top: 12px; }
+        .refline td { font-size: 9px; color: #555; padding: 3px 0; }
+        .refline b { color: #1f2937; }
+
+        /* Section */
+        .sec { border-left: 4px solid #b8891f; padding-left: 10px; margin: 18px 0 8px 0; }
+        .sec-t { font-size: 11px; font-weight: bold; color: #1f2937; text-transform: uppercase; letter-spacing: 0.8px; }
+
+        /* Trip tiles */
+        .tiles td { width: 33%; padding: 5px; }
+        .tile { border: 1px solid #ece3c9; border-left: 4px solid #b8891f; border-radius: 8px;
+                background-color: #fdf9ec; padding: 10px 12px; }
+        .tile-l { font-size: 7px; font-weight: bold; letter-spacing: 1px; text-transform: uppercase; color: #b8891f; }
+        .tile-v { font-size: 12px; font-weight: bold; color: #1f2937; margin-top: 3px; }
+
+        /* Services */
+        .svc { border: 1px solid #e7e0cb; border-radius: 8px; margin-top: 9px; padding: 11px 13px; page-break-inside: avoid; }
+        .svc-head td { vertical-align: middle; }
+        .svc-type { display: inline-block; background-color: #eeda92; color: #5c4310; font-size: 7px;
+                    font-weight: bold; letter-spacing: 0.6px; text-transform: uppercase;
+                    padding: 3px 9px; border-radius: 9px; }
+        .svc-title { font-size: 12px; font-weight: bold; color: #1f2937; margin-top: 4px; }
+        .svc-kv { margin-top: 8px; }
+        .svc-kv td { width: 50%; padding: 3px 0; font-size: 9px; vertical-align: top; }
+        .svc-l { font-size: 7px; font-weight: bold; letter-spacing: 0.8px; text-transform: uppercase; color: #999; }
+        .svc-val { font-size: 9.5px; color: #1f2937; font-weight: bold; }
+        .svc-desc { font-size: 9px; color: #555; margin-top: 6px; line-height: 1.55; }
+        .chip { display: inline-block; padding: 2px 8px; border-radius: 9px; font-size: 7px;
+                font-weight: bold; letter-spacing: 0.4px; text-transform: uppercase; }
+        .chip-ok { background-color: #dcfce7; color: #15803d; }
+        .chip-pd { background-color: #fef3c7; color: #92600b; }
+        .chip-no { background-color: #fee2e2; color: #b91c1c; }
+
+        /* Payment summary strip */
+        .paystrip { border: 1px solid #ece3c9; border-radius: 8px; margin-top: 14px; background-color: #fcfaf2; }
+        .paystrip td { width: 33%; padding: 12px; text-align: center; border-right: 1px solid #ece3c9; }
+        .paystrip td.last { border-right: none; }
+        .ps-l { font-size: 7.5px; font-weight: bold; letter-spacing: 0.8px; text-transform: uppercase; color: #b8891f; }
+        .ps-v { font-size: 13px; font-weight: bold; color: #1f2937; margin-top: 4px; }
+
+        /* Footer */
+        .foot { margin-top: 22px; border-top: 1px solid #e7e0cb; padding-top: 10px; }
+        .foot-note { font-size: 8px; color: #8a8a8a; line-height: 1.6; }
+        .foot-ty { font-size: 12px; font-weight: bold; color: #b8891f; letter-spacing: 1px; }
+        .empty { font-size: 9px; color: #999; padding: 8px 0; }
+    </style>
+</head>
+<body>
+
+<!-- HEADER BAND -->
+<table class="band">
+    <tr>
+        <td style="width:58%;">
+            <img class="brand-logo" th:if="${companyLogoUrl != null and !companyLogoUrl.isEmpty()}" th:src="${companyLogoUrl}" />
+            <div class="brand-name" th:if="${companyLogoUrl == null or companyLogoUrl.isEmpty()}" th:text="${companyName}">Company</div>
+            <div class="brand-sub" th:text="${fmt.orElse(companyTagline, companyAddress)}">Tagline</div>
+        </td>
+        <td class="r" style="width:42%;">
+            <div class="v-kicker">Confirmation</div>
+            <div class="v-title">Booking Voucher</div>
+            <span th:switch="${doc.status}">
+                <span th:case="'CANCELLED'" class="stamp stamp-cancel">Cancelled</span>
+                <span th:case="'PENDING'"   class="stamp stamp-pending">Pending</span>
+                <span th:case="*"           class="stamp">Confirmed</span>
+            </span>
+        </td>
+    </tr>
+</table>
+
+<!-- REF -->
+<table class="refline">
+    <tr>
+        <td style="width:50%;"><b>Voucher / Booking No:</b> <span th:text="${doc.bookingCode}">BK10001</span></td>
+        <td style="width:50%;" class="r"><b>Issued:</b> <span th:text="${fmt.date(generatedOn)}">01 Jan 2026</span></td>
+    </tr>
+    <tr>
+        <td><b>Guest:</b> <span th:text="${fmt.orElse(doc.customer.name, 'Guest')}">Guest</span></td>
+        <td class="r" th:if="${doc.customer.phone != null}"><b>Contact:</b> <span th:text="${doc.customer.phone}">-</span></td>
+    </tr>
+</table>
+
+<!-- TRIP -->
+<div class="sec"><span class="sec-t">Travel Details</span></div>
+<table class="tiles">
+    <tr>
+        <td><div class="tile"><div class="tile-l">Destination</div>
+            <div class="tile-v" th:text="${fmt.orElse(doc.destination, '-')}">-</div></div></td>
+        <td><div class="tile"><div class="tile-l">Travel Date</div>
+            <div class="tile-v" th:text="${fmt.date(doc.travelDate)}">-</div></div></td>
+        <td><div class="tile"><div class="tile-l">Booking Date</div>
+            <div class="tile-v" th:text="${fmt.date(doc.bookingDate)}">-</div></div></td>
+    </tr>
+</table>
+
+<!-- SERVICES -->
+<div class="sec"><span class="sec-t">Services &amp; Confirmations</span></div>
+<div th:if="${doc.services == null or doc.services.isEmpty()}" class="empty">
+    No individual service lines have been added to this booking.
+</div>
+<div class="svc" th:each="s : ${doc.services}">
+    <table class="svc-head">
+        <tr>
+            <td>
+                <span class="svc-type" th:text="${fmt.orElse(s.serviceType, 'Service')}">Type</span>
+                <div class="svc-title" th:text="${s.title}">Service Title</div>
+            </td>
+            <td class="r">
+                <span th:switch="${s.status}">
+                    <span th:case="'CONFIRMED'" class="chip chip-ok">Confirmed</span>
+                    <span th:case="'CANCELLED'" class="chip chip-no">Cancelled</span>
+                    <span th:case="*"           class="chip chip-pd">Pending</span>
+                </span>
+            </td>
+        </tr>
+    </table>
+    <table class="svc-kv">
+        <tr>
+            <td th:if="${s.serviceDate != null}">
+                <div class="svc-l">Date</div>
+                <div class="svc-val" th:text="${s.endDate != null} ? |${fmt.date(s.serviceDate)} - ${fmt.date(s.endDate)}| : ${fmt.date(s.serviceDate)}">-</div>
+            </td>
+            <td th:if="${s.confirmationNumber != null and !s.confirmationNumber.isEmpty()}">
+                <div class="svc-l">Confirmation No</div>
+                <div class="svc-val" th:text="${s.confirmationNumber}">-</div>
+            </td>
+        </tr>
+        <tr th:if="${s.vendorName != null and !s.vendorName.isEmpty()}">
+            <td colspan="2">
+                <div class="svc-l">Serviced By</div>
+                <div class="svc-val" th:text="${s.vendorName}">-</div>
+            </td>
+        </tr>
+    </table>
+    <div class="svc-desc" th:if="${s.description != null and !s.description.isEmpty()}"
+         th:text="${fmt.plain(s.description)}">Description</div>
+</div>
+
+<!-- PAYMENT SUMMARY (customer-facing) -->
+<table class="paystrip">
+    <tr>
+        <td><div class="ps-l">Package Total</div><div class="ps-v" th:text="${fmt.inr(doc.totalPayable)}">Rs. 0</div></td>
+        <td><div class="ps-l">Paid</div><div class="ps-v" th:text="${fmt.inr(doc.paidAmount)}">Rs. 0</div></td>
+        <td class="last"><div class="ps-l">Balance Due</div><div class="ps-v" th:text="${fmt.inr(doc.pendingAmount)}">Rs. 0</div></td>
+    </tr>
+</table>
+
+<!-- FOOTER -->
+<div class="foot">
+    <div class="foot-ty">We wish you a wonderful journey!</div>
+    <div class="foot-note" style="margin-top:6px;">
+        Please carry a copy of this voucher during your travel. For assistance contact
+        <span th:text="${fmt.orElse(companyPhone, companyEmail)}">us</span><span
+            th:if="${companyEmail != null and companyPhone != null}" th:text="| / ${companyEmail}|"></span>.
+        <span th:if="${companyGst != null}" th:text="|GSTIN: ${companyGst}.|">GST</span>
+    </div>
+</div>
+
+</body>
+</html>

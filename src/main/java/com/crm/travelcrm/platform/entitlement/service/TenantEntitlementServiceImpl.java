@@ -72,12 +72,13 @@ public class TenantEntitlementServiceImpl implements TenantEntitlementService {
     @Transactional(readOnly = true)
     public MyEntitlementsResponse entitlementsForTenant(Long tenantId) {
         if (tenantId == null) {
-            return new MyEntitlementsResponse(Set.of(), null, null);
+            return new MyEntitlementsResponse(Set.of(), null, null, null, null);
         }
         Tenant tenant = tenantRepository.findById(tenantId)
                 .orElseThrow(() -> new TenantNotFoundException(null));
         return new MyEntitlementsResponse(
-                new TreeSet<>(effectiveModulesFor(tenantId)), tenant.getMaxUsers(), tenant.getMaxLeads());
+                new TreeSet<>(effectiveModulesFor(tenantId)), tenant.getMaxUsers(), tenant.getMaxLeads(),
+                tenant.getMaxBookingsPerMonth(), tenant.getMaxStorageMb());
     }
 
     @Override

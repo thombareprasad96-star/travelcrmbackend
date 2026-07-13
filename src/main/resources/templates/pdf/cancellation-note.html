@@ -1,0 +1,209 @@
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8" />
+    <title>Cancellation Note</title>
+    <!--
+      CANCELLATION NOTE  (Credit Note / Debit Note)
+      Flying Saucer + OpenPDF / Thymeleaf, XML mode.
+      FS-safe: tables + inline-block only. NO flex / grid / calc() / var() / box-shadow.
+      Model: ${doc} (CancellationDocumentModel, FLAT + branding frozen) + ${fmt} (PdfFormat).
+      Palette: gold #eeda92 (light band) + deep gold #b8891f (accents).
+    -->
+    <style th:inline="none">
+        @page { size: A4; margin: 14mm 13mm 16mm 13mm; }
+        * { box-sizing: border-box; }
+        body { font-family: "DejaVu Sans", Helvetica, Arial, sans-serif;
+               font-size: 10px; line-height: 1.5; color: #2b2b2b; margin: 0; padding: 0; }
+        table { border-collapse: collapse; width: 100%; }
+        td, th { vertical-align: top; }
+        .r { text-align: right; } .c { text-align: center; }
+        .muted { color: #7a7a7a; }
+
+        .head { border-bottom: 3px solid #b8891f; padding-bottom: 12px; }
+        .brand-name { font-size: 20px; font-weight: bold; color: #1f2937; letter-spacing: 0.3px; }
+        .brand-logo { height: 42px; }
+        .brand-sub  { font-size: 8.5px; color: #7a7a7a; margin-top: 3px; }
+        .doc-badge  { display: inline-block; background-color: #eeda92; color: #6b4e12;
+                      font-size: 14px; font-weight: bold; letter-spacing: 1.5px;
+                      padding: 7px 16px; border-radius: 6px; text-transform: uppercase; }
+        .doc-meta   { font-size: 8.5px; color: #555; margin-top: 7px; }
+        .doc-meta b { color: #1f2937; }
+
+        .parties { margin-top: 16px; }
+        .parties td { width: 50%; padding: 0; vertical-align: top; }
+        .pbox { border: 1px solid #ece3c9; border-radius: 8px; padding: 11px 13px; }
+        .pbox-gold { background-color: #fdf9ec; }
+        .plabel { font-size: 7px; font-weight: bold; letter-spacing: 1.4px;
+                  text-transform: uppercase; color: #b8891f; margin-bottom: 4px; }
+        .pname  { font-size: 12px; font-weight: bold; color: #1f2937; }
+        .pline  { font-size: 9px; color: #444; margin-top: 2px; }
+
+        .sec { border-left: 4px solid #b8891f; padding-left: 10px; margin: 18px 0 8px 0; }
+        .sec-t { font-size: 11px; font-weight: bold; color: #1f2937; text-transform: uppercase; letter-spacing: 0.8px; }
+
+        table.items { border: 1px solid #e7e0cb; border-radius: 8px; overflow: hidden; }
+        table.items th { background-color: #eeda92; color: #5c4310; font-size: 8px;
+                         text-transform: uppercase; letter-spacing: 0.8px; font-weight: bold;
+                         padding: 8px 10px; text-align: left; }
+        table.items td { padding: 8px 10px; font-size: 9.5px; border-top: 1px solid #f0ead8; color: #333; }
+
+        .charges { margin-top: 16px; }
+        .charges td { width: 50%; vertical-align: top; }
+        table.sumt { border: 1px solid #e7e0cb; border-radius: 8px; overflow: hidden; }
+        table.sumt td { padding: 7px 13px; font-size: 9.5px; border-top: 1px solid #f0ead8; }
+        table.sumt tr:first-child td { border-top: none; }
+        .sumt .lab { color: #555; }
+        .sumt .val { text-align: right; font-weight: bold; color: #1f2937; }
+        .sumt .total td { background-color: #eeda92; color: #5c4310; font-size: 11px; font-weight: bold; }
+        .sumt .refund td { background-color: #dcfce7; color: #15803d; font-size: 11px; font-weight: bold; }
+        .sumt .owed   td { background-color: #fee2e2; color: #b91c1c; font-size: 11px; font-weight: bold; }
+        .sumt .paid  td { color: #15803d; font-weight: bold; }
+
+        .note-reason { margin-top: 4px; font-size: 9px; color: #444; }
+        .foot { margin-top: 22px; border-top: 1px solid #e7e0cb; padding-top: 10px; }
+        .foot-note { font-size: 8px; color: #8a8a8a; line-height: 1.6; }
+        .foot-ty { font-size: 11px; font-weight: bold; color: #b8891f; letter-spacing: 1px; }
+    </style>
+</head>
+<body>
+
+<!-- HEADER -->
+<table class="head">
+    <tr>
+        <td style="width:58%; vertical-align:middle;">
+            <img class="brand-logo" th:if="${doc.companyLogoUrl != null and !doc.companyLogoUrl.isEmpty()}" th:src="${doc.companyLogoUrl}" />
+            <div class="brand-name" th:if="${doc.companyLogoUrl == null or doc.companyLogoUrl.isEmpty()}" th:text="${doc.companyName}">Company</div>
+            <div class="brand-sub" th:text="${fmt.orElse(doc.companyAddress, doc.companyTagline)}">Address</div>
+            <div class="brand-sub" th:if="${doc.companyGst != null}" th:text="|GSTIN: ${doc.companyGst}|">GST</div>
+        </td>
+        <td class="r" style="width:42%; vertical-align:middle;">
+            <div class="doc-badge" th:text="${doc.documentTitle}">Credit Note</div>
+            <div class="doc-meta"><b>Note No:</b> <span th:text="${doc.docNumber}">CN-26-0001</span></div>
+            <div class="doc-meta"><b>Date:</b> <span th:text="${fmt.date(doc.issuedOn)}">01 Jan 2026</span></div>
+            <div class="doc-meta"><b>Against Invoice:</b> <span th:text="${fmt.orElse(doc.originalInvoiceNo, '-')}">BK10001</span></div>
+        </td>
+    </tr>
+</table>
+
+<!-- PARTIES -->
+<table class="parties">
+    <tr>
+        <td style="padding-right:6px;">
+            <div class="pbox pbox-gold">
+                <div class="plabel">Issued By</div>
+                <div class="pname" th:text="${doc.companyName}">Company</div>
+                <div class="pline" th:if="${doc.companyPhone != null}" th:text="|Phone: ${doc.companyPhone}|">Phone</div>
+                <div class="pline" th:if="${doc.companyEmail != null}" th:text="|Email: ${doc.companyEmail}|">Email</div>
+                <div class="pline" th:if="${doc.companyWebsite != null}" th:text="${doc.companyWebsite}">Website</div>
+            </div>
+        </td>
+        <td style="padding-left:6px;">
+            <div class="pbox">
+                <div class="plabel">Issued To</div>
+                <div class="pname" th:text="${fmt.orElse(doc.customerName, 'Guest')}">Guest</div>
+                <div class="pline" th:if="${doc.customerCode != null}" th:text="|Customer ID: ${doc.customerCode}|">Code</div>
+                <div class="pline" th:if="${doc.customerPhone != null}" th:text="|Phone: ${doc.customerPhone}|">Phone</div>
+                <div class="pline" th:if="${doc.customerEmail != null}" th:text="|Email: ${doc.customerEmail}|">Email</div>
+                <div class="pline" th:if="${doc.customerAddress != null}" th:text="${doc.customerAddress}">Address</div>
+                <div class="pline" th:if="${doc.customerPan != null}" th:text="|PAN: ${doc.customerPan}|">PAN</div>
+            </div>
+        </td>
+    </tr>
+</table>
+
+<!-- CANCELLATION SUMMARY -->
+<div class="sec"><span class="sec-t">Cancellation Details</span></div>
+<table class="items">
+    <tr>
+        <th style="width:30%;">Destination</th>
+        <th style="width:23%;">Travel Date</th>
+        <th style="width:23%;">Booking Date</th>
+        <th style="width:24%;">Cancelled On</th>
+    </tr>
+    <tr>
+        <td th:text="${fmt.orElse(doc.destination, '-')}">Destination</td>
+        <td th:text="${fmt.date(doc.travelDate)}">-</td>
+        <td th:text="${fmt.date(doc.bookingDate)}">-</td>
+        <td th:text="${fmt.date(doc.cancelledOn)}">-</td>
+    </tr>
+</table>
+<div class="note-reason" th:if="${doc.reason != null and !doc.reason.isEmpty()}"
+     th:text="|Reason: ${fmt.plain(doc.reason)}|">Reason</div>
+
+<!-- RETENTION + SETTLEMENT -->
+<table class="charges">
+    <tr>
+        <td style="padding-right:8px;">
+            <div class="sec"><span class="sec-t">Retained by Company</span></div>
+            <table class="sumt">
+                <tr>
+                    <td class="lab">Original Invoice Value</td>
+                    <td class="val" th:text="${fmt.inr(doc.originalTotalPayable)}">Rs. 0</td>
+                </tr>
+                <tr>
+                    <td class="lab">Amount Considered</td>
+                    <td class="val" th:text="${fmt.inr(doc.baseConsidered)}">Rs. 0</td>
+                </tr>
+                <tr>
+                    <td class="lab">Cancellation Charge</td>
+                    <td class="val" th:text="${fmt.inr(doc.chargeBase)}">Rs. 0</td>
+                </tr>
+                <tr th:if="${doc.gstOnCharge != null}">
+                    <td class="lab">GST on Cancellation Charge</td>
+                    <td class="val" th:text="${fmt.inr(doc.gstOnCharge)}">Rs. 0</td>
+                </tr>
+                <tr th:if="${doc.tcsRetained != null}">
+                    <td class="lab">TCS Retained</td>
+                    <td class="val" th:text="${fmt.inr(doc.tcsRetained)}">Rs. 0</td>
+                </tr>
+                <tr class="total">
+                    <td>Total Retained</td>
+                    <td class="r" th:text="${fmt.inr(doc.totalRetained)}">Rs. 0</td>
+                </tr>
+            </table>
+        </td>
+        <td style="padding-left:8px;">
+            <div class="sec"><span class="sec-t">Settlement</span></div>
+            <table class="sumt">
+                <tr class="paid">
+                    <td class="lab">Amount Paid by Customer</td>
+                    <td class="val" th:text="${fmt.inr(doc.paidAmount)}">Rs. 0</td>
+                </tr>
+                <tr>
+                    <td class="lab">Less: Total Retained</td>
+                    <td class="val" th:text="${fmt.inr(doc.totalRetained)}">Rs. 0</td>
+                </tr>
+                <tr class="refund" th:if="${!doc.customerOwes}">
+                    <td>Refund Due to Customer</td>
+                    <td class="r" th:text="${fmt.inr(doc.refundToCustomer)}">Rs. 0</td>
+                </tr>
+                <tr class="owed" th:if="${doc.customerOwes}">
+                    <td>Amount Payable by Customer</td>
+                    <td class="r" th:text="${fmt.inr(doc.customerBalanceOwed)}">Rs. 0</td>
+                </tr>
+            </table>
+            <div class="foot-note" style="margin-top:8px;" th:if="${!doc.customerOwes}">
+                The refund will be processed to the original mode of payment. A refund voucher
+                is issued separately once the amount is disbursed.
+            </div>
+            <div class="foot-note" style="margin-top:8px;" th:if="${doc.customerOwes}">
+                The retained cancellation charge exceeds the amount paid. The balance shown above
+                is payable by the customer.
+            </div>
+        </td>
+    </tr>
+</table>
+
+<!-- FOOTER -->
+<div class="foot">
+    <div class="foot-ty" th:text="${doc.customerOwes} ? 'Debit Note' : 'Credit Note'">Credit Note</div>
+    <div class="foot-note" style="margin-top:6px;">
+        This is a computer-generated cancellation note issued against the original tax invoice and
+        does not require a physical signature. Cancellation charges, GST and TCS are applied per the
+        cancellation policy in force at the time of booking. For any queries, contact
+        <span th:text="${fmt.orElse(doc.companyEmail, doc.companyPhone)}">us</span>.
+    </div>
+</div>
+
+</body>
+</html>

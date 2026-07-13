@@ -4,6 +4,7 @@ import com.crm.travelcrm.common.dto.ApiResponse;
 import com.crm.travelcrm.common.dto.PagedApiResponse;
 import com.crm.travelcrm.common.dto.PaginationMeta;
 import com.crm.travelcrm.quotation.dto.QuotationEmailRequestDto;
+import com.crm.travelcrm.quotation.dto.QuotationWhatsAppRequestDto;
 import com.crm.travelcrm.quotation.dto.QuotationPdfResource;
 import com.crm.travelcrm.quotation.dto.QuotationRequestDto;
 import com.crm.travelcrm.quotation.dto.QuotationResponseDto;
@@ -172,6 +173,18 @@ public class QuotationController {
         log.info("POST /api/quotations/{}/send-email -> {}", publicId, request.getToEmail());
         quotationService.sendEmail(publicId, request);
         return ResponseEntity.ok(ApiResponse.success("Quotation emailed successfully"));
+    }
+
+    // ── Send WhatsApp ──────────────────────────────────────────────────────────
+    @PostMapping("/{publicId}/send-whatsapp")
+    @PreAuthorize("hasAuthority('QUOTATION_UPDATE')")
+    public ResponseEntity<ApiResponse<Void>> sendWhatsApp(
+            @PathVariable UUID publicId,
+            @Valid @RequestBody(required = false) QuotationWhatsAppRequestDto request) {
+        log.info("POST /api/quotations/{}/send-whatsapp", publicId);
+        quotationService.sendWhatsApp(publicId,
+                request != null ? request : new QuotationWhatsAppRequestDto());
+        return ResponseEntity.ok(ApiResponse.success("Quotation sent via WhatsApp"));
     }
 
     // ── Weblink view analytics ──────────────────────────────────────────────--

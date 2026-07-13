@@ -35,7 +35,7 @@ import java.util.UUID;
 @PreAuthorize("isAuthenticated()")
 public class ChatController {
 
-    /** Two-minute window for a single answer (Ollama can be slow on first token). */
+    /** Two-minute window for a single answer (covers Groq latency + multi-step tool calls). */
     private static final long SSE_TIMEOUT_MS = 120_000L;
 
     private final ChatSessionService chatSessionService;

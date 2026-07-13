@@ -46,6 +46,10 @@ public enum PlatformAuditAction {
     FEATURE_FLAG_CHANGE,
     CONFIG_CHANGE,
 
+    // ── Usage metering & quotas (Phase: Usage & Quotas) ──────────────────
+    QUOTA_OVERRIDE,          // SuperAdmin manually changed a tenant's usage limits
+    USAGE_LIMIT_EXCEEDED,    // a tenant crossed a hard usage limit (recorded by the alert job)
+
     // ── Support / Ops (Phases: Support, Danger Zone) ─────────────────────
     ANNOUNCEMENT_SEND,
     MAINTENANCE_TOGGLE,

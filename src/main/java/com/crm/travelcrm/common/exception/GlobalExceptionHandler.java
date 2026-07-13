@@ -444,6 +444,10 @@ public class GlobalExceptionHandler {
      */
     private static String friendlyConstraintMessage(String constraintName) {
         String n = constraintName.toLowerCase();
+        // A concurrent/double cancel loses the race on the 1:1 booking_cancellations row.
+        if (n.contains("cancellation"))                 return "This booking is already cancelled.";
+        // A resubmitted refund loses the race on the idempotency-key unique index.
+        if (n.contains("idem"))                         return "This refund was already recorded.";
         if (n.contains("email"))                        return "An account with this email address already exists.";
         if (n.contains("phone") || n.contains("mobile")) return "This phone number is already registered.";
         if (n.contains("gst"))                          return "This GST number is already registered.";
@@ -505,6 +509,7 @@ public class GlobalExceptionHandler {
     }
     /** {@code leadSource} → "Lead Source". Safe: these are our own identifiers, never user data. */
     private static String humanize(String field) {
+
         if (field == null || field.isBlank()) return "value";
         String spaced = field.replaceAll("([a-z0-9])([A-Z])", "$1 $2");
         return Character.toUpperCase(spaced.charAt(0)) + spaced.substring(1);

@@ -1,0 +1,237 @@
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8" />
+    <title>Tax Invoice</title>
+    <!--
+      BOOKING TAX INVOICE  (Flying Saucer + OpenPDF / Thymeleaf, XML mode)
+      FS-safe: tables + inline-block only. NO flex / grid / calc() / var() / box-shadow.
+      Model: ${doc} (BookingDocumentModel) + company* vars + ${fmt} (PdfFormat)
+      Palette: gold #eeda92 (light band) + deep gold #b8891f (accents/text)
+    -->
+    <style th:inline="none">
+        @page { size: A4; margin: 14mm 13mm 16mm 13mm; }
+        * { box-sizing: border-box; }
+        body { font-family: "DejaVu Sans", Helvetica, Arial, sans-serif;
+               font-size: 10px; line-height: 1.5; color: #2b2b2b; margin: 0; padding: 0; }
+        table { border-collapse: collapse; width: 100%; }
+        td, th { vertical-align: top; }
+        .r { text-align: right; } .c { text-align: center; }
+        .muted { color: #7a7a7a; }
+
+        /* Header */
+        .head { border-bottom: 3px solid #b8891f; padding-bottom: 12px; }
+        .brand-name { font-size: 20px; font-weight: bold; color: #1f2937; letter-spacing: 0.3px; }
+        .brand-logo { height: 42px; }
+        .brand-sub  { font-size: 8.5px; color: #7a7a7a; margin-top: 3px; }
+        .doc-badge  { display: inline-block; background-color: #eeda92; color: #6b4e12;
+                      font-size: 15px; font-weight: bold; letter-spacing: 2px;
+                      padding: 7px 16px; border-radius: 6px; text-transform: uppercase; }
+        .doc-meta   { font-size: 8.5px; color: #555; margin-top: 7px; }
+        .doc-meta b { color: #1f2937; }
+
+        /* Parties */
+        .parties { margin-top: 16px; }
+        .parties td { width: 50%; padding: 0; vertical-align: top; }
+        .pbox { border: 1px solid #ece3c9; border-radius: 8px; padding: 11px 13px; }
+        .pbox-gold { background-color: #fdf9ec; }
+        .plabel { font-size: 7px; font-weight: bold; letter-spacing: 1.4px;
+                  text-transform: uppercase; color: #b8891f; margin-bottom: 4px; }
+        .pname  { font-size: 12px; font-weight: bold; color: #1f2937; }
+        .pline  { font-size: 9px; color: #444; margin-top: 2px; }
+
+        /* Section title */
+        .sec { border-left: 4px solid #b8891f; padding-left: 10px; margin: 18px 0 8px 0; }
+        .sec-t { font-size: 11px; font-weight: bold; color: #1f2937; text-transform: uppercase; letter-spacing: 0.8px; }
+
+        /* Items table */
+        table.items { border: 1px solid #e7e0cb; border-radius: 8px; overflow: hidden; }
+        table.items th { background-color: #eeda92; color: #5c4310; font-size: 8px;
+                         text-transform: uppercase; letter-spacing: 0.8px; font-weight: bold;
+                         padding: 8px 10px; text-align: left; }
+        table.items td { padding: 8px 10px; font-size: 9.5px; border-top: 1px solid #f0ead8; color: #333; }
+        table.items tr.zebra td { background-color: #fcfaf2; }
+        .it-title { font-weight: bold; color: #1f2937; }
+        .it-desc  { font-size: 8px; color: #8a8a8a; margin-top: 2px; }
+        .chip { display: inline-block; padding: 2px 8px; border-radius: 9px; font-size: 7px;
+                font-weight: bold; letter-spacing: 0.4px; text-transform: uppercase; }
+        .chip-ok { background-color: #dcfce7; color: #15803d; }
+        .chip-pd { background-color: #fef3c7; color: #92600b; }
+        .chip-no { background-color: #fee2e2; color: #b91c1c; }
+
+        /* Charges summary */
+        .charges { margin-top: 16px; }
+        .charges td { width: 50%; vertical-align: top; }
+        table.sumt { border: 1px solid #e7e0cb; border-radius: 8px; overflow: hidden; }
+        table.sumt td { padding: 7px 13px; font-size: 9.5px; border-top: 1px solid #f0ead8; }
+        table.sumt tr:first-child td { border-top: none; }
+        .sumt .lab { color: #555; }
+        .sumt .val { text-align: right; font-weight: bold; color: #1f2937; }
+        .sumt .total td { background-color: #eeda92; color: #5c4310; font-size: 11px; font-weight: bold; }
+        .sumt .due   td { background-color: #fff7ed; color: #9a3412; font-weight: bold; }
+        .sumt .paid  td { color: #15803d; font-weight: bold; }
+
+        /* Payments */
+        table.pay { border: 1px solid #e7e0cb; border-radius: 8px; overflow: hidden; margin-top: 6px; }
+        table.pay th { background-color: #f4ecd4; color: #6b4e12; font-size: 7.5px; text-transform: uppercase;
+                       letter-spacing: 0.6px; font-weight: bold; padding: 6px 10px; text-align: left; }
+        table.pay td { padding: 6px 10px; font-size: 9px; border-top: 1px solid #f0ead8; color: #333; }
+
+        /* Footer */
+        .foot { margin-top: 22px; border-top: 1px solid #e7e0cb; padding-top: 10px; }
+        .foot-note { font-size: 8px; color: #8a8a8a; line-height: 1.6; }
+        .foot-ty { font-size: 11px; font-weight: bold; color: #b8891f; letter-spacing: 1px; }
+        .amt-words { font-size: 8.5px; color: #555; margin-top: 8px; font-style: italic; }
+    </style>
+</head>
+<body>
+
+<!-- HEADER -->
+<table class="head">
+    <tr>
+        <td style="width:58%; vertical-align:middle;">
+            <img class="brand-logo" th:if="${companyLogoUrl != null and !companyLogoUrl.isEmpty()}" th:src="${companyLogoUrl}" />
+            <div class="brand-name" th:if="${companyLogoUrl == null or companyLogoUrl.isEmpty()}" th:text="${companyName}">Company</div>
+            <div class="brand-sub" th:text="${fmt.orElse(companyAddress, companyTagline)}">Address</div>
+            <div class="brand-sub" th:if="${companyGst != null}" th:text="|GSTIN: ${companyGst}|">GST</div>
+        </td>
+        <td class="r" style="width:42%; vertical-align:middle;">
+            <div class="doc-badge">Tax Invoice</div>
+            <div class="doc-meta"><b>Invoice No:</b> <span th:text="${doc.bookingCode}">BK10001</span></div>
+            <div class="doc-meta"><b>Date:</b> <span th:text="${fmt.date(generatedOn)}">01 Jan 2026</span></div>
+            <div class="doc-meta"><b>Booking Date:</b> <span th:text="${fmt.date(doc.bookingDate)}">-</span></div>
+        </td>
+    </tr>
+</table>
+
+<!-- PARTIES -->
+<table class="parties">
+    <tr>
+        <td style="padding-right:6px;">
+            <div class="pbox pbox-gold">
+                <div class="plabel">Billed By</div>
+                <div class="pname" th:text="${companyName}">Company</div>
+                <div class="pline" th:if="${companyPhone != null}" th:text="|Phone: ${companyPhone}|">Phone</div>
+                <div class="pline" th:if="${companyEmail != null}" th:text="|Email: ${companyEmail}|">Email</div>
+                <div class="pline" th:if="${companyWebsite != null}" th:text="${companyWebsite}">Website</div>
+            </div>
+        </td>
+        <td style="padding-left:6px;">
+            <div class="pbox">
+                <div class="plabel">Billed To</div>
+                <div class="pname" th:text="${fmt.orElse(doc.customer.name, 'Guest')}">Guest</div>
+                <div class="pline" th:if="${doc.customer.code != null}" th:text="|Customer ID: ${doc.customer.code}|">Code</div>
+                <div class="pline" th:if="${doc.customer.phone != null}" th:text="|Phone: ${doc.customer.phone}|">Phone</div>
+                <div class="pline" th:if="${doc.customer.email != null}" th:text="|Email: ${doc.customer.email}|">Email</div>
+                <div class="pline" th:if="${doc.customer.address != null}" th:text="${doc.customer.address}">Address</div>
+                <div class="pline" th:if="${doc.customer.panNo != null}" th:text="|PAN: ${doc.customer.panNo}|">PAN</div>
+            </div>
+        </td>
+    </tr>
+</table>
+
+<!-- TRIP SUMMARY -->
+<div class="sec"><span class="sec-t">Trip Details</span></div>
+<table class="items">
+    <tr>
+        <th style="width:34%;">Destination</th>
+        <th style="width:22%;">Travel Date</th>
+        <th style="width:22%;">Booking Status</th>
+        <th style="width:22%;">Payment Status</th>
+    </tr>
+    <tr>
+        <td th:text="${fmt.orElse(doc.destination, '-')}">Destination</td>
+        <td th:text="${fmt.date(doc.travelDate)}">-</td>
+        <td><span class="chip chip-pd" th:text="${doc.status}">STATUS</span></td>
+        <td><span class="chip chip-pd" th:text="${doc.paymentStatus}">STATUS</span></td>
+    </tr>
+</table>
+
+<!-- SERVICE LINES (only when present) -->
+<div th:if="${doc.services != null and !doc.services.isEmpty()}">
+    <div class="sec"><span class="sec-t">Services</span></div>
+    <table class="items">
+        <tr>
+            <th style="width:16%;">Type</th>
+            <th style="width:40%;">Service</th>
+            <th style="width:22%;">Dates</th>
+            <th style="width:22%;" class="r">Amount</th>
+        </tr>
+        <tr th:each="s, st : ${doc.services}" th:class="${st.index % 2 == 1} ? 'zebra' : ''">
+            <td th:text="${fmt.orElse(s.serviceType, '-')}">Type</td>
+            <td>
+                <div class="it-title" th:text="${s.title}">Title</div>
+                <div class="it-desc" th:if="${s.description != null and !s.description.isEmpty()}"
+                     th:text="${fmt.plain(s.description)}">Desc</div>
+            </td>
+            <td th:text="${s.serviceDate != null} ? (${s.endDate != null} ? |${fmt.date(s.serviceDate)} - ${fmt.date(s.endDate)}| : ${fmt.date(s.serviceDate)}) : '-'">-</td>
+            <td class="r" th:text="${s.cost != null} ? ${fmt.inr(s.cost)} : '-'">Rs. 0</td>
+        </tr>
+    </table>
+</div>
+
+<!-- CHARGES + AMOUNT SUMMARY -->
+<table class="charges">
+    <tr>
+        <td style="padding-right:8px;">
+            <div class="sec"><span class="sec-t">Payments Received</span></div>
+            <table class="pay" th:if="${doc.payments != null and !doc.payments.isEmpty()}">
+                <tr>
+                    <th style="width:26%;">Date</th>
+                    <th style="width:26%;">Method</th>
+                    <th style="width:24%;">Reference</th>
+                    <th style="width:24%;" class="r">Amount</th>
+                </tr>
+                <tr th:each="p : ${doc.payments}">
+                    <td th:text="${fmt.date(p.paymentDate)}">-</td>
+                    <td th:text="${fmt.orElse(p.method, '-')}">-</td>
+                    <td th:text="${fmt.orElse(p.reference, '-')}">-</td>
+                    <td class="r" th:text="${fmt.inr(p.amount)}">Rs. 0</td>
+                </tr>
+            </table>
+            <div class="foot-note" th:if="${doc.payments == null or doc.payments.isEmpty()}">
+                No payments recorded yet.
+            </div>
+        </td>
+        <td style="padding-left:8px;">
+            <table class="sumt">
+                <tr>
+                    <td class="lab">Base Amount</td>
+                    <td class="val" th:text="${fmt.inr(doc.customerAmount)}">Rs. 0</td>
+                </tr>
+                <tr>
+                    <td class="lab" th:text="|GST (${doc.gstRatePct}%)|">GST</td>
+                    <td class="val" th:text="${fmt.inr(doc.gst)}">Rs. 0</td>
+                </tr>
+                <tr>
+                    <td class="lab" th:text="|TCS (${doc.tcsRatePct}%)|">TCS</td>
+                    <td class="val" th:text="${fmt.inr(doc.tcs)}">Rs. 0</td>
+                </tr>
+                <tr class="total">
+                    <td>Total Payable</td>
+                    <td class="r" th:text="${fmt.inr(doc.totalPayable)}">Rs. 0</td>
+                </tr>
+                <tr class="paid">
+                    <td class="lab">Amount Paid</td>
+                    <td class="val" th:text="${fmt.inr(doc.paidAmount)}">Rs. 0</td>
+                </tr>
+                <tr class="due">
+                    <td>Balance Due</td>
+                    <td class="r" th:text="${fmt.inr(doc.pendingAmount)}">Rs. 0</td>
+                </tr>
+            </table>
+        </td>
+    </tr>
+</table>
+
+<!-- FOOTER -->
+<div class="foot">
+    <div class="foot-ty">Thank you for booking with <span th:text="${companyName}">us</span>!</div>
+    <div class="foot-note" style="margin-top:6px;">
+        This is a computer-generated tax invoice and does not require a physical signature.
+        GST and TCS are levied per applicable regulations. For any billing queries, contact
+        <span th:text="${fmt.orElse(companyEmail, companyPhone)}">us</span>.
+    </div>
+</div>
+
+</body>
+</html>
