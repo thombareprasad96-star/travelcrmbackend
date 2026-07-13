@@ -1,5 +1,6 @@
 package com.crm.travelcrm.common.entity;
 
+import com.crm.travelcrm.common.listener.OwnershipEntityListener;
 import com.crm.travelcrm.common.listener.TenantEntityListener;
 import jakarta.persistence.*;
 import lombok.*;
@@ -14,7 +15,7 @@ import org.hibernate.annotations.ParamDef;
 @AllArgsConstructor
 @MappedSuperclass
 @SuperBuilder
-@EntityListeners(TenantEntityListener.class)
+@EntityListeners({TenantEntityListener.class, OwnershipEntityListener.class})
 @FilterDef(
         name       = "tenantFilter",
         parameters = @ParamDef(name = "tenantId", type = Long.class)

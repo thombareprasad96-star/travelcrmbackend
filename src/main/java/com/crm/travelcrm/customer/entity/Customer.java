@@ -1,6 +1,7 @@
 package com.crm.travelcrm.customer.entity;
 
 import com.crm.travelcrm.common.entity.BaseTenantEntity;
+import com.crm.travelcrm.common.entity.Ownable;
 import com.crm.travelcrm.customer.enums.CommunicationPreference;
 import com.crm.travelcrm.customer.enums.CustomerStatus;
 import com.crm.travelcrm.customer.enums.CustomerType;
@@ -46,7 +47,13 @@ import java.time.LocalDate;
 @NoArgsConstructor
 @AllArgsConstructor
 @SuperBuilder
-public class Customer extends BaseTenantEntity {
+public class Customer extends BaseTenantEntity implements Ownable {
+
+    // Row-level owner: the sub-agent / user who created this customer (per-user data scoping).
+    // Nullable — pre-existing & system rows have none. Stamped on create by OwnershipEntityListener;
+    // read by CustomerAccessGuard + list filters (Phase 2). Distinct from created_by (audit email).
+    @Column(name = "owner_user_id")
+    private Long ownerUserId;
 
     /** Human-friendly business code, e.g. {@code CUS10001}. Unique per tenant. */
     @Column(name = "customer_code", nullable = false, length = 20)

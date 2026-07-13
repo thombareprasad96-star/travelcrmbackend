@@ -114,7 +114,7 @@ UPDATE vendors SET row_version = 0 WHERE row_version IS NULL;
 -- (DROP-then-ADD on every startup keeps it idempotent.)
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
 ALTER TABLE users ADD CONSTRAINT users_role_check
-        CHECK (role IN ('SUPERADMIN','TENANT_ADMIN','MANAGER','TRAVEL_AGENT','STAFF','ACCOUNTANT'));
+        CHECK (role IN ('SUPERADMIN','TENANT_ADMIN','MANAGER','TRAVEL_AGENT','STAFF','ACCOUNTANT','SUB_AGENT'));
 
 -- ── PlatformAuditAction enum CHECK constraint refresh ────────────────────────
 -- Same story as users_role_check: Hibernate generated platform_audit_logs_action_check from

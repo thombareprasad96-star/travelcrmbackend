@@ -47,6 +47,7 @@ public interface CustomerMapper {
     @Mapping(target = "updatedBy",    ignore = true)
     @Mapping(target = "deletedAt",    ignore = true)
     @Mapping(target = "deletedBy",    ignore = true)
+    @Mapping(target = "ownerUserId",  ignore = true)  // stamped on persist by OwnershipEntityListener
     Customer toEntity(CreateCustomerRequest request);
 
     // ── Update Request → existing Entity (in place) ─────────────────────────────
@@ -61,5 +62,6 @@ public interface CustomerMapper {
     @Mapping(target = "updatedBy",    ignore = true)
     @Mapping(target = "deletedAt",    ignore = true)
     @Mapping(target = "deletedBy",    ignore = true)
+    @Mapping(target = "ownerUserId",  ignore = true)  // owner never changes after creation
     void updateEntity(UpdateCustomerRequest request, @MappingTarget Customer customer);
 }

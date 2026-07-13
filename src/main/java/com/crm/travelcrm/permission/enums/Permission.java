@@ -175,6 +175,19 @@ public enum Permission {
                     VENDOR_READ, VENDOR_UPDATE,
                     FLEET_READ,
                     REPORT_VIEW, MASTER_READ);
+
+            // B2B franchise partner — its OWN sales pipeline only (row-scope OWN via ScopeResolver).
+            // Soft-delete allowed on own leads/quotations; deliberately NO booking cancel/refund/delete,
+            // NO customer delete, NO vendors (supplier cost/commission is parent-only), NO reports
+            // (would leak tenant-wide revenue/profit), NO admin/settings/fleet/trash. Master data is
+            // read-only so the sub-agent can pick the parent's hotels/vehicles when building a quote.
+            case SUB_AGENT -> EnumSet.of(
+                    LEAD_READ, LEAD_CREATE, LEAD_UPDATE, LEAD_DELETE,
+                    QUOTATION_READ, QUOTATION_CREATE, QUOTATION_UPDATE, QUOTATION_DELETE,
+                    BOOKING_READ, BOOKING_CREATE, BOOKING_UPDATE,
+                    CUSTOMER_READ, CUSTOMER_CREATE, CUSTOMER_UPDATE,
+                    REMINDER_READ, REMINDER_CREATE, REMINDER_UPDATE, REMINDER_DELETE,
+                    MASTER_READ);
         };
     }
 

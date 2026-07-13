@@ -1,6 +1,7 @@
 package com.crm.travelcrm.quotation.entity;
 
 import com.crm.travelcrm.common.entity.BaseTenantEntity;
+import com.crm.travelcrm.common.entity.Ownable;
 import com.crm.travelcrm.lead.enums.LeadStage;
 import com.crm.travelcrm.quotation.enums.DiscountType;
 import com.crm.travelcrm.quotation.enums.QuotationStage;
@@ -43,7 +44,13 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 @SuperBuilder
-public class Quotation extends BaseTenantEntity {
+public class Quotation extends BaseTenantEntity implements Ownable {
+
+    // Row-level owner: the sub-agent / user who created this quotation (per-user data scoping).
+    // Nullable — pre-existing & system rows have none. Stamped on create by OwnershipEntityListener;
+    // read by QuotationAccessGuard + list filters (Phase 2). Distinct from created_by (audit email).
+    @Column(name = "owner_user_id")
+    private Long ownerUserId;
 
     // ── Lead link (cross-aggregate logical FK) ────────────────────────────────
     @Column(name = "lead_id")
