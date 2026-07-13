@@ -95,4 +95,11 @@ public class BookingSpecification {
     public static Specification<Booking> isActive() {
         return (root, query, cb) -> cb.isNull(root.get("deletedAt"));
     }
+
+    // ── Owner scope (B2B sub-agent row-level restriction) ────────────────────
+    // AND-ed onto list/search/filter specs ONLY when the caller is a sub-agent, so a sub-agent
+    // sees just the bookings it owns. Every other role skips this predicate (tenant-wide, unchanged).
+    public static Specification<Booking> ownedBy(Long ownerUserId) {
+        return (root, query, cb) -> cb.equal(root.get("ownerUserId"), ownerUserId);
+    }
 }
