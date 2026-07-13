@@ -53,6 +53,7 @@ public class ReminderController {
     }
 
     @GetMapping("/stats")
+    @PreAuthorize("hasAuthority('CRM_FULL')")   // tenant-wide aggregate — blocks sub-agents (no CRM_FULL)
     public ResponseEntity<ReminderStatsDto> getStats() {
         return ResponseEntity.ok(reminderService.getStats());
     }
@@ -73,6 +74,7 @@ public class ReminderController {
     }
 
     @GetMapping(value = "/export/csv", produces = "text/csv")
+    @PreAuthorize("hasAuthority('CRM_FULL')")   // full-tenant CSV export — blocks sub-agents
     public ResponseEntity<byte[]> exportCsv() {
         byte[] csv = reminderService.exportCsv();
         return ResponseEntity.ok()
@@ -127,7 +129,7 @@ public class ReminderController {
     }
 
     @PatchMapping("/complete-all-overdue")
-    @PreAuthorize("hasAuthority('REMINDER_UPDATE')")
+    @PreAuthorize("hasAuthority('CRM_FULL')")   // tenant-wide bulk mutation — blocks sub-agents (they complete individually)
     public ResponseEntity<Integer> completeAllOverdue() {
         return ResponseEntity.ok(reminderService.completeAllOverdue());
     }

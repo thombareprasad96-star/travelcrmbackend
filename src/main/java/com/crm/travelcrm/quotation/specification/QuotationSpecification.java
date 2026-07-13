@@ -62,4 +62,10 @@ public final class QuotationSpecification {
             return cb.and(predicates.toArray(new Predicate[0]));
         };
     }
+
+    // ── Owner scope (B2B sub-agent row-level restriction) ────────────────────
+    // AND-ed onto the list spec ONLY when the caller is a sub-agent; other roles skip it (unchanged).
+    public static Specification<Quotation> ownedBy(Long ownerUserId) {
+        return (root, query, cb) -> cb.equal(root.get("ownerUserId"), ownerUserId);
+    }
 }

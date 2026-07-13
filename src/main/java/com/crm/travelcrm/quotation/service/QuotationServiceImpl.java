@@ -23,6 +23,7 @@ import com.crm.travelcrm.quotation.enums.QuotationStage;
 import com.crm.travelcrm.quotation.mapper.QuotationMapper;
 import com.crm.travelcrm.quotation.repository.QuotationRepository;
 import com.crm.travelcrm.quotation.specification.QuotationSpecification;
+import com.crm.travelcrm.permission.service.SubAgentScope;
 import jakarta.mail.internet.MimeMessage;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -60,6 +61,7 @@ public class QuotationServiceImpl implements QuotationService {
     private final TenantMailSenderFactory tenantMailSenderFactory;
     private final EmailAuditService emailAudit;
     private final WhatsAppMessagingService whatsAppMessaging;
+    private final SubAgentScope subAgentScope;
 
     @Value("${app.public-base-url:http://localhost:8080}")
     private String publicBaseUrl;
@@ -120,6 +122,7 @@ public class QuotationServiceImpl implements QuotationService {
         Quotation q = quotationRepository
                 .findByPublicIdAndTenantIdAndDeletedAtIsNull(publicId, tenantId)
                 .orElseThrow(() -> new ResourceNotFoundException("Quotation not found: " + publicId));
+        subAgentScope.assertVisible(q, publicId);   // sub-agent may only edit its own quotation
 
         quotationMapper.applyRequest(request, q);
         // Content changed — drop the cached PDF so the next GET /pdf regenerates it.
@@ -165,6 +168,8 @@ public class QuotationServiceImpl implements QuotationService {
         Specification<Quotation> spec = QuotationSpecification.base(tenantId)
                 .and(QuotationSpecification.search(keyword))
                 .and(QuotationSpecification.filter(stage, leadId, null, null));
+        Long ownerFilter = subAgentScope.ownerFilter();
+        if (ownerFilter != null) spec = spec.and(QuotationSpecification.ownedBy(ownerFilter));
 
         Page<QuotationSummaryDto> result =
                 quotationRepository.findAll(spec, pageable).map(quotationMapper::toSummary);
@@ -177,9 +182,11 @@ public class QuotationServiceImpl implements QuotationService {
     @Transactional(readOnly = true)
     public List<QuotationSummaryDto> getByLead(UUID leadPublicId) {
         Long tenantId = currentTenantId();
+        Long ownerFilter = subAgentScope.ownerFilter();
         return quotationRepository
                 .findAllByLeadPublicIdAndTenantIdAndDeletedAtIsNullOrderByCreatedAtDesc(leadPublicId, tenantId)
                 .stream()
+                .filter(x -> ownerFilter == null || ownerFilter.equals(x.getOwnerUserId()))
                 .map(quotationMapper::toSummary)
                 .toList();
     }
@@ -188,8 +195,10 @@ public class QuotationServiceImpl implements QuotationService {
     @Transactional(readOnly = true)
     public QuotationSummaryDto getLatestByLead(UUID leadPublicId) {
         Long tenantId = currentTenantId();
+        Long ownerFilter = subAgentScope.ownerFilter();
         return quotationRepository
                 .findFirstByLeadPublicIdAndTenantIdAndDeletedAtIsNullOrderByCreatedAtDescIdDesc(leadPublicId, tenantId)
+                .filter(x -> ownerFilter == null || ownerFilter.equals(x.getOwnerUserId()))
                 .map(quotationMapper::toSummary)
                 .orElse(null);
     }
@@ -498,9 +507,13 @@ public class QuotationServiceImpl implements QuotationService {
 
     private Quotation loadOwned(UUID publicId) {
         Long tenantId = currentTenantId();
-        return quotationRepository
+        Quotation q = quotationRepository
                 .findByPublicIdAndTenantIdAndDeletedAtIsNull(publicId, tenantId)
                 .orElseThrow(() -> new ResourceNotFoundException("Quotation not found: " + publicId));
+        // Sub-agent row scope: 404 if a sub-agent doesn't own it (no-op for every other role). This is
+        // the single by-id chokepoint — covers get/update-stage/delete/duplicate/new-version/pdf/share.
+        subAgentScope.assertVisible(q, publicId);
+        return q;
     }
 
     /**

@@ -39,4 +39,10 @@ public final class CustomerSpecification {
         return (root, query, cb) ->
                 tier == null ? cb.conjunction() : cb.equal(root.get("tier"), tier);
     }
+
+    // ── Owner scope (B2B sub-agent row-level restriction) ────────────────────
+    // AND-ed on ONLY when the caller is a sub-agent; other roles skip it (tenant-wide, unchanged).
+    public static Specification<Customer> ownedBy(Long ownerUserId) {
+        return (root, query, cb) -> cb.equal(root.get("ownerUserId"), ownerUserId);
+    }
 }

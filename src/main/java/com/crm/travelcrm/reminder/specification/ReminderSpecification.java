@@ -38,4 +38,10 @@ public final class ReminderSpecification {
             return cb.and(predicates.toArray(new Predicate[0]));
         };
     }
+
+    // ── Owner scope (B2B sub-agent row-level restriction) ────────────────────
+    // AND-ed on ONLY when the caller is a sub-agent; other roles skip it (tenant-wide, unchanged).
+    public static Specification<Reminder> ownedBy(Long ownerUserId) {
+        return (root, query, cb) -> cb.equal(root.get("ownerUserId"), ownerUserId);
+    }
 }
