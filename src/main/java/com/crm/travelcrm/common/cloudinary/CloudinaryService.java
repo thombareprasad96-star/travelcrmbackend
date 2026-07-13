@@ -18,8 +18,13 @@ public class CloudinaryService {
     private final Cloudinary cloudinary;
     /** Records per-tenant storage usage (impl in the platform usage module); best-effort. */
     private final StorageMeter storageMeter;
+    /** Hard-enforces the tenant's storage cap before an upload (impl in the platform usage module). */
+    private final StorageQuota storageQuota;
 
     public String uploadImage(MultipartFile file, String folder) {
+        // Block user-driven uploads that would exceed the tenant's plan storage (403). System-generated
+        // assets go through uploadRaw(), which is intentionally NOT gated.
+        storageQuota.enforceWithinQuota(file.getSize());
         try {
             Map<?, ?> result = cloudinary.uploader().upload(
                     file.getBytes(),

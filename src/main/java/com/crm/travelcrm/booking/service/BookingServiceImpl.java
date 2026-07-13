@@ -236,6 +236,7 @@ public class BookingServiceImpl implements BookingService {
             boolean belongsToLead = Objects.equals(quotation.getLeadId(), lead.getId())
                     || Objects.equals(quotation.getLeadPublicId(), lead.getPublicId());
             if (!belongsToLead) {
+
                 throw new BusinessException(
                         "The selected quotation does not belong to this lead.", HttpStatus.BAD_REQUEST);
             }

@@ -122,6 +122,22 @@ ALTER TABLE users ADD CONSTRAINT users_role_check
 -- existing constraint. Action values added later (QUOTA_OVERRIDE, USAGE_LIMIT_EXCEEDED) are
 -- rejected at the DB level; because the audit recorder writes best-effort, that rejection would
 -- otherwise surface as a failed platform operation. Drop + recreate with the full current set.
+-- ── TenantStatus enum CHECK constraint refresh ──────────────────────────────
+-- Hibernate may have generated tenants_status_check from TenantStatus at first create; ddl-auto=update
+-- never alters it, so the later PAST_DUE value (dunning grace) could be rejected at the DB level.
+-- Drop + recreate with the full current set (incl. the deprecated legacy INACTIVE so old rows validate).
+ALTER TABLE tenants DROP CONSTRAINT IF EXISTS tenants_status_check;
+ALTER TABLE tenants ADD CONSTRAINT tenants_status_check
+        CHECK (status IN ('ACTIVE','TRIAL','PAST_DUE','SUSPENDED','EXPIRED','INACTIVE'));
+
+-- ── BillingStatus enum CHECK constraint refresh ─────────────────────────────
+-- Hibernate generated billing_records_status_check from BillingStatus (UNPAID/PAID/VOID) at first
+-- create; ddl-auto=update never alters it, so the later CREDIT value (mid-cycle downgrade credit
+-- notes) would be rejected at the DB level. Drop + recreate with the full current set.
+ALTER TABLE billing_records DROP CONSTRAINT IF EXISTS billing_records_status_check;
+ALTER TABLE billing_records ADD CONSTRAINT billing_records_status_check
+        CHECK (status IN ('UNPAID','PAID','VOID','CREDIT'));
+
 ALTER TABLE platform_audit_logs DROP CONSTRAINT IF EXISTS platform_audit_logs_action_check;
 ALTER TABLE platform_audit_logs ADD CONSTRAINT platform_audit_logs_action_check
         CHECK (action IN ('LOGIN','LOGIN_FAILED','LOGOUT',
@@ -129,6 +145,27 @@ ALTER TABLE platform_audit_logs ADD CONSTRAINT platform_audit_logs_action_check
                 'TENANT_SOFT_DELETE','TENANT_RESTORE','TENANT_HARD_DELETE',
                 'PLAN_ASSIGN','PLAN_CHANGE','PLAN_UPDATE','SUBSCRIPTION_EXPIRED',
                 'BILLING_ISSUE','BILLING_MARK_PAID','BILLING_MARK_UNPAID',
+                'BILLING_VOID',
+                'PAYMENT_ORDER_CREATED','PAYMENT_CAPTURED','PAYMENT_FAILED',
+                'SUBSCRIPTION_ACTIVATED','SUBSCRIPTION_CANCELLED','TENANT_PAST_DUE',
+                'UPGRADE_REQUEST_CREATE','UPGRADE_REQUEST_APPROVE','UPGRADE_REQUEST_REJECT','UPGRADE_REQUEST_CANCEL',
                 'IMPERSONATION_START','IMPERSONATION_END','USER_FORCE_RESET','USER_LOCK','USER_UNLOCK',
                 'FEATURE_FLAG_CHANGE','CONFIG_CHANGE','QUOTA_OVERRIDE','USAGE_LIMIT_EXCEEDED',
                 'ANNOUNCEMENT_SEND','MAINTENANCE_TOGGLE','DATA_EXPORT'));
+
+-- ── UpgradeRequest enum CHECK constraint refresh ────────────────────────────
+-- upgrade_requests is a NEW table, so Hibernate creates its *_check constraints with the current enum
+-- values at first create and inserts work immediately. These drop+recreate blocks are belt-and-suspenders
+-- for any FUTURE value added to UpgradeRequestStatus / PaymentMode / OfflinePaymentMode (ddl-auto=update
+-- never alters an existing constraint — same gotcha as billing_records_status_check above).
+ALTER TABLE upgrade_requests DROP CONSTRAINT IF EXISTS upgrade_requests_status_check;
+ALTER TABLE upgrade_requests ADD CONSTRAINT upgrade_requests_status_check
+        CHECK (status IN ('PENDING','APPROVED','REJECTED','CANCELLED'));
+
+ALTER TABLE upgrade_requests DROP CONSTRAINT IF EXISTS upgrade_requests_payment_mode_check;
+ALTER TABLE upgrade_requests ADD CONSTRAINT upgrade_requests_payment_mode_check
+        CHECK (payment_mode IN ('ONLINE','OFFLINE'));
+
+ALTER TABLE upgrade_requests DROP CONSTRAINT IF EXISTS upgrade_requests_offline_mode_check;
+ALTER TABLE upgrade_requests ADD CONSTRAINT upgrade_requests_offline_mode_check
+        CHECK (offline_mode IS NULL OR offline_mode IN ('BANK_TRANSFER','CHEQUE','CASH'));

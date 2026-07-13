@@ -7,5 +7,11 @@ package com.crm.travelcrm.platform.billing.enums;
 public enum BillingStatus {
     UNPAID,
     PAID,
-    VOID
+    VOID,
+    /**
+     * A credit note — a negative-amount {@code BillingRecord} raised when a mid-cycle DOWNGRADE
+     * prorates money back to the tenant. Not "owed" (excluded from the unpaid/outstanding totals);
+     * carried on the account and applied against a future invoice.
+     */
+    CREDIT
 }

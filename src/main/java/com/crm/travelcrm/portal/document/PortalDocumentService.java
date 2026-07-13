@@ -1,5 +1,6 @@
 package com.crm.travelcrm.portal.document;
 
+import com.crm.travelcrm.common.cloudinary.StorageQuota;
 import com.crm.travelcrm.common.exception.BadRequestException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.portal.document.dto.DocumentDownload;
@@ -37,12 +38,16 @@ public class PortalDocumentService {
 
     private final TravelerDocumentRepository repository;
     private final PortalDocumentMapper mapper;
+    /** Hard-enforces the tenant's storage cap (traveler docs count toward it, like Cloudinary assets). */
+    private final StorageQuota storageQuota;
 
     @Transactional
     public TravelerDocumentDto upload(MultipartFile file, TravelerDocumentType type, LocalDate expiryDate) {
         TravelerPrincipal me = CurrentTraveler.require();
         if (type == null) throw new BadRequestException("Document type is required.");
         validate(file);
+        // Traveler documents count toward the tenant's plan storage cap — block when it is full.
+        storageQuota.enforceWithinQuota(me.tenantId(), file.getSize());
 
         TravelerDocument doc = TravelerDocument.builder()
                 .tenantId(me.tenantId())

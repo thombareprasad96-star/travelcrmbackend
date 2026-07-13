@@ -34,6 +34,19 @@ public enum PlatformAuditAction {
     BILLING_ISSUE,
     BILLING_MARK_PAID,
     BILLING_MARK_UNPAID,
+    BILLING_VOID,            // an outstanding invoice was voided (e.g. a rejected/cancelled upgrade request)
+    PAYMENT_ORDER_CREATED,   // tenant created a gateway order to pay an invoice online
+    PAYMENT_CAPTURED,        // gateway confirmed a successful payment (webhook)
+    PAYMENT_FAILED,          // gateway reported a failed payment attempt (webhook)
+    SUBSCRIPTION_ACTIVATED,  // recurring subscription activated/charged (webhook; scaffold)
+    SUBSCRIPTION_CANCELLED,  // recurring subscription cancelled/halted (webhook; scaffold)
+    TENANT_PAST_DUE,         // tenant entered the dunning grace window (overdue invoice / failed payment)
+
+    // ── Tenant-initiated plan upgrade requests (Phase: Upgrade Approval) ─────
+    UPGRADE_REQUEST_CREATE,  // tenant submitted a plan-upgrade request (awaiting SuperAdmin approval)
+    UPGRADE_REQUEST_APPROVE, // SuperAdmin approved a request → plan activated
+    UPGRADE_REQUEST_REJECT,  // SuperAdmin rejected a request (tenant stays on current plan)
+    UPGRADE_REQUEST_CANCEL,  // tenant withdrew a pending request
 
     // ── Cross-tenant user control + impersonation (Phase: User Control) ──
     IMPERSONATION_START,

@@ -39,4 +39,27 @@ public interface BillingRecordRepository extends JpaRepository<BillingRecord, Lo
     /** Invoices in a status issued on/after a date — feeds the revenue-by-month series. */
     List<BillingRecord> findByStatusAndDeletedAtIsNullAndIssueDateGreaterThanEqual(
             BillingStatus status, LocalDate issueDate);
+
+    /** Does this tenant have any live invoice in {@code status} whose due date is before {@code date}? */
+    boolean existsByTenantIdAndStatusAndDeletedAtIsNullAndDueDateBefore(
+            Long tenantId, BillingStatus status, LocalDate date);
+
+    /** Distinct tenants with a live invoice in {@code status} due before {@code date} — drives dunning. */
+    @Query("SELECT DISTINCT b.tenantId FROM BillingRecord b "
+            + "WHERE b.deletedAt IS NULL AND b.status = :status AND b.dueDate < :date")
+    List<Long> findTenantIdsWithStatusDueBefore(@Param("status") BillingStatus status,
+                                                @Param("date") LocalDate date);
+
+    /** Live pay-first upgrade invoices (upgradeToPlan set) for a tenant in {@code status} — used to
+     *  supersede an earlier unpaid upgrade order when a new one is requested. */
+    List<BillingRecord> findByTenantIdAndUpgradeToPlanIsNotNullAndStatusAndDeletedAtIsNull(
+            Long tenantId, BillingStatus status);
+
+    /** Furthest period end across the tenant's live invoices in {@code status} (null if none). Lets the
+     *  dunning reactivation extend {@code subscriptionEndDate} to the furthest PAID period regardless of
+     *  the order invoices were settled in. */
+    @Query("SELECT MAX(b.periodEnd) FROM BillingRecord b "
+            + "WHERE b.deletedAt IS NULL AND b.tenantId = :tenantId AND b.status = :status")
+    LocalDate findMaxPeriodEndByTenantIdAndStatusAndDeletedAtIsNull(@Param("tenantId") Long tenantId,
+                                                                    @Param("status") BillingStatus status);
 }

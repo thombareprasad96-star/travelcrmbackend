@@ -56,6 +56,12 @@ public class Tenant extends BaseEntity {
     @Column(name = "subscription_end_date")
     private LocalDate subscriptionEndDate;
 
+    // When the tenant first entered PAST_DUE (dunning grace started). Cleared on reactivation.
+    // Informational for "how long past due"; the actual grace deadline is anchored to the overdue
+    // invoice's due date + app.subscription.grace-days (see DunningService).
+    @Column(name = "past_due_since")
+    private LocalDate pastDueSince;
+
     // Max users allowed under this tenant's plan
     @Column(name = "max_users", nullable = false)
     @Builder.Default
@@ -97,6 +103,8 @@ public class Tenant extends BaseEntity {
      */
     public boolean isOperational() {
         return !isDeleted()
-                && (status == TenantStatus.ACTIVE || status == TenantStatus.TRIAL);
+                && (status == TenantStatus.ACTIVE
+                    || status == TenantStatus.TRIAL
+                    || status == TenantStatus.PAST_DUE);   // grace window — still operational
     }
 }

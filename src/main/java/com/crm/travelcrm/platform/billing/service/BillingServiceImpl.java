@@ -1,5 +1,6 @@
 package com.crm.travelcrm.platform.billing.service;
 
+import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.platform.audit.PlatformAuditRecorder;
 import com.crm.travelcrm.platform.audit.entity.PlatformAuditAction;
@@ -8,7 +9,9 @@ import com.crm.travelcrm.platform.billing.dto.CreateBillingRequest;
 import com.crm.travelcrm.platform.billing.entity.BillingRecord;
 import com.crm.travelcrm.platform.billing.enums.BillingStatus;
 import com.crm.travelcrm.platform.billing.repository.BillingRecordRepository;
+import com.crm.travelcrm.platform.subscription.dunning.DunningService;
 import com.crm.travelcrm.platform.subscription.entity.Plan;
+import com.crm.travelcrm.platform.subscription.plan.TenantPlanApplier;
 import com.crm.travelcrm.platform.subscription.repository.PlanRepository;
 import com.crm.travelcrm.tenent.entity.Tenant;
 import com.crm.travelcrm.tenent.enums.TenantPlan;
@@ -33,6 +36,10 @@ public class BillingServiceImpl implements BillingService {
     private final TenantRepository tenantRepository;
     private final PlanRepository planRepository;
     private final PlatformAuditRecorder platformAuditRecorder;
+    /** Offline settlement must reactivate a dunning-suspended tenant, exactly like the webhook path. */
+    private final DunningService dunningService;
+    /** Applies a pay-first upgrade when its tagged invoice is settled offline. */
+    private final TenantPlanApplier tenantPlanApplier;
 
     @Override
     @Transactional(readOnly = true)
@@ -97,11 +104,23 @@ public class BillingServiceImpl implements BillingService {
     @Transactional
     public BillingRecordResponse markPaid(UUID billingPublicId) {
         BillingRecord record = requireRecord(billingPublicId);
+        BillingStatus prevStatus = record.getStatus();
         record.setStatus(BillingStatus.PAID);
         record.setPaidDate(LocalDate.now());
         BillingRecord saved = billingRepository.save(record);
         audit(PlatformAuditAction.BILLING_MARK_PAID, saved,
                 "Marked " + saved.getInvoiceNumber() + " paid");
+        // Settling an unpaid receivable offline must reactivate a PAST_DUE/EXPIRED tenant and advance
+        // access, mirroring the webhook capture path — otherwise a tenant that paid by bank transfer
+        // stays permanently locked out. onInvoicePaid no-ops when reactivation does not apply.
+        if (prevStatus == BillingStatus.UNPAID) {
+            dunningService.onInvoicePaid(saved.getTenantId(), saved.getPeriodEnd());
+            // Pay-first upgrade: settling the tagged invoice offline applies the plan, like the webhook.
+            if (saved.getUpgradeToPlan() != null) {
+                tenantPlanApplier.applyPlan(saved.getTenantId(), saved.getUpgradeToPlan(),
+                        "Upgraded to " + saved.getUpgradeToPlan() + " on payment of " + saved.getInvoiceNumber());
+            }
+        }
         return toResponse(saved);
     }
 
@@ -115,6 +134,141 @@ public class BillingServiceImpl implements BillingService {
         audit(PlatformAuditAction.BILLING_MARK_UNPAID, saved,
                 "Marked " + saved.getInvoiceNumber() + " unpaid");
         return toResponse(saved);
+    }
+
+    @Override
+    @Transactional
+    public BillingRecordResponse issueProration(Long tenantId, TenantPlan plan, BigDecimal signedAmount,
+                                                LocalDate periodStart, LocalDate periodEnd, String notes) {
+        Tenant tenant = tenantRepository.findById(tenantId)
+                .orElseThrow(() -> new IllegalStateException("Tenant not found: " + tenantId));
+
+        Plan planEntity = planRepository.findByCode(plan).orElse(null);
+        String currency = planEntity != null && StringUtils.hasText(planEntity.getCurrency())
+                ? planEntity.getCurrency() : "INR";
+        boolean credit = signedAmount.signum() < 0;
+        LocalDate today = LocalDate.now();
+
+        BillingRecord record = BillingRecord.builder()
+                .tenantId(tenant.getId())
+                .tenantCode(tenant.getOrganizationCode())
+                .tenantName(tenant.getOrganizationName())
+                .invoiceNumber(nextInvoiceNumber())
+                .plan(plan)
+                .amount(signedAmount)                 // negative for a credit note
+                .currency(currency)
+                .periodStart(periodStart)
+                .periodEnd(periodEnd)
+                .issueDate(today)
+                // A credit note is nothing the tenant owes: no due date, marked settled at issue.
+                .dueDate(credit ? null : today.plusDays(15))
+                .paidDate(credit ? today : null)
+                .status(credit ? BillingStatus.CREDIT : BillingStatus.UNPAID)
+                .notes(notes)
+                .build();
+
+        BillingRecord saved = billingRepository.save(record);
+        audit(PlatformAuditAction.BILLING_ISSUE, saved,
+                (credit ? "Issued credit note " : "Issued proration invoice ") + saved.getInvoiceNumber()
+                        + " (" + currency + " " + signedAmount + ") to " + tenant.getOrganizationName());
+        return toResponse(saved);
+    }
+
+    @Override
+    @Transactional
+    public BillingRecordResponse issuePlanUpgradeCharge(Long tenantId, TenantPlan targetPlan, BigDecimal amount,
+                                                        LocalDate periodStart, LocalDate periodEnd, String notes) {
+        Tenant tenant = tenantRepository.findById(tenantId)
+                .orElseThrow(() -> new IllegalStateException("Tenant not found: " + tenantId));
+
+        Plan planEntity = planRepository.findByCode(targetPlan).orElse(null);
+        String currency = planEntity != null && StringUtils.hasText(planEntity.getCurrency())
+                ? planEntity.getCurrency() : "INR";
+        LocalDate today = LocalDate.now();
+
+        BillingRecord record = BillingRecord.builder()
+                .tenantId(tenant.getId())
+                .tenantCode(tenant.getOrganizationCode())
+                .tenantName(tenant.getOrganizationName())
+                .invoiceNumber(nextInvoiceNumber())
+                .plan(targetPlan)
+                .amount(amount)
+                .currency(currency)
+                .periodStart(periodStart)
+                .periodEnd(periodEnd)
+                .issueDate(today)
+                .dueDate(today.plusDays(15))
+                .status(BillingStatus.UNPAID)
+                .upgradeToPlan(targetPlan)     // paying this applies the upgrade
+                .notes(notes)
+                .build();
+
+        BillingRecord saved = billingRepository.save(record);
+        audit(PlatformAuditAction.BILLING_ISSUE, saved,
+                "Issued pay-first upgrade charge " + saved.getInvoiceNumber() + " (" + currency + " " + amount
+                        + ") to " + tenant.getOrganizationName() + " for plan " + targetPlan);
+        return toResponse(saved);
+    }
+
+    @Override
+    @Transactional
+    public BillingRecordResponse issueUpgradeRequestInvoice(Long tenantId, TenantPlan plan, BigDecimal amount,
+                                                            LocalDate periodStart, LocalDate periodEnd, String notes) {
+        Tenant tenant = tenantRepository.findById(tenantId)
+                .orElseThrow(() -> new IllegalStateException("Tenant not found: " + tenantId));
+
+        Plan planEntity = planRepository.findByCode(plan).orElse(null);
+        String currency = planEntity != null && StringUtils.hasText(planEntity.getCurrency())
+                ? planEntity.getCurrency() : "INR";
+        LocalDate today = LocalDate.now();
+
+        BillingRecord record = BillingRecord.builder()
+                .tenantId(tenant.getId())
+                .tenantCode(tenant.getOrganizationCode())
+                .tenantName(tenant.getOrganizationName())
+                .invoiceNumber(nextInvoiceNumber())
+                .plan(plan)
+                .amount(amount)
+                .currency(currency)
+                .periodStart(periodStart)
+                .periodEnd(periodEnd)
+                .issueDate(today)
+                .dueDate(null)                 // discretionary upgrade — NOT a dunning receivable
+                .status(BillingStatus.UNPAID)
+                // NO upgradeToPlan tag: approval (not payment) applies the plan.
+                .notes(notes)
+                .build();
+
+        BillingRecord saved = billingRepository.save(record);
+        audit(PlatformAuditAction.BILLING_ISSUE, saved,
+                "Issued plan-upgrade request charge " + saved.getInvoiceNumber() + " (" + currency + " " + amount
+                        + ") to " + tenant.getOrganizationName() + " for plan " + plan);
+        return toResponse(saved);
+    }
+
+    @Override
+    @Transactional
+    public BillingRecordResponse voidInvoice(UUID billingPublicId) {
+        BillingRecord record = requireRecord(billingPublicId);
+        if (record.getStatus() == BillingStatus.PAID) {
+            throw new BusinessException("A paid invoice cannot be voided.");
+        }
+        record.setStatus(BillingStatus.VOID);
+        BillingRecord saved = billingRepository.save(record);
+        audit(PlatformAuditAction.BILLING_VOID, saved, "Voided " + saved.getInvoiceNumber());
+        return toResponse(saved);
+    }
+
+    @Override
+    @Transactional
+    public int voidPendingPlanUpgrades(Long tenantId) {
+        List<BillingRecord> pending = billingRepository
+                .findByTenantIdAndUpgradeToPlanIsNotNullAndStatusAndDeletedAtIsNull(tenantId, BillingStatus.UNPAID);
+        for (BillingRecord r : pending) {
+            r.setStatus(BillingStatus.VOID);
+            billingRepository.save(r);
+        }
+        return pending.size();
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

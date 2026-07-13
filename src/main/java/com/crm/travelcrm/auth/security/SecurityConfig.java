@@ -88,6 +88,9 @@ public class SecurityConfig {
                         .dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll()
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers("/api/auth/**").permitAll()
+                        // Payment-gateway webhooks (server-to-server; no user). Authenticity is the
+                        // HMAC-SHA256 signature verified in the service, not the filter chain.
+                        .requestMatchers(HttpMethod.POST, "/api/webhooks/**").permitAll()
                         // Public quotation share links (capability URL by publicId) — read-only PDF
                         .requestMatchers(HttpMethod.GET, "/api/public/**").permitAll()
                         // SSE stream: EventSource cannot set Authorization headers,

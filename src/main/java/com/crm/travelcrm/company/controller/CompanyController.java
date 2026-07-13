@@ -2,6 +2,7 @@ package com.crm.travelcrm.company.controller;
 
 import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.common.dto.ApiResponse;
+import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.company.dto.AiCreditsDTO;
 import com.crm.travelcrm.company.dto.CompanyDTO;
 import com.crm.travelcrm.company.dto.CompanyUpdateRequest;
@@ -9,6 +10,7 @@ import com.crm.travelcrm.company.dto.SubscriptionDTO;
 import com.crm.travelcrm.company.service.CompanyService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -24,11 +26,20 @@ public class CompanyController {
 
     private final CompanyService companyService;
 
+    /** These endpoints are tenant-scoped. A SuperAdmin authenticates on the same chain but resolves to a
+     *  null {@code @AuthenticationPrincipal User}; guard it so we return a clean 403 instead of a 500 NPE. */
+    private static Long tenantId(User currentUser) {
+        if (currentUser == null) {
+            throw new BusinessException("This endpoint is available to tenant users only.", HttpStatus.FORBIDDEN);
+        }
+        return currentUser.getTenantId();
+    }
+
     @GetMapping
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<ApiResponse<CompanyDTO>> get(@AuthenticationPrincipal User currentUser) {
         return ResponseEntity.ok(ApiResponse.success(
-                "Company retrieved successfully", companyService.get(currentUser.getTenantId())));
+                "Company retrieved successfully", companyService.get(tenantId(currentUser))));
     }
 
     @PutMapping
@@ -63,7 +74,7 @@ public class CompanyController {
     public ResponseEntity<ApiResponse<SubscriptionDTO>> getSubscription(
             @AuthenticationPrincipal User currentUser) {
         return ResponseEntity.ok(ApiResponse.success(
-                "Subscription retrieved successfully", companyService.getSubscription(currentUser.getTenantId())));
+                "Subscription retrieved successfully", companyService.getSubscription(tenantId(currentUser))));
     }
 
     @GetMapping("/ai-credits")
@@ -71,6 +82,6 @@ public class CompanyController {
     public ResponseEntity<ApiResponse<AiCreditsDTO>> getAiCredits(
             @AuthenticationPrincipal User currentUser) {
         return ResponseEntity.ok(ApiResponse.success(
-                "AI credits retrieved successfully", companyService.getAiCredits(currentUser.getTenantId())));
+                "AI credits retrieved successfully", companyService.getAiCredits(tenantId(currentUser))));
     }
 }

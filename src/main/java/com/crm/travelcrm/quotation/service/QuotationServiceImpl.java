@@ -1,8 +1,6 @@
 package com.crm.travelcrm.quotation.service;
 
-import com.crm.travelcrm.common.cloudinary
-
-        .CloudinaryService;
+import com.crm.travelcrm.common.cloudinary.CloudinaryService;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.settings.service.EmailAuditService;
 import com.crm.travelcrm.settings.service.TenantMailSenderFactory;
@@ -441,6 +439,45 @@ public class QuotationServiceImpl implements QuotationService {
         }
     }
 
+    // ── WhatsApp ────────────────────────────────────────────────────────────--
+
+    @Override
+    @Transactional(readOnly = true)
+    public void sendWhatsApp(UUID publicId, QuotationWhatsAppRequestDto request) {
+        Quotation q = loadOwned(publicId);
+        QuotationResponseDto dto = quotationMapper.toResponse(q);
+
+        // Explicit toPhone wins; otherwise the quotation's snapshotted customer phone.
+        String toPhone = (request != null && StringUtils.hasText(request.getToPhone()))
+                ? request.getToPhone()
+                : q.getCustomerPhone();
+        if (!StringUtils.hasText(toPhone)) {
+            throw new BusinessException(
+                    "No phone number to send to. Add a customer phone or provide one in the request.",
+                    HttpStatus.BAD_REQUEST);
+        }
+
+        String customerName = safe(q.getCustomerName(), "Customer");
+        String shareLink = getShareLink(publicId);
+        log.debug("sendWhatsApp() | publicId={} | to={}", publicId, toPhone);
+
+        // Template body args, in order: {{1}} customer name, {{2}} quotation title, {{3}} share link.
+        WhatsAppMessagingService.Result result = whatsAppMessaging.sendPurpose(
+                TenantContext.getTenantId(),
+                WhatsAppMessagingService.Purpose.QUOTATION,
+                toPhone,
+                List.of(customerName, dto.getTitle(), shareLink));
+
+        if (!result.success()) {
+            // The facade already logged + audited the real cause; the client gets a safe message.
+            log.error("Failed to WhatsApp quotation {} to {}: {}", publicId, toPhone, result.errorMessage());
+            throw new BusinessException(
+                    "We couldn't send that WhatsApp message. Check your WhatsApp settings and try again.",
+                    HttpStatus.BAD_GATEWAY);
+        }
+        log.info("Quotation {} sent via WhatsApp to {}", publicId, toPhone);
+    }
+
     // ── Share link ──────────────────────────────────────────────────────────--
 
     @Override
@@ -453,40 +490,6 @@ public class QuotationServiceImpl implements QuotationService {
                 : publicBaseUrl;
         // Public, shareable link (no auth) — recipients open it directly from WhatsApp/email.
         return base + "/api/public/quotations/" + publicId + "/pdf";
-    }
-
-    // ── WhatsApp ────────────────────────────────────────────────────────────────
-
-    @Override
-    @Transactional
-    public void sendWhatsApp(UUID publicId, QuotationWhatsAppRequestDto request) {
-        Quotation q = loadOwned(publicId);
-        String phone = request != null && StringUtils.hasText(request.getToPhone())
-                ? request.getToPhone() : q.getCustomerPhone();
-        if (!StringUtils.hasText(phone)) {
-            throw new BusinessException("No phone number to send this quotation to.",
-                    HttpStatus.UNPROCESSABLE_ENTITY);
-        }
-        Long tenantId = currentTenantId();
-        if (!whatsAppMessaging.isConfigured(tenantId)) {
-            throw new BusinessException(
-                    "WhatsApp is not configured. Set it up in Settings → WhatsApp first.",
-                    HttpStatus.UNPROCESSABLE_ENTITY);
-        }
-        // Reuse the canonical share-link builder (also re-checks ownership).
-        String shareLink = getShareLink(publicId);
-        List<String> body = List.of(
-                safe(q.getCustomerName(), "Customer"),
-                safe(q.getTitle(), "your trip"),
-                shareLink);
-        WhatsAppMessagingService.Result result = whatsAppMessaging.sendPurpose(
-                tenantId, WhatsAppMessagingService.Purpose.QUOTATION, phone, body);
-        if (!result.success()) {
-            log.error("Failed to WhatsApp quotation {}: {}", publicId, result.errorMessage());
-            throw new BusinessException("We couldn't send that WhatsApp message. Please try again shortly.",
-                    HttpStatus.BAD_GATEWAY);
-        }
-        log.info("Quotation {} sent via WhatsApp to {}", publicId, phone);
     }
 
     // ════════════════════════════════════════════════════════════════════════

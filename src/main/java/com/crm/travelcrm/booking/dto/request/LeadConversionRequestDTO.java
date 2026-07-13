@@ -34,11 +34,21 @@ public class LeadConversionRequestDTO {
     @Size(max = 255, message = "Customer name too long")
     private String customerName;
 
+    @NotBlank(message = "Customer phone is required")
+    @Pattern(
+            regexp = "^\\+?[0-9\\s()-]{7,20}$",
+            message = "Invalid phone number"
+    )
+    @Size(max = 20, message = "Customer phone is too long")
+    private String customerPhone;
+
     @NotBlank(message = "Destination is required")
     @Size(max = 255, message = "Destination too long")
     private String destination;
 
-    /** Optional — defaults to today on the server. */
+    /**
+     * Optional — defaults to today on the server.
+     */
     private LocalDate bookingDate;
 
     @NotNull(message = "Travel date is required")
@@ -55,10 +65,15 @@ public class LeadConversionRequestDTO {
     @Digits(integer = 10, fraction = 2, message = "Invalid amount format")
     private BigDecimal vendorCost;
 
-    /** Advance collected at conversion time — optional, defaults to 0. */
+    /**
+     * Advance collected at conversion time — optional, defaults to 0.
+     */
     @DecimalMin(value = "0.0", message = "Paid amount cannot be negative")
     @Digits(integer = 10, fraction = 2, message = "Invalid amount format")
     private BigDecimal paidAmount = BigDecimal.ZERO;
 
+    /**
+     * Services included in the booking (e.g. Flight, Hotel, Sightseeing, Cruise, Vehicle).
+     */
     private List<String> services = new ArrayList<>();
 }

@@ -10,7 +10,10 @@ import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.platform.audit.PlatformAuditRecorder;
 import com.crm.travelcrm.platform.audit.entity.PlatformAuditAction;
 import com.crm.travelcrm.platform.billing.enums.BillingStatus;
+import com.crm.travelcrm.platform.billing.proration.ProrationCalculator;
+import com.crm.travelcrm.platform.billing.proration.ProrationResult;
 import com.crm.travelcrm.platform.billing.repository.BillingRecordRepository;
+import com.crm.travelcrm.platform.billing.service.BillingService;
 import com.crm.travelcrm.platform.subscription.entity.Plan;
 import com.crm.travelcrm.platform.subscription.repository.PlanRepository;
 import com.crm.travelcrm.tenent.dto.CreateTenantRequest;
@@ -33,6 +36,9 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.YearMonth;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -52,6 +58,8 @@ public class TenantServiceImpl implements TenantService {
     private final PlanRepository planRepository;
     private final BillingRecordRepository billingRecordRepository;
     private final CancellationPolicySeeder cancellationPolicySeeder;
+    private final BillingService billingService;
+    private final ProrationCalculator prorationCalculator;
 
     // ── create ────────────────────────────────────────────────────────────────
 
@@ -189,6 +197,7 @@ public class TenantServiceImpl implements TenantService {
                 .orElseThrow(() -> new BusinessException(
                         "Unknown plan: " + planCode, HttpStatus.BAD_REQUEST));
 
+        TenantPlan previousPlan = tenant.getPlan();   // captured before the switch for proration
         tenant.setPlan(planCode);
         // Module access always re-syncs to the new plan. Numeric limits re-sync from the plan too,
         // UNLESS a SuperAdmin has pinned this tenant's quota via an override (then the override wins).
@@ -205,9 +214,54 @@ public class TenantServiceImpl implements TenantService {
         audit(PlatformAuditAction.PLAN_CHANGE, saved,
                 "Changed plan to " + planCode + " for " + saved.getOrganizationName());
 
+        // Charge/credit the prorated difference for the rest of this billing month.
+        maybeIssueProration(saved, previousPlan, planCode);
+
         TenantResponse response = tenantMapper.toResponse(saved);
         response.setUserCount(userRepository.countByTenantIdAndDeletedAtIsNull(saved.getId()));
         return response;
+    }
+
+    /**
+     * Issue a proration line for a mid-cycle plan change. Only ACTIVE (live, paying) tenants are
+     * prorated — a TRIAL/SUSPENDED/EXPIRED/PAST_DUE tenant has no in-progress paid cycle to adjust,
+     * and same-price or same-plan changes produce no line. The window is the current calendar month,
+     * matching how {@code BillingServiceImpl.create} issues monthly invoices.
+     */
+    private void maybeIssueProration(Tenant tenant, TenantPlan previousPlan, TenantPlan newPlan) {
+        if (previousPlan == newPlan || tenant.getStatus() != TenantStatus.ACTIVE) {
+            return;
+        }
+        Plan oldPlanEntity = planRepository.findByCode(previousPlan).orElse(null);
+        Plan newPlanEntity = planRepository.findByCode(newPlan).orElse(null);
+        // Never net two monthly prices across different currencies — the raw difference is meaningless.
+        if (oldPlanEntity != null && newPlanEntity != null
+                && oldPlanEntity.getCurrency() != null && newPlanEntity.getCurrency() != null
+                && !oldPlanEntity.getCurrency().equalsIgnoreCase(newPlanEntity.getCurrency())) {
+            log.warn("Skipping proration for tenant {}: plan currencies differ ({} → {})",
+                    tenant.getId(), oldPlanEntity.getCurrency(), newPlanEntity.getCurrency());
+            return;
+        }
+        BigDecimal oldMonthly = oldPlanEntity != null && oldPlanEntity.getMonthlyPrice() != null
+                ? oldPlanEntity.getMonthlyPrice() : BigDecimal.ZERO;
+        BigDecimal newMonthly = newPlanEntity != null && newPlanEntity.getMonthlyPrice() != null
+                ? newPlanEntity.getMonthlyPrice() : BigDecimal.ZERO;
+
+        LocalDate today = LocalDate.now();
+        LocalDate periodStart = today.withDayOfMonth(1);
+        LocalDate periodEnd = YearMonth.from(today).atEndOfMonth();
+
+        ProrationResult result = prorationCalculator.calculate(
+                oldMonthly, newMonthly, today, periodStart, periodEnd);
+        if (!result.hasAdjustment()) {
+            return;
+        }
+
+        String notes = (result.isCharge() ? "Proration: upgrade " : "Proration: downgrade ")
+                + previousPlan + " → " + newPlan + " for " + result.remainingDays() + " of "
+                + result.periodDays() + " days (" + periodStart + " to " + periodEnd + ").";
+        // The line covers today → month-end (the days billed at the new rate).
+        billingService.issueProration(tenant.getId(), newPlan, result.amount(), today, periodEnd, notes);
     }
 
     // ── lifecycle ───────────────────────────────────────────────────────────────

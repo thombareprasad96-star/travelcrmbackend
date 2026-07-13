@@ -81,6 +81,15 @@ public class BillingRecord extends BaseEntity {
     @Column(name = "notes", length = 500)
     private String notes;
 
+    /**
+     * Pay-first plan upgrade marker: when non-null, settling this invoice (webhook capture or an offline
+     * mark-paid) applies this plan's entitlements to the tenant. Null for ordinary invoices. New column —
+     * Hibernate ddl-auto adds it; it holds the full {@link TenantPlan} value set so no constraint refresh.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "upgrade_to_plan", length = 20)
+    private TenantPlan upgradeToPlan;
+
     /** Derived: an unpaid invoice whose due date has passed. Not persisted. */
     @Transient
     public boolean isOverdue() {

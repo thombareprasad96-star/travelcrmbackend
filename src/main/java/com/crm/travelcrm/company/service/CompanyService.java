@@ -7,6 +7,10 @@ import com.crm.travelcrm.company.dto.CompanyUpdateRequest;
 import com.crm.travelcrm.company.dto.SubscriptionDTO;
 import com.crm.travelcrm.company.entity.Company;
 import com.crm.travelcrm.company.repository.CompanyRepository;
+import com.crm.travelcrm.platform.subscription.entity.Plan;
+import com.crm.travelcrm.platform.subscription.repository.PlanRepository;
+import com.crm.travelcrm.tenent.entity.Tenant;
+import com.crm.travelcrm.tenent.tenentsRepository.TenantRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -15,6 +19,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
@@ -25,8 +30,13 @@ public class CompanyService {
     private static final DateTimeFormatter DATE_FMT =
             DateTimeFormatter.ofPattern("MMM dd, yyyy", Locale.ENGLISH);
 
+    /** Historical "unlimited" sentinel used for {@code Tenant.maxUsers} (see TenantServiceImpl.changePlan). */
+    private static final int UNLIMITED_USERS_SENTINEL = 1_000_000;
+
     private final CompanyRepository companyRepository;
     private final CloudinaryService cloudinaryService;
+    private final TenantRepository tenantRepository;
+    private final PlanRepository planRepository;
 
     @Transactional
     public CompanyDTO get(Long tenantId) {
@@ -68,23 +78,48 @@ public class CompanyService {
         return toDto(companyRepository.save(c));
     }
 
-    // Placeholder until a real billing/subscription source exists.
+    // Real subscription snapshot from the tenant's plan + billing state.
     @Transactional(readOnly = true)
     public SubscriptionDTO getSubscription(Long tenantId) {
-        LocalDate start = companyRepository.findByTenantId(tenantId)
-                .filter(c -> c.getCreatedAt() != null)
-                .map(c -> c.getCreatedAt().toLocalDate())
-                .orElse(LocalDate.now());
-        LocalDate end = start.plusDays(30);
-        int daysLeft = (int) Math.max(0, ChronoUnit.DAYS.between(LocalDate.now(), end));
+        Tenant tenant = tenantRepository.findById(tenantId).orElse(null);
+        if (tenant == null) {
+            // Defensive: an authenticated tenant user should always resolve.
+            return SubscriptionDTO.builder().plan("—").status("UNKNOWN").features(List.of()).build();
+        }
+        Plan plan = planRepository.findByCode(tenant.getPlan()).orElse(null);
+
+        LocalDate start = tenant.getSubscriptionStartDate();
+        LocalDate end = tenant.getSubscriptionEndDate();
+        Integer daysLeft = end != null
+                ? (int) Math.max(0, ChronoUnit.DAYS.between(LocalDate.now(), end))
+                : null;
+
+        // Effective modules: the tenant's own overrides, else the plan's defaults.
+        List<String> features = !tenant.getEnabledModules().isEmpty()
+                ? new ArrayList<>(tenant.getEnabledModules())
+                : (plan != null ? new ArrayList<>(plan.getModules()) : List.of());
+
         return SubscriptionDTO.builder()
-                .plan("Standard Plan")
-                .startDate(start.format(DATE_FMT))
-                .endDate(end.format(DATE_FMT))
-                .status("Active")
+                .plan(plan != null ? plan.getDisplayName() : tenant.getPlan().name())
+                .planCode(tenant.getPlan().name())
+                .monthlyPrice(plan != null ? plan.getMonthlyPrice() : null)
+                .currency(plan != null ? plan.getCurrency() : null)
+                .startDate(start != null ? start.format(DATE_FMT) : null)
+                .endDate(end != null ? end.format(DATE_FMT) : null)
+                .status(tenant.getStatus().name())
                 .daysLeft(daysLeft)
-                .features(List.of("All Core Features"))
+                .pastDueSince(tenant.getPastDueSince() != null ? tenant.getPastDueSince().format(DATE_FMT) : null)
+                .features(features)
+                .maxUsers(normalizeUnlimited(tenant.getMaxUsers()))
+                .maxLeads(tenant.getMaxLeads())
+                .maxBookingsPerMonth(tenant.getMaxBookingsPerMonth())
+                .maxStorageMb(tenant.getMaxStorageMb())
                 .build();
+    }
+
+    /** Normalises the stored user cap to {@code null}=unlimited (null, ≤0, or the unlimited sentinel). */
+    private static Integer normalizeUnlimited(Integer raw) {
+        return (raw == null || raw <= 0 || raw >= UNLIMITED_USERS_SENTINEL) ? null : raw;
     }
 
     // Placeholder until AI-credit metering exists.
