@@ -502,11 +502,10 @@ public class QuotationMapper {
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  PRICING — mirrors the frontend Summarypricingtab.jsx exactly, plus the
-    //  server-only B2B franchise markup (subAgentMarkup, 0 for staff-owned quotes):
+    //  PRICING — mirrors the frontend Summarypricingtab.jsx exactly:
     //    subtotal   = sum of the six section amounts
     //    discAmt    = discType == % ? subtotal * disc / 100 : disc
-    //    afterDisc  = subtotal - discAmt + markup + subAgentMarkup
+    //    afterDisc  = subtotal - discAmt + markup
     //    taxAmt     = afterDisc * tax / 100
     //    grandTotal = afterDisc + taxAmt
     // ════════════════════════════════════════════════════════════════════════
@@ -515,22 +514,20 @@ public class QuotationMapper {
         return computeTotals(
                 q.getFlightAmount(), q.getHotelAmount(), q.getSightseeingAmount(),
                 q.getCruiseAmount(), q.getVehicleAmount(), q.getAddonAmount(),
-                q.getDiscount(), q.getDiscountType(), q.getTax(), q.getMarkup(),
-                q.getSubAgentMarkup(), q.getAdults());
+                q.getDiscount(), q.getDiscountType(), q.getTax(), q.getMarkup(), q.getAdults());
     }
 
     /**
      * Pricing math in ONE place (the formula block above). Takes the raw scalar component
      * values so it can be reused both for a full {@link Quotation} and for the lean lead-list
      * projection that carries only these columns — guaranteeing the lead-list amount equals the
-     * quotation's real grand total. {@code subAgentMarkup} is the pre-resolved B2B markup amount
-     * (0 for staff-owned quotes). {@code adults} may be null → {@code perAdult} is null.
+     * quotation's real grand total. {@code adults} may be null → {@code perAdult} is null.
      */
     public static QuotationResponseDto.Totals computeTotals(
             BigDecimal flightAmount, BigDecimal hotelAmount, BigDecimal sightseeingAmount,
             BigDecimal cruiseAmount, BigDecimal vehicleAmount, BigDecimal addonAmount,
             BigDecimal discount, DiscountType discountType, BigDecimal tax, BigDecimal markup,
-            BigDecimal subAgentMarkup, Integer adults) {
+            Integer adults) {
 
         BigDecimal subtotal = nz(flightAmount)
                 .add(nz(hotelAmount))
@@ -547,9 +544,7 @@ public class QuotationMapper {
                 : discountRaw.setScale(2, RoundingMode.HALF_UP);
 
         BigDecimal markupAmount = nz(markup).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal subAgentMarkupAmount = nz(subAgentMarkup).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal afterDiscount = subtotal.subtract(discountAmount)
-                .add(markupAmount).add(subAgentMarkupAmount);
+        BigDecimal afterDiscount = subtotal.subtract(discountAmount).add(markupAmount);
 
         BigDecimal taxPercent = nz(tax);
         BigDecimal taxAmount = afterDiscount.multiply(taxPercent)
@@ -567,7 +562,6 @@ public class QuotationMapper {
                 .discount(discountRaw)
                 .discountAmount(discountAmount)
                 .markup(markupAmount)
-                .subAgentMarkup(subAgentMarkupAmount)
                 .taxPercent(taxPercent)
                 .taxAmount(taxAmount)
                 .grandTotal(grandTotal)

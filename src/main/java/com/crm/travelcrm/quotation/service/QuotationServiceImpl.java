@@ -24,8 +24,6 @@ import com.crm.travelcrm.quotation.mapper.QuotationMapper;
 import com.crm.travelcrm.quotation.repository.QuotationRepository;
 import com.crm.travelcrm.quotation.specification.QuotationSpecification;
 import com.crm.travelcrm.permission.service.SubAgentScope;
-import com.crm.travelcrm.subagent.service.SubAgentPricingService;
-import com.crm.travelcrm.auth.entity.User;
 import jakarta.mail.internet.MimeMessage;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -41,7 +39,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
-import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -65,7 +62,6 @@ public class QuotationServiceImpl implements QuotationService {
     private final EmailAuditService emailAudit;
     private final WhatsAppMessagingService whatsAppMessaging;
     private final SubAgentScope subAgentScope;
-    private final SubAgentPricingService subAgentPricingService;
 
     @Value("${app.public-base-url:http://localhost:8080}")
     private String publicBaseUrl;
@@ -104,9 +100,6 @@ public class QuotationServiceImpl implements QuotationService {
         log.debug("Assigned quoteNo={} | version={}", q.getQuoteNo(), q.getVersion());
         linkLeadAndSnapshot(q, request.getLeadId());
 
-        // Snapshot the B2B franchise markup for the creator (= owner). Zero for staff-owned quotes.
-        applySubAgentMarkup(q, currentUserId());
-
         Quotation saved = quotationRepository.save(q);
         log.info("Quotation created | publicId: {} | tenantId: {}", saved.getPublicId(), tenantId);
         if (log.isDebugEnabled()) {
@@ -141,11 +134,6 @@ public class QuotationServiceImpl implements QuotationService {
         if (request.getLeadId() != null) {
             linkLeadAndSnapshot(q, request.getLeadId());
         }
-
-        // Re-snapshot the B2B markup off the PERSISTED owner (not the editor) so a tenant-admin
-        // editing a sub-agent's quotation preserves the sub-agent's markup; a PERCENT markup also
-        // re-tracks any changed section prices.
-        applySubAgentMarkup(q, q.getOwnerUserId());
 
         Quotation saved = quotationRepository.save(q);
         log.info("Quotation updated | publicId: {} | tenantId: {}", publicId, tenantId);
@@ -241,7 +229,7 @@ public class QuotationServiceImpl implements QuotationService {
                                     row.getFlightAmount(), row.getHotelAmount(), row.getSightseeingAmount(),
                                     row.getCruiseAmount(), row.getVehicleAmount(), row.getAddonAmount(),
                                     row.getDiscount(), row.getDiscountType(), row.getTax(), row.getMarkup(),
-                                    row.getSubAgentMarkup(), null).getGrandTotal())
+                                    null).getGrandTotal())
                             .build());
         }
         return result;
@@ -588,26 +576,7 @@ public class QuotationServiceImpl implements QuotationService {
         copy.setVersionNumber(nextVersion);
         copy.setParentQuotationId(rootId);
         copy.setPdfUrl(null);
-        // The copy's owner is stamped to the creator (this user) on persist — resolve its markup the
-        // same way create() does, rather than carrying the source's snapshot across owners.
-        applySubAgentMarkup(copy, currentUserId());
         return copy;
-    }
-
-    /**
-     * Snapshot the B2B franchise markup amount onto {@code q} from the profile of {@code ownerUserId}
-     * (PERCENT of the current subtotal, or a FIXED amount). Sets ZERO when the owner is not an active
-     * sub-agent, so staff-owned quotations are unaffected. Call after the section amounts are set.
-     */
-    private void applySubAgentMarkup(Quotation q, Long ownerUserId) {
-        BigDecimal subtotal = quotationMapper.computeTotals(q).getSubtotal();
-        q.setSubAgentMarkup(subAgentPricingService.resolveMarkupAmount(ownerUserId, subtotal));
-    }
-
-    /** The current tenant-user's internal id, or null when the principal is not a User (e.g. SuperAdmin). */
-    private Long currentUserId() {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        return (auth != null && auth.getPrincipal() instanceof User u) ? u.getId() : null;
     }
 
     /** Renders the quotation PDF and stores it on Cloudinary at quotations/{publicId}.pdf. */

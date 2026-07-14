@@ -98,7 +98,6 @@ public class QuotationResponseDto {
         private BigDecimal discount;        // raw value entered
         private BigDecimal discountAmount;  // resolved INR amount
         private BigDecimal markup;
-        private BigDecimal subAgentMarkup;  // auto B2B franchise markup (INR); 0 for staff-owned quotes
         private BigDecimal taxPercent;
         private BigDecimal taxAmount;
         private BigDecimal grandTotal;

@@ -11,9 +11,15 @@ import java.math.BigDecimal;
 
 /**
  * B2B franchise sub-agent profile — the tenant-side record paired 1:1 with a {@code SUB_AGENT}
- * User. Holds the markup the parent set (applied to this sub-agent's quotations in Phase 4),
- * per-sub-agent white-label branding, and the provisioning status. Created together with the
- * User inside {@code SubAgentServiceImpl.create}.
+ * User. Holds the sub-agent's COMMISSION rate (the broker earns this share of the sales they book;
+ * the parent keeps the rest — see {@code SubAgentCommissionService}), per-sub-agent white-label
+ * branding, and the provisioning status. Created together with the User inside
+ * {@code SubAgentServiceImpl.create}.
+ *
+ * <p><b>Naming note:</b> the {@code markupType}/{@code markupValue} fields (columns
+ * {@code markup_type}/{@code markup_value}) carry the COMMISSION rate. The DB column names are kept
+ * as-is to avoid a {@code ddl-auto} orphaned-NOT-NULL-column migration; treat them as the commission
+ * percentage/amount everywhere.</p>
  *
  * <p>Tenant-scoped ({@link BaseTenantEntity}); {@code tenantId} auto-stamped on persist. Not
  * {@code Ownable} — it belongs to the tenant admin's management surface, not to the sub-agent.</p>
@@ -36,13 +42,13 @@ public class SubAgentProfile extends BaseTenantEntity {
     @Column(name = "user_id", nullable = false)
     private Long userId;
 
-    // ── Markup (parent-set; applied to this sub-agent's quotations in Phase 4) ──
+    // ── Commission rate (parent-set; the sub-agent's broker share of the sales they book) ──
     @Enumerated(EnumType.STRING)
     @Column(name = "markup_type", nullable = false, length = 10)
     @Builder.Default
     private MarkupType markupType = MarkupType.PERCENT;
 
-    /** PERCENT → a percent (0–100). FIXED → an absolute amount added to the quotation total. */
+    /** Commission rate. PERCENT → a percent (0–100) of the booking sale value. FIXED → a flat amount per booking. */
     @Column(name = "markup_value", nullable = false, precision = 15, scale = 2)
     @Builder.Default
     private BigDecimal markupValue = BigDecimal.ZERO;

@@ -61,7 +61,7 @@ public interface QuotationRepository
                    q.sightseeingAmount AS sightseeingAmount, q.cruiseAmount AS cruiseAmount,
                    q.vehicleAmount AS vehicleAmount, q.addonAmount AS addonAmount,
                    q.discount AS discount, q.discountType AS discountType,
-                   q.tax AS tax, q.markup AS markup, q.subAgentMarkup AS subAgentMarkup
+                   q.tax AS tax, q.markup AS markup
               FROM Quotation q
              WHERE q.leadPublicId IN :ids
                AND q.tenantId = :tenantId
@@ -89,7 +89,6 @@ public interface QuotationRepository
         DiscountType getDiscountType();
         BigDecimal getTax();
         BigDecimal getMarkup();
-        BigDecimal getSubAgentMarkup();
     }
 
     // ── Quote-number sequence ───────────────────────────────────────────────────
