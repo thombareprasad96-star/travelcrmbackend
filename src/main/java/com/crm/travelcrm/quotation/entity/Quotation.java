@@ -295,6 +295,16 @@ public class Quotation extends BaseTenantEntity implements Ownable {
     @Column(name = "markup", precision = 15, scale = 2)
     private BigDecimal markup;
 
+    /**
+     * Auto-applied B2B franchise markup, snapshotted (in INR) at create/update from the owning
+     * sub-agent's {@code SubAgentProfile} (PERCENT of subtotal, or a FIXED amount). Zero for
+     * staff-owned quotations. Layered on top of the staff {@link #markup} (pre-tax) by
+     * {@code QuotationMapper.computeTotals}; internal-only — folded into the customer's grand total
+     * but never shown to the end customer as a line item.
+     */
+    @Column(name = "sub_agent_markup", precision = 15, scale = 2)
+    private BigDecimal subAgentMarkup;
+
     // ── Bi-directional wiring helpers ─────────────────────────────────────────
     public void addFlightSegment(QuotationFlightSegment s) { s.setQuotation(this); this.flightSegments.add(s); }
     public void addHotel(QuotationHotel h)                 { h.setQuotation(this); this.hotels.add(h); }
