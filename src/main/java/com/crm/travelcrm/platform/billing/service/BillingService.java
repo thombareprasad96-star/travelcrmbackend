@@ -2,6 +2,8 @@ package com.crm.travelcrm.platform.billing.service;
 
 import com.crm.travelcrm.platform.billing.dto.BillingRecordResponse;
 import com.crm.travelcrm.platform.billing.dto.CreateBillingRequest;
+import com.crm.travelcrm.platform.billing.dto.SeatFeeResponse;
+import com.crm.travelcrm.platform.billing.dto.UpdateSeatFeeRequest;
 import com.crm.travelcrm.tenent.enums.TenantPlan;
 
 import java.math.BigDecimal;
@@ -53,4 +55,13 @@ public interface BillingService {
      * cancelled so its unpaid invoice does not linger on the tenant's ledger. Throws if already PAID.
      */
     BillingRecordResponse voidInvoice(UUID billingPublicId);
+
+    /** The tenant's current sub-agent seat-fee position (effective rate, active seats, monthly total). */
+    SeatFeeResponse getSeatFee(UUID tenantPublicId);
+
+    /**
+     * Set (or clear, when {@code monthlySeatFee} is null) the tenant's per-tenant sub-agent seat-fee
+     * override. Independent of the quota-override pin. Returns the resulting seat-fee position.
+     */
+    SeatFeeResponse setSeatFee(UUID tenantPublicId, UpdateSeatFeeRequest request);
 }

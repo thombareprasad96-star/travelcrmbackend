@@ -11,6 +11,8 @@ public interface PlatformConfigService {
     // Well-known keys.
     String MAINTENANCE_ENABLED = "maintenance.enabled";
     String MAINTENANCE_MESSAGE = "maintenance.message";
+    /** Platform-flat default monthly seat fee (in the plan currency) charged per active sub-agent. */
+    String SUBAGENT_SEAT_FEE = "billing.subagent.seat-fee";
 
     List<PlatformConfigResponse> listConfig();
 

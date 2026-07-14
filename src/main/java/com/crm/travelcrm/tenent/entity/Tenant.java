@@ -8,6 +8,7 @@ import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.ColumnDefault;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.HashSet;
 import java.util.Set;
@@ -84,6 +85,11 @@ public class Tenant extends BaseEntity {
     // (NOT unlimited). Denormalized from Plan on create / plan-change; SuperAdmin-overridable.
     @Column(name = "max_sub_agents")
     private Integer maxSubAgents;
+
+    // Per-tenant monthly seat fee charged per ACTIVE sub-agent (in the plan currency). null = use the
+    // platform-flat default (PlatformConfig billing.subagent.seat-fee). Independent of quotaOverride.
+    @Column(name = "sub_agent_seat_fee", precision = 12, scale = 2)
+    private BigDecimal subAgentSeatFee;
 
     // When true, a SuperAdmin has manually overridden this tenant's quota limits, so a later
     // plan-change must NOT overwrite them with the plan defaults (the override wins until cleared).
