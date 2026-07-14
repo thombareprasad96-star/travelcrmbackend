@@ -12,6 +12,7 @@ import com.crm.travelcrm.booking.repository.BookingRepository;
 import com.crm.travelcrm.booking.repository.BookingServiceItemRepository;
 import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
+import com.crm.travelcrm.subagent.service.SubAgentCommissionService;
 import lombok.RequiredArgsConstructor;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -39,6 +40,7 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
     private final BookingRepository            bookingRepository;
     private final BookingPaymentRepository     paymentRepository;
     private final BookingServiceItemRepository serviceItemRepository;
+    private final SubAgentCommissionService    commissionService;
 
     @Override
     @Transactional(readOnly = true)
@@ -91,6 +93,9 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
                 derivePaymentStatus(newPaid, booking.getTotalPayable(), booking.getPaymentStatus()));
         bookingRepository.save(booking);
 
+        // Broker commission accrues as the customer pays (no-op unless the booking is sub-agent-owned).
+        commissionService.syncForBooking(booking);
+
         log.info("Payment {} (₹{}) recorded on booking {} -> paid {}/{} [{}]",
                 saved.getPublicId(), saved.getAmount(), booking.getBookingCode(),
                 newPaid, booking.getTotalPayable(), booking.getPaymentStatus());
@@ -128,6 +133,9 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
         booking.setPaymentStatus(
                 derivePaymentStatus(newPaid, booking.getTotalPayable(), booking.getPaymentStatus()));
         bookingRepository.save(booking);
+
+        // Removing a receipt lowers net collection → reverses the proportional commission.
+        commissionService.syncForBooking(booking);
 
         log.info("Payment {} removed from booking {} -> paid {}/{} [{}]",
                 paymentPublicId, booking.getBookingCode(),

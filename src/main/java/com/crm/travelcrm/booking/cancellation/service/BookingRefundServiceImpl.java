@@ -15,6 +15,7 @@ import com.crm.travelcrm.booking.exception.BookingNotFoundException;
 import com.crm.travelcrm.booking.repository.BookingPaymentRepository;
 import com.crm.travelcrm.booking.repository.BookingRepository;
 import com.crm.travelcrm.common.exception.BusinessException;
+import com.crm.travelcrm.subagent.service.SubAgentCommissionService;
 import lombok.RequiredArgsConstructor;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -45,6 +46,7 @@ public class BookingRefundServiceImpl implements BookingRefundService {
     private final BookingPaymentRepository paymentRepository;
     private final BookingCancellationRepository cancellationRepository;
     private final CancellationDocumentService documentService;
+    private final SubAgentCommissionService commissionService;
 
     @Override
     @Transactional
@@ -122,6 +124,10 @@ public class BookingRefundServiceImpl implements BookingRefundService {
         }
         bookingRepository.save(booking);
         cancellationRepository.save(record);
+
+        // A refund lowers net collection → reverse the sub-agent's commission proportionally (no-op
+        // for staff-owned bookings).
+        commissionService.syncForBooking(booking);
 
         // 3) Acknowledge THIS disbursement with a numbered voucher.
         BookingDocument voucher = documentService.issueRefundVoucher(
