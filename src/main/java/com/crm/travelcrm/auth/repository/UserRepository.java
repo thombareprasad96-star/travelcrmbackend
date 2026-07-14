@@ -41,6 +41,13 @@ public interface UserRepository extends JpaRepository<User, Long> {
     long countByTenantIdAndDeletedAtIsNullAndIsActiveFalse(Long tenantId);
     long countByTenantIdAndDeletedAtIsNullAndRole(Long tenantId, Role role);
 
+    /**
+     * Staff-seat count = users excluding a role. Used by the {@code maxUsers} gate to exclude
+     * B2B sub-agents, which have their own separate cap ({@code Tenant.maxSubAgents}) and seat fee,
+     * so a sub-agent never consumes a staff seat.
+     */
+    long countByTenantIdAndDeletedAtIsNullAndRoleNot(Long tenantId, Role role);
+
     /** Total tenant users across the platform (excludes platform users with a null tenantId). */
     long countByDeletedAtIsNullAndTenantIdIsNotNull();
 

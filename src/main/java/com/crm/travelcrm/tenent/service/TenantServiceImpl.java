@@ -98,6 +98,7 @@ public class TenantServiceImpl implements TenantService {
             tenant.setMaxLeads(p.getMaxLeads());
             tenant.setMaxBookingsPerMonth(p.getMaxBookingsPerMonth());
             tenant.setMaxStorageMb(p.getMaxStorageMb());
+            tenant.setMaxSubAgents(p.getMaxSubAgents());
             tenant.setEnabledModules(new HashSet<>(p.getModules()));
         });
 
@@ -208,6 +209,7 @@ public class TenantServiceImpl implements TenantService {
             tenant.setMaxLeads(plan.getMaxLeads());
             tenant.setMaxBookingsPerMonth(plan.getMaxBookingsPerMonth());
             tenant.setMaxStorageMb(plan.getMaxStorageMb());
+            tenant.setMaxSubAgents(plan.getMaxSubAgents());
         }
         Tenant saved = tenantRepository.save(tenant);
 

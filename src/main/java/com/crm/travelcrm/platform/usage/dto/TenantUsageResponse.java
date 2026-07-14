@@ -40,4 +40,11 @@ public class TenantUsageResponse {
     private Double storagePercent;
     private boolean storageOverLimit;
     private boolean storageNearLimit;
+
+    // ── B2B sub-agents provisioned vs gated cap (0 = feature not granted) ──
+    private long subAgents;
+    private Integer maxSubAgents;          // 0/null-normalised-to-0 = none allowed (gated capability)
+    private Double subAgentsPercent;
+    private boolean subAgentsOverLimit;
+    private boolean subAgentsNearLimit;
 }

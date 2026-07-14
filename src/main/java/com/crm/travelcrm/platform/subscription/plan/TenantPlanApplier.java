@@ -63,6 +63,7 @@ public class TenantPlanApplier {
             t.setMaxLeads(plan.getMaxLeads());
             t.setMaxBookingsPerMonth(plan.getMaxBookingsPerMonth());
             t.setMaxStorageMb(plan.getMaxStorageMb());
+            t.setMaxSubAgents(plan.getMaxSubAgents());
         }
         tenantRepository.save(t);
 

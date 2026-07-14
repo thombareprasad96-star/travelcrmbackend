@@ -80,6 +80,11 @@ public class Tenant extends BaseEntity {
     @Column(name = "max_storage_mb")
     private Integer maxStorageMb;
 
+    // Max B2B sub-agents this tenant may provision. GATED paid capability: null or 0 = none allowed
+    // (NOT unlimited). Denormalized from Plan on create / plan-change; SuperAdmin-overridable.
+    @Column(name = "max_sub_agents")
+    private Integer maxSubAgents;
+
     // When true, a SuperAdmin has manually overridden this tenant's quota limits, so a later
     // plan-change must NOT overwrite them with the plan defaults (the override wins until cleared).
     @Column(name = "quota_override", nullable = false)

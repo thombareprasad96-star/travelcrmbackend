@@ -12,6 +12,7 @@ import com.crm.travelcrm.platform.usage.dto.UsageDashboardResponse;
 import com.crm.travelcrm.platform.usage.dto.UsageOverviewResponse;
 import com.crm.travelcrm.platform.usage.storage.TenantStorageAssetRepository;
 import com.crm.travelcrm.portal.document.repository.TravelerDocumentRepository;
+import com.crm.travelcrm.subagent.repository.SubAgentProfileRepository;
 import com.crm.travelcrm.tenent.entity.Tenant;
 import com.crm.travelcrm.tenent.exception.TenantNotFoundException;
 import com.crm.travelcrm.tenent.tenentsRepository.TenantRepository;
@@ -49,6 +50,7 @@ public class UsageServiceImpl implements UsageService {
     private final BookingRepository bookingRepository;
     private final TenantStorageAssetRepository storageAssetRepository;
     private final TravelerDocumentRepository travelerDocumentRepository;
+    private final SubAgentProfileRepository subAgentProfileRepository;
     private final PlanRepository planRepository;
     private final PlatformAuditRecorder platformAuditRecorder;
 
@@ -67,13 +69,15 @@ public class UsageServiceImpl implements UsageService {
                 toCountMap(bookingRepository.countBookingsByTenantForMonth(monthStart, nextMonthStart));
         Map<Long, Long> assetBytes = toCountMap(storageAssetRepository.sumBytesGroupedByTenant());
         Map<Long, Long> docBytes = toCountMap(travelerDocumentRepository.sumBytesGroupedByTenant());
+        Map<Long, Long> subAgents = toCountMap(subAgentProfileRepository.countProvisionedGroupedByTenant());
 
         List<TenantUsageResponse> rows = new ArrayList<>(tenants.size());
         for (Tenant t : tenants) {
             long u = activeUsers.getOrDefault(t.getId(), 0L);
             long b = bookings.getOrDefault(t.getId(), 0L);
             long s = assetBytes.getOrDefault(t.getId(), 0L) + docBytes.getOrDefault(t.getId(), 0L);
-            rows.add(toUsage(t, u, b, s));
+            long sa = subAgents.getOrDefault(t.getId(), 0L);
+            rows.add(toUsage(t, u, b, s, sa));
         }
         // Worst-usage first so at-risk tenants surface at the top of the dashboard.
         rows.sort(Comparator.comparingDouble(UsageServiceImpl::worstPercent).reversed());
@@ -98,7 +102,8 @@ public class UsageServiceImpl implements UsageService {
     @Transactional(readOnly = true)
     public TenantUsageResponse getUsage(UUID tenantPublicId) {
         Tenant t = requireLive(tenantPublicId);
-        return toUsage(t, currentUsers(t.getId()), currentBookings(t.getId()), currentStorage(t.getId()));
+        return toUsage(t, currentUsers(t.getId()), currentBookings(t.getId()), currentStorage(t.getId()),
+                currentSubAgents(t.getId()));
     }
 
     @Override
@@ -113,6 +118,7 @@ public class UsageServiceImpl implements UsageService {
                 t.setMaxLeads(p.getMaxLeads());
                 t.setMaxBookingsPerMonth(p.getMaxBookingsPerMonth());
                 t.setMaxStorageMb(p.getMaxStorageMb());
+                t.setMaxSubAgents(p.getMaxSubAgents());
             });
             t.setQuotaOverride(false);
             detail = "Cleared quota override — reverted to " + t.getPlan() + " plan defaults";
@@ -122,6 +128,7 @@ public class UsageServiceImpl implements UsageService {
             if (req.getMaxLeads() != null) { t.setMaxLeads(req.getMaxLeads()); any = true; }
             if (req.getMaxBookingsPerMonth() != null) { t.setMaxBookingsPerMonth(req.getMaxBookingsPerMonth()); any = true; }
             if (req.getMaxStorageMb() != null) { t.setMaxStorageMb(req.getMaxStorageMb()); any = true; }
+            if (req.getMaxSubAgents() != null) { t.setMaxSubAgents(req.getMaxSubAgents()); any = true; }
             if (!any) {
                 throw new BusinessException(
                         "Provide at least one limit to override, or set clearOverride=true.",
@@ -129,14 +136,16 @@ public class UsageServiceImpl implements UsageService {
             }
             t.setQuotaOverride(true);
             detail = "Quota override — users=" + t.getMaxUsers() + ", leads=" + t.getMaxLeads()
-                    + ", bookings/mo=" + t.getMaxBookingsPerMonth() + ", storageMb=" + t.getMaxStorageMb();
+                    + ", bookings/mo=" + t.getMaxBookingsPerMonth() + ", storageMb=" + t.getMaxStorageMb()
+                    + ", subAgents=" + t.getMaxSubAgents();
         }
 
         tenantRepository.save(t);
         platformAuditRecorder.safeRecord(PlatformAuditAction.QUOTA_OVERRIDE, true,
                 t.getId(), t.getOrganizationCode(), "TENANT", t.getPublicId(), detail);
 
-        return toUsage(t, currentUsers(t.getId()), currentBookings(t.getId()), currentStorage(t.getId()));
+        return toUsage(t, currentUsers(t.getId()), currentBookings(t.getId()), currentStorage(t.getId()),
+                currentSubAgents(t.getId()));
     }
 
     // ── single-tenant live counts ───────────────────────────────────────────────
@@ -155,6 +164,10 @@ public class UsageServiceImpl implements UsageService {
                 + travelerDocumentRepository.sumBytesByTenant(tenantId);
     }
 
+    private long currentSubAgents(Long tenantId) {
+        return subAgentProfileRepository.countByTenantIdAndDeletedAtIsNull(tenantId);
+    }
+
     private Tenant requireLive(UUID publicId) {
         return tenantRepository.findByPublicIdAndDeletedAtIsNull(publicId)
                 .orElseThrow(() -> new TenantNotFoundException(publicId));
@@ -162,11 +175,20 @@ public class UsageServiceImpl implements UsageService {
 
     // ── mapping + math ──────────────────────────────────────────────────────────
 
-    private TenantUsageResponse toUsage(Tenant t, long activeUsers, long bookings, long storageBytes) {
+    private TenantUsageResponse toUsage(Tenant t, long activeUsers, long bookings, long storageBytes,
+                                        long subAgents) {
         Long userLimit = effLong(t.getMaxUsers());
         Long bookingLimit = effLong(t.getMaxBookingsPerMonth());
         Integer storageMb = (t.getMaxStorageMb() == null || t.getMaxStorageMb() <= 0) ? null : t.getMaxStorageMb();
         Long storageLimitBytes = storageMb == null ? null : storageMb * BYTES_PER_MB;
+
+        // Sub-agents are GATED (0 = none allowed, NOT unlimited), so they don't use effLong: the cap
+        // is always shown as a concrete number and "over" fires if a tenant somehow holds seats it is
+        // no longer entitled to.
+        int saCap = t.getMaxSubAgents() == null ? 0 : Math.max(0, t.getMaxSubAgents());
+        Double saPercent = saCap > 0 ? Math.round((subAgents * 10000.0) / saCap) / 100.0 : null;
+        boolean saOver = saCap > 0 ? subAgents >= saCap : subAgents > 0;
+        boolean saNear = saCap > 0 && subAgents < saCap && subAgents * 100.0 >= saCap * (double) warnThresholdPercent;
 
         return TenantUsageResponse.builder()
                 .tenantPublicId(t.getPublicId())
@@ -190,6 +212,11 @@ public class UsageServiceImpl implements UsageService {
                 .storagePercent(pct(storageBytes, storageLimitBytes))
                 .storageOverLimit(over(storageBytes, storageLimitBytes))
                 .storageNearLimit(near(storageBytes, storageLimitBytes, warnThresholdPercent))
+                .subAgents(subAgents)
+                .maxSubAgents(saCap)
+                .subAgentsPercent(saPercent)
+                .subAgentsOverLimit(saOver)
+                .subAgentsNearLimit(saNear)
                 .build();
     }
 

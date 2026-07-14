@@ -23,6 +23,10 @@ public class UpdateTenantQuotaRequest {
     @Min(value = 1, message = "Max storage (MB) must be at least 1")
     private Integer maxStorageMb;
 
+    /** Sub-agents this tenant may provision (gated). 0 disables sub-agents; null = leave unchanged. */
+    @Min(value = 0, message = "Max sub-agents cannot be negative")
+    private Integer maxSubAgents;
+
     /** Revert every limit to the tenant's plan defaults and remove the override pin. */
     private boolean clearOverride;
 }

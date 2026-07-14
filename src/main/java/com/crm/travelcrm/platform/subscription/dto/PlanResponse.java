@@ -21,6 +21,7 @@ public class PlanResponse {
     private Integer maxLeads;             // null = unlimited
     private Integer maxBookingsPerMonth;  // null = unlimited
     private Integer maxStorageMb;         // null = unlimited
+    private Integer maxSubAgents;         // null/0 = none (gated capability)
     private Set<String> modules;
     private boolean active;
 }

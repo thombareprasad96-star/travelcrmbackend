@@ -214,14 +214,14 @@ public class DevDataSeeder implements CommandLineRunner {
                 .code(TenantPlan.STARTER).displayName("Basic")
                 .monthlyPrice(new BigDecimal("2999")).currency("INR")
                 .maxUsers(5).maxLeads(500)
-                .maxBookingsPerMonth(50).maxStorageMb(512)
+                .maxBookingsPerMonth(50).maxStorageMb(512).maxSubAgents(0)
                 .modules(new HashSet<>(Set.of("LEADS", "BOOKINGS", "QUOTATIONS", "CUSTOMERS", "MASTERS")))
                 .active(true).build());
         planRepository.save(Plan.builder()
                 .code(TenantPlan.PRO).displayName("Pro")
                 .monthlyPrice(new BigDecimal("7999")).currency("INR")
                 .maxUsers(20).maxLeads(5000)
-                .maxBookingsPerMonth(500).maxStorageMb(5120)
+                .maxBookingsPerMonth(500).maxStorageMb(5120).maxSubAgents(5)
                 .modules(new HashSet<>(Set.of("LEADS", "BOOKINGS", "QUOTATIONS", "CUSTOMERS", "MASTERS",
                         "VENDORS", "REPORTS", "FLEET", "WHATSAPP")))
                 .active(true).build());
@@ -229,7 +229,7 @@ public class DevDataSeeder implements CommandLineRunner {
                 .code(TenantPlan.ENTERPRISE).displayName("Enterprise")
                 .monthlyPrice(new BigDecimal("19999")).currency("INR")
                 .maxUsers(null).maxLeads(null)
-                .maxBookingsPerMonth(null).maxStorageMb(null)
+                .maxBookingsPerMonth(null).maxStorageMb(null).maxSubAgents(50)
                 .modules(new HashSet<>(Set.of("LEADS", "BOOKINGS", "QUOTATIONS", "CUSTOMERS", "MASTERS",
                         "VENDORS", "REPORTS", "FLEET", "WHATSAPP", "DISHA_AI", "PORTAL")))
                 .active(true).build());

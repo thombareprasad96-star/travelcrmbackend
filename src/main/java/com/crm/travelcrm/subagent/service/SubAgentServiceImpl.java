@@ -13,6 +13,8 @@ import com.crm.travelcrm.subagent.entity.SubAgentProfile;
 import com.crm.travelcrm.subagent.enums.MarkupType;
 import com.crm.travelcrm.subagent.enums.SubAgentStatus;
 import com.crm.travelcrm.subagent.repository.SubAgentProfileRepository;
+import com.crm.travelcrm.tenent.entity.Tenant;
+import com.crm.travelcrm.tenent.tenentsRepository.TenantRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -37,6 +39,7 @@ public class SubAgentServiceImpl implements SubAgentService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final SubAgentProfileRepository profileRepository;
+    private final TenantRepository tenantRepository;
 
     @Override
     @Transactional
@@ -50,6 +53,10 @@ public class SubAgentServiceImpl implements SubAgentService {
                     "A user with email " + email + " already exists in your organization.",
                     HttpStatus.CONFLICT);
         }
+
+        // Gated capability + per-tenant cap set by the SuperAdmin (mirrors the user-seat gate).
+        // null/0 = the tenant's plan grants no sub-agents.
+        enforceSubAgentCap(tenantId);
 
         MarkupType markupType = req.getMarkupType() != null ? req.getMarkupType() : MarkupType.PERCENT;
         BigDecimal markupValue = req.getMarkupValue() != null ? req.getMarkupValue() : BigDecimal.ZERO;
@@ -166,6 +173,25 @@ public class SubAgentServiceImpl implements SubAgentService {
     private User requireUser(Long userId, Long tenantId) {
         return userRepository.findByIdAndTenantIdAndDeletedAtIsNull(userId, tenantId)
                 .orElseThrow(() -> new ResourceNotFoundException("Sub-agent login not found"));
+    }
+
+    /**
+     * Sub-agent seat gate. Sub-agents are a GATED paid capability: a tenant may provision at most
+     * {@code Tenant.maxSubAgents} of them (null/0 = none). {@code Tenant} is platform-level (no tenant
+     * filter), so a direct {@code findById} is correct here. Mirrors the user-seat cap in
+     * {@code UserServiceImpl} and the booking-quota gate.
+     */
+    private void enforceSubAgentCap(Long tenantId) {
+        Tenant tenant = tenantRepository.findById(tenantId).orElse(null);
+        int cap = (tenant == null || tenant.getMaxSubAgents() == null) ? 0 : Math.max(0, tenant.getMaxSubAgents());
+        long used = profileRepository.countByTenantIdAndDeletedAtIsNull(tenantId);
+        if (used >= cap) {
+            String msg = cap == 0
+                    ? "Your plan does not include sub-agents. Contact support to enable them."
+                    : "Your plan allows up to " + cap + " sub-agent" + (cap == 1 ? "" : "s")
+                            + ". Remove one or contact support to add more.";
+            throw new BusinessException(msg, HttpStatus.FORBIDDEN);
+        }
     }
 
     private void validateMarkup(MarkupType type, BigDecimal value) {
