@@ -21,6 +21,7 @@ import com.crm.travelcrm.lead.repository.LeadRepository;
 import com.crm.travelcrm.notification.api.NotifyEvent;
 import com.crm.travelcrm.notification.domain.enums.DeliveryChannel;
 import com.crm.travelcrm.permission.service.ScopeResolver;
+import com.crm.travelcrm.permission.service.SubAgentScope;
 import com.crm.travelcrm.quotation.dto.QuotationRefDto;
 import com.crm.travelcrm.quotation.service.QuotationService;
 import com.crm.travelcrm.tenent.entity.Tenant;
@@ -55,6 +56,7 @@ public class LeadServiceImpl implements LeadService {
     private final UserRepository userRepository;
     private final QuotationService quotationService;
     private final ScopeResolver scopeResolver;
+    private final SubAgentScope subAgentScope;
     private final LeadAccessGuard leadAccessGuard;
     private final TenantRepository tenantRepository;
 
@@ -473,6 +475,13 @@ public class LeadServiceImpl implements LeadService {
      * Every lead must have an owner, and that owner must be active.
      */
     private User resolveAssignedUser(UUID assignedUserId, Long tenantId) {
+        // A sub-agent's leads are ALWAYS assigned to itself: ignore any requested assignee so the lead
+        // is visible to it under OWN scope AND it can never hand a lead to another user.
+        if (subAgentScope.active()) {
+            return userRepository
+                    .findByIdAndTenantIdAndDeletedAtIsNull(currentUser().getId(), tenantId)
+                    .orElseThrow(() -> new ResourceNotFoundException("Sub-agent login not found"));
+        }
         if (assignedUserId == null) {
             // @NotNull on the DTO catches this first; kept as defense in depth
             throw new BusinessException(
