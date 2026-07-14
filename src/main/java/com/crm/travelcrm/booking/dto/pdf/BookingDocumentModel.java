@@ -31,6 +31,13 @@ public class BookingDocumentModel {
     private final String     createdBy;
     private final LocalDate  generatedOn;
 
+    /**
+     * Owning user's internal id — a server-only carrier for white-label PDF branding: when the
+     * booking is owned by an active sub-agent, their brand overrides the tenant Company's on the
+     * invoice/voucher. Never rendered into the document text itself.
+     */
+    private final Long       ownerUserId;
+
     // ── Bill-to / traveller ──────────────────────────────────────────────────
     private final Party customer;
 

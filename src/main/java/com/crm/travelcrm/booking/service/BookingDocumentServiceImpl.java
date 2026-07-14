@@ -137,6 +137,7 @@ public class BookingDocumentServiceImpl implements BookingDocumentService {
                 .destination(booking.getDestinationSnapshot())
                 .createdBy(booking.getCreatedBy())
                 .generatedOn(LocalDate.now())
+                .ownerUserId(booking.getOwnerUserId())   // white-label PDF branding carrier
                 .customer(party)
                 .customerAmount(booking.getCustomerAmount())
                 .gst(booking.getGst())

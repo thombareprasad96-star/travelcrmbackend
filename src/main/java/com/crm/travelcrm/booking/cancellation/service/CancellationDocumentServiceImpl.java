@@ -16,6 +16,7 @@ import com.crm.travelcrm.company.entity.Company;
 import com.crm.travelcrm.company.repository.CompanyRepository;
 import com.crm.travelcrm.customer.entity.Customer;
 import com.crm.travelcrm.customer.repository.CustomerRepository;
+import com.crm.travelcrm.subagent.service.SubAgentBrandingService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.apache.logging.log4j.LogManager;
@@ -48,6 +49,7 @@ public class CancellationDocumentServiceImpl implements CancellationDocumentServ
     private final CompanyRepository companyRepository;
     private final CustomerRepository customerRepository;
     private final BookingRepository bookingRepository;
+    private final SubAgentBrandingService brandingService;
 
     @Value("${quotation.pdf.company-name:TravelCRM}")     private String defCompanyName;
     @Value("${quotation.pdf.company-tagline:Your Journey, Our Passion}") private String defTagline;
@@ -187,7 +189,7 @@ public class CancellationDocumentServiceImpl implements CancellationDocumentServ
                 .customerOwes(record.isCustomerOwes())
                 .brandColor(brandColor);
 
-        applyBranding(b, booking.getTenantId());
+        applyBranding(b, booking.getTenantId(), booking.getOwnerUserId());
         return b.build();
     }
 
@@ -224,12 +226,18 @@ public class CancellationDocumentServiceImpl implements CancellationDocumentServ
                 .totalRefundedToDate(totalRefundedToDate)
                 .brandColor(brandColor);
 
-        applyBranding(b, booking.getTenantId());
+        applyBranding(b, booking.getTenantId(), booking.getOwnerUserId());
         return b.build();
     }
 
-    /** Freeze the tenant's branding INTO the snapshot so a reissue reproduces the original document. */
-    private void applyBranding(CancellationDocumentModel.CancellationDocumentModelBuilder b, Long tenantId) {
+    /**
+     * Freeze the tenant's branding INTO the snapshot so a reissue reproduces the original document.
+     * When {@code ownerUserId} is an active sub-agent, their brand white-labels the identity fields
+     * (name/logo/phone/email/colour) at issue time — the legal address/website/GST stay the parent's,
+     * as the credit note is issued under the parent tenant's registration.
+     */
+    private void applyBranding(CancellationDocumentModel.CancellationDocumentModelBuilder b,
+                               Long tenantId, Long ownerUserId) {
         String name = defCompanyName, logo = defLogo, phone = defPhone, email = defEmail,
                 website = defWebsite, address = defAddress, gst = null;
         Company co = tenantId != null ? companyRepository.findByTenantId(tenantId).orElse(null) : null;
@@ -242,6 +250,17 @@ public class CancellationDocumentServiceImpl implements CancellationDocumentServ
             if (StringUtils.hasText(co.getAddress())) address = co.getAddress();
             gst = co.getGstin();
         }
+
+        var branding = brandingService.resolve(ownerUserId);
+        if (branding.isPresent()) {
+            var sa = branding.get();
+            if (StringUtils.hasText(sa.brandName()))    name  = sa.brandName();
+            if (StringUtils.hasText(sa.logoUrl()))      logo  = sa.logoUrl();
+            if (StringUtils.hasText(sa.contactPhone())) phone = sa.contactPhone();
+            if (StringUtils.hasText(sa.contactEmail())) email = sa.contactEmail();
+            if (StringUtils.hasText(sa.brandColor()))   b.brandColor(sa.brandColor());
+        }
+
         b.companyName(name).companyLogoUrl(logo).companyTagline(defTagline).companyPhone(phone)
          .companyEmail(email).companyWebsite(website).companyAddress(address).companyGst(gst);
     }

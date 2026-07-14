@@ -3,6 +3,7 @@ package com.crm.travelcrm.quotation.dto;
 import com.crm.travelcrm.lead.enums.LeadStage;
 import com.crm.travelcrm.quotation.enums.DiscountType;
 import com.crm.travelcrm.quotation.enums.QuotationStage;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Builder;
@@ -63,6 +64,16 @@ public class QuotationResponseDto {
     private String createdBy;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+
+    /**
+     * Owning user's internal id — a server-only carrier for white-label PDF branding resolution
+     * (the sub-agent's brand overrides the tenant Company's on their quotations, including on the
+     * public share-link path where there is no TenantContext). {@code @JsonIgnore} so it is never
+     * serialized to any client — the "never expose the internal Long id" rule still holds; the
+     * customer-facing {@code PublicQuotationResponseDto} never carries it at all.
+     */
+    @JsonIgnore
+    private Long ownerUserId;
 
     // ── Customer snapshot ─────────────────────────────────────────────────────
     @Data
