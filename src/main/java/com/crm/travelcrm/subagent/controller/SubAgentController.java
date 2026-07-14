@@ -2,8 +2,11 @@ package com.crm.travelcrm.subagent.controller;
 
 import com.crm.travelcrm.common.dto.ApiResponse;
 import com.crm.travelcrm.subagent.dto.CreateSubAgentRequest;
+import com.crm.travelcrm.subagent.dto.SubAgentCommissionLedgerDto;
 import com.crm.travelcrm.subagent.dto.SubAgentResponse;
+import com.crm.travelcrm.subagent.dto.SubAgentRollupRow;
 import com.crm.travelcrm.subagent.dto.UpdateSubAgentRequest;
+import com.crm.travelcrm.subagent.service.SubAgentRollupService;
 import com.crm.travelcrm.subagent.service.SubAgentService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -28,6 +31,7 @@ import java.util.UUID;
 public class SubAgentController {
 
     private final SubAgentService subAgentService;
+    private final SubAgentRollupService rollupService;
 
     @PostMapping
     @PreAuthorize("hasAuthority('USER_CREATE')")
@@ -36,6 +40,19 @@ public class SubAgentController {
         SubAgentResponse res = subAgentService.create(request);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.success("Sub-agent created successfully", res, 201));
+    }
+
+    /** Parent roll-up: every sub-agent's bookings + commission earned. Literal path wins over /{publicId}. */
+    @GetMapping("/rollup")
+    public ResponseEntity<ApiResponse<List<SubAgentRollupRow>>> rollup() {
+        return ResponseEntity.ok(
+                ApiResponse.success("Sub-agent roll-up fetched", rollupService.rollup()));
+    }
+
+    @GetMapping("/{publicId}/commissions")
+    public ResponseEntity<ApiResponse<SubAgentCommissionLedgerDto>> commissions(@PathVariable UUID publicId) {
+        return ResponseEntity.ok(
+                ApiResponse.success("Commission ledger fetched", rollupService.commissionLedger(publicId)));
     }
 
     @GetMapping
