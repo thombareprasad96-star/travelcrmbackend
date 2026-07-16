@@ -17,6 +17,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -83,6 +84,24 @@ public class PermissionService {
         return userPermissionRepository.findByTenantIdAndUserId(tenantId, userId)
                 .map(up -> deserialize(up.getPermissionsJson()))
                 .orElse(null);
+    }
+
+    /**
+     * Batch variant of {@link #savedMapOrNull} for many users in ONE query — used to resolve an
+     * eligible-user pool without an N+1. The returned map contains an entry ONLY for users that have
+     * a persisted row; a user absent from the result has never been customised (caller falls back to
+     * role defaults), exactly matching the null semantics of {@link #savedMapOrNull}.
+     */
+    @Transactional(readOnly = true)
+    public Map<Long, Map<String, PermissionEntry>> savedMapsForUsers(Long tenantId, Collection<Long> userIds) {
+        if (userIds == null || userIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, Map<String, PermissionEntry>> byUser = new HashMap<>();
+        for (UserPermission up : userPermissionRepository.findByTenantIdAndUserIdIn(tenantId, userIds)) {
+            byUser.put(up.getUserId(), deserialize(up.getPermissionsJson()));
+        }
+        return byUser;
     }
 
     private User resolveUser(UUID publicId, Long tenantId) {

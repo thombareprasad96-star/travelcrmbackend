@@ -1,5 +1,7 @@
 package com.crm.travelcrm.subagent.dto;
 
+import com.crm.travelcrm.platform.subscription.upgrade.enums.OfflinePaymentMode;
+import com.crm.travelcrm.platform.subscription.upgrade.enums.PaymentMode;
 import com.crm.travelcrm.subagent.enums.MarkupType;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Email;
@@ -38,4 +40,13 @@ public class CreateSubAgentRequest {
     private String contactPhone;
     private String contactEmail;
     private String brandColor;
+
+    // ── Seat licensing (used only when the tenant is over its seat cap) ──
+    // How to pay for the seat if one must be purchased. Defaults to ONLINE. When OFFLINE, offlineMode +
+    // offlineReference are required (validated when the seat-license request is opened). Ignored when a
+    // free licensed seat is available.
+    private PaymentMode paymentMode;
+    private OfflinePaymentMode offlineMode;
+    private String offlineReference;
+    private String offlineNotes;
 }

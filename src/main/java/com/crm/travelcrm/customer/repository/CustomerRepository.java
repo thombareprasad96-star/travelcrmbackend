@@ -41,6 +41,10 @@ public interface CustomerRepository
 
     List<Customer> findAllByTenantIdAndDeletedAtIsNull(Long tenantId);
 
+    // Bulk load for a set of ids within the tenant (used by Marketing dispatch to resolve
+    // merge tags for a batch of campaign recipients without N per-row lookups).
+    List<Customer> findByIdInAndTenantIdAndDeletedAtIsNull(java.util.Collection<Long> ids, Long tenantId);
+
     /** Case-insensitive name search (used by {@code /search-name}). */
     List<Customer> findByTenantIdAndDeletedAtIsNullAndNameContainingIgnoreCase(
             Long tenantId, String name);

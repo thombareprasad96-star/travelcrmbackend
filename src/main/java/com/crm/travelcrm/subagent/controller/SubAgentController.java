@@ -2,6 +2,7 @@ package com.crm.travelcrm.subagent.controller;
 
 import com.crm.travelcrm.common.dto.ApiResponse;
 import com.crm.travelcrm.subagent.dto.CreateSubAgentRequest;
+import com.crm.travelcrm.subagent.dto.CreateSubAgentResponse;
 import com.crm.travelcrm.subagent.dto.SubAgentCommissionLedgerDto;
 import com.crm.travelcrm.subagent.dto.SubAgentResponse;
 import com.crm.travelcrm.subagent.dto.SubAgentRollupRow;
@@ -35,11 +36,14 @@ public class SubAgentController {
 
     @PostMapping
     @PreAuthorize("hasAuthority('USER_CREATE')")
-    public ResponseEntity<ApiResponse<SubAgentResponse>> create(
+    public ResponseEntity<ApiResponse<CreateSubAgentResponse>> create(
             @Valid @RequestBody CreateSubAgentRequest request) {
-        SubAgentResponse res = subAgentService.create(request);
+        CreateSubAgentResponse res = subAgentService.create(request);
+        String message = res.isLicenseRequired()
+                ? "Sub-agent created — a seat license must be purchased to activate them"
+                : "Sub-agent created successfully";
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(ApiResponse.success("Sub-agent created successfully", res, 201));
+                .body(ApiResponse.success(message, res, 201));
     }
 
     /** Parent roll-up: every sub-agent's bookings + commission earned. Literal path wins over /{publicId}. */

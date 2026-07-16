@@ -7,10 +7,13 @@ import com.crm.travelcrm.platform.audit.entity.PlatformAuditAction;
 import com.crm.travelcrm.platform.billing.dto.BillingRecordResponse;
 import com.crm.travelcrm.platform.billing.dto.CreateBillingRequest;
 import com.crm.travelcrm.platform.billing.dto.SeatFeeResponse;
+import com.crm.travelcrm.platform.billing.dto.SubAgentPricingResponse;
 import com.crm.travelcrm.platform.billing.dto.UpdateSeatFeeRequest;
+import com.crm.travelcrm.platform.billing.dto.UpdateSubAgentPricingRequest;
 import com.crm.travelcrm.platform.billing.entity.BillingRecord;
 import com.crm.travelcrm.platform.billing.enums.BillingStatus;
 import com.crm.travelcrm.platform.billing.repository.BillingRecordRepository;
+import com.crm.travelcrm.platform.config.service.PlatformConfigService;
 import com.crm.travelcrm.platform.subscription.dunning.DunningService;
 import com.crm.travelcrm.platform.subscription.entity.Plan;
 import com.crm.travelcrm.platform.subscription.plan.TenantPlanApplier;
@@ -45,6 +48,8 @@ public class BillingServiceImpl implements BillingService {
     private final TenantPlanApplier tenantPlanApplier;
     /** Resolves the per-tenant sub-agent seat fee folded into the recurring monthly invoice. */
     private final SubAgentSeatFeeService seatFeeService;
+    /** Reads/writes the platform-wide sub-agent seat pricing (same across all tenants). */
+    private final PlatformConfigService configService;
 
     @Override
     @Transactional(readOnly = true)
@@ -268,6 +273,45 @@ public class BillingServiceImpl implements BillingService {
 
     @Override
     @Transactional
+    public BillingRecordResponse issueSeatLicenseInvoice(Long tenantId, int quantity, BigDecimal amount, String notes) {
+        Tenant tenant = tenantRepository.findById(tenantId)
+                .orElseThrow(() -> new IllegalStateException("Tenant not found: " + tenantId));
+
+        TenantPlan planCode = tenant.getPlan();
+        Plan planEntity = planRepository.findByCode(planCode).orElse(null);
+        String currency = planEntity != null && StringUtils.hasText(planEntity.getCurrency())
+                ? planEntity.getCurrency() : "INR";
+        LocalDate today = LocalDate.now();
+
+        BillingRecord record = BillingRecord.builder()
+                .tenantId(tenant.getId())
+                .tenantCode(tenant.getOrganizationCode())
+                .tenantName(tenant.getOrganizationName())
+                .invoiceNumber(nextInvoiceNumber())
+                .plan(planCode)                // display only; seats are an add-on, not a plan change
+                .amount(amount)
+                .currency(currency)
+                // NO billing period: a seat add-on is NOT subscription coverage. A month-end periodEnd
+                // would flow through DunningService.onInvoicePaid and advance subscriptionEndDate (even
+                // reactivate a lapsed tenant) — so a one-time seat fee must never carry a period.
+                .periodStart(null)
+                .periodEnd(null)
+                .issueDate(today)
+                .dueDate(null)                 // seat-license purchase — NOT a dunning receivable
+                .status(BillingStatus.UNPAID)
+                // NO upgradeToPlan tag: SuperAdmin approval grants the seats, not the payment.
+                .notes(notes)
+                .build();
+
+        BillingRecord saved = billingRepository.save(record);
+        audit(PlatformAuditAction.BILLING_ISSUE, saved,
+                "Issued sub-agent seat-license charge " + saved.getInvoiceNumber() + " (" + currency + " " + amount
+                        + ") to " + tenant.getOrganizationName() + " for " + quantity + " seat(s)");
+        return toResponse(saved);
+    }
+
+    @Override
+    @Transactional
     public BillingRecordResponse voidInvoice(UUID billingPublicId) {
         BillingRecord record = requireRecord(billingPublicId);
         if (record.getStatus() == BillingStatus.PAID) {
@@ -319,6 +363,48 @@ public class BillingServiceImpl implements BillingService {
         platformAuditRecorder.safeRecord(PlatformAuditAction.QUOTA_OVERRIDE, true,
                 tenant.getId(), tenant.getOrganizationCode(), "TENANT", tenant.getPublicId(), detail);
         return toSeatFeeResponse(tenant);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public SubAgentPricingResponse getSubAgentPricing() {
+        return currentPricing();
+    }
+
+    @Override
+    @Transactional
+    public SubAgentPricingResponse setSubAgentPricing(UpdateSubAgentPricingRequest request) {
+        BigDecimal recurring = request.getRecurringSeatFee() != null
+                ? request.getRecurringSeatFee().max(BigDecimal.ZERO) : BigDecimal.ZERO;
+        // Recurring monthly fee — folded into every tenant's plan invoice as (active seats × this rate).
+        configService.setConfig(PlatformConfigService.SUBAGENT_SEAT_FEE, recurring.toPlainString(),
+                "Platform-wide recurring monthly Travel Partner seat fee (per active seat, added to the plan invoice).");
+        // One-time unlock fee; null clears it so it falls back to the recurring rate (never a silent 0).
+        if (request.getOneTimeLicenseFee() != null) {
+            configService.setConfig(PlatformConfigService.SUBAGENT_SEAT_LICENSE_FEE,
+                    request.getOneTimeLicenseFee().max(BigDecimal.ZERO).toPlainString(),
+                    "Platform-wide one-time Travel Partner seat-license (unlock) fee.");
+        } else {
+            configService.setConfig(PlatformConfigService.SUBAGENT_SEAT_LICENSE_FEE, "",
+                    "Platform-wide one-time Travel Partner seat-license fee (unset → uses the recurring rate).");
+        }
+        return currentPricing();
+    }
+
+    /** Read the platform-wide seat pricing. {@code effectiveRate(null)}/{@code effectiveLicenseRate(null)}
+     *  resolve the platform values (the per-tenant override branch is skipped for a null tenant). */
+    private SubAgentPricingResponse currentPricing() {
+        BigDecimal recurring = seatFeeService.effectiveRate(null);
+        BigDecimal effectiveLicense = seatFeeService.effectiveLicenseRate(null);
+        String rawLicense = configService.get(PlatformConfigService.SUBAGENT_SEAT_LICENSE_FEE, "");
+        boolean fallback = rawLicense == null || rawLicense.isBlank();
+        return SubAgentPricingResponse.builder()
+                .recurringSeatFee(recurring)
+                .oneTimeLicenseFee(fallback ? null : effectiveLicense)
+                .effectiveLicenseFee(effectiveLicense)
+                .licenseFeeUsingRecurringFallback(fallback)
+                .currency("INR")
+                .build();
     }
 
     private SeatFeeResponse toSeatFeeResponse(Tenant tenant) {

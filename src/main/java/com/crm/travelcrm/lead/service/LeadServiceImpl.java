@@ -9,9 +9,14 @@ import com.crm.travelcrm.lead.dto.LeadBoardColumnDto;
 import com.crm.travelcrm.lead.dto.LeadResponseDto;
 import com.crm.travelcrm.lead.dto.UserLeadStageCountDto;
 import com.crm.travelcrm.lead.dto.UserWorkloadDto;
+import com.crm.travelcrm.lead.assignment.audit.LeadAssignmentAudit;
+import com.crm.travelcrm.lead.assignment.audit.LeadAssignmentAuditRecorder;
+import com.crm.travelcrm.lead.assignment.service.AssignmentOutcome;
+import com.crm.travelcrm.lead.assignment.service.LeadAssignmentService;
 import com.crm.travelcrm.lead.entity.Lead;
 import com.crm.travelcrm.lead.entity.LeadItinerary;
 import com.crm.travelcrm.lead.enums.LeadStage;
+import com.crm.travelcrm.lead.enums.LeadStageGroups;
 import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.common.exception.RestoreAvailableException;
@@ -59,14 +64,16 @@ public class LeadServiceImpl implements LeadService {
     private final SubAgentScope subAgentScope;
     private final LeadAccessGuard leadAccessGuard;
     private final TenantRepository tenantRepository;
+    private final LeadAssignmentService leadAssignmentService;
+    private final LeadAssignmentAuditRecorder leadAssignmentAuditRecorder;
 
     // Terminal (closed) stages. A lead here no longer blocks a fresh lead for the same
     // contact, and CONVERTED specifically is owned by the booking lifecycle — it may be
     // entered ONLY by convert-to-booking and left ONLY by cancelling that booking (see
-    // assertConversionStageTransitionAllowed). Kept in sync with the uq_leads_*_open
-    // partial unique indexes in db/indexes.sql.
-    private static final Set<LeadStage> TERMINAL_STAGES =
-            Set.of(LeadStage.CONVERTED, LeadStage.LOST);
+    // assertConversionStageTransitionAllowed). Sourced from LeadStageGroups so the
+    // duplicate-detection logic, the load-based assignment feature, and the uq_leads_*_open
+    // partial unique indexes in db/indexes.sql all share one definition.
+    private static final Set<LeadStage> TERMINAL_STAGES = LeadStageGroups.TERMINAL_STAGES;
 
     // ── Create ────────────────────────────────────────────────────────────────
 
@@ -87,12 +94,50 @@ public class LeadServiceImpl implements LeadService {
         // tenantId is set here so it's available immediately in this transaction;
         // TenantEntityListener also guards it on @PrePersist as a safety net.
         lead.setTenantId(tenantId);
-        lead.setAssignedUser(resolveAssignedUser(request.getAssignedUserId(), tenantId));
+
+        // Intelligent assignment (Strategy Pattern): a privileged creator's explicit choice is
+        // honoured while the load-based recommendation is recomputed for the audit; agents/staff/
+        // sub-agents are force-assigned to themselves. Runs inside this transaction so the
+        // round-robin cursor's pessimistic lock is held to commit.
+        AssignmentOutcome outcome = leadAssignmentService.assignForCreate(request.getAssignedUserId());
+        lead.setAssignedUser(outcome.finalUser());
 
         Lead savedLead = leadRepository.save(lead);
-        log.info("Lead created | id: {} | tenantId: {}", savedLead.getPublicId(), tenantId);
+        log.info("Lead created | id: {} | tenantId: {} | strategy: {} | override: {}",
+                savedLead.getPublicId(), tenantId, outcome.strategyUsed(), outcome.manualOverride());
         publishLeadCreatedNotification(savedLead, tenantId);
+        recordAssignmentAudit(savedLead, outcome, tenantId);
         return leadMapper.toResponse(savedLead);
+    }
+
+    /**
+     * Best-effort audit of how the lead's owner was decided (createdBy, recommendedUser,
+     * finalAssignedUser, strategyUsed, manualOverride, timestamp). Written in its own transaction by
+     * {@link LeadAssignmentAuditRecorder} so it can never roll back the creation.
+     */
+    private void recordAssignmentAudit(Lead lead, AssignmentOutcome outcome, Long tenantId) {
+        User creator = currentUser();
+        try {
+            // record() runs in its own REQUIRES_NEW transaction (cross-bean call = proxy applies), so
+            // swallowing a failure here leaves this lead-creation transaction intact — an audit
+            // problem must never break the actual lead creation.
+            leadAssignmentAuditRecorder.record(LeadAssignmentAudit.builder()
+                    .tenantId(tenantId)
+                    .leadId(lead.getId())
+                    .leadPublicId(lead.getPublicId())
+                    .createdByUserId(creator.getId())
+                    .createdByName(creator.getName())
+                    .recommendedUserId(outcome.recommendedUserId())
+                    .recommendedUserName(outcome.recommendedUserName())
+                    .finalAssignedUserId(outcome.finalUser().getId())
+                    .finalAssignedUserName(outcome.finalUser().getName())
+                    .strategyUsed(outcome.strategyUsed())
+                    .manualOverride(outcome.manualOverride())
+                    .build());
+        } catch (Exception ex) {
+            log.warn("Lead assignment audit write failed for lead {}: {}",
+                    lead.getPublicId(), ex.getMessage());
+        }
     }
 
     // ── Read ──────────────────────────────────────────────────────────────────

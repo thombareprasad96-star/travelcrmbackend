@@ -48,6 +48,12 @@ public enum PlatformAuditAction {
     UPGRADE_REQUEST_REJECT,  // SuperAdmin rejected a request (tenant stays on current plan)
     UPGRADE_REQUEST_CANCEL,  // tenant withdrew a pending request
 
+    // ── Sub-agent (Travel Partner) seat-license requests (Phase: Broker Licensing) ─────
+    SUBAGENT_LICENSE_CREATE,  // tenant purchased sub-agent seat(s) (awaiting SuperAdmin approval)
+    SUBAGENT_LICENSE_APPROVE, // SuperAdmin approved → seats granted, pending sub-agent(s) activated
+    SUBAGENT_LICENSE_REJECT,  // SuperAdmin rejected (sub-agent stays PENDING_LICENSE; may resubmit)
+    SUBAGENT_LICENSE_CANCEL,  // tenant withdrew a pending seat-license request
+
     // ── Cross-tenant user control + impersonation (Phase: User Control) ──
     IMPERSONATION_START,
     IMPERSONATION_END,

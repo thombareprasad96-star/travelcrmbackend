@@ -118,7 +118,11 @@ public class UsageServiceImpl implements UsageService {
                 t.setMaxLeads(p.getMaxLeads());
                 t.setMaxBookingsPerMonth(p.getMaxBookingsPerMonth());
                 t.setMaxStorageMb(p.getMaxStorageMb());
-                t.setMaxSubAgents(p.getMaxSubAgents());
+                // Keep purchased add-on sub-agent seats: cap = plan default + paid seats (never wipe
+                // seats the tenant paid a one-time license fee for — mirrors TenantPlanApplier.applyPlan).
+                int planSeats = p.getMaxSubAgents() != null ? Math.max(0, p.getMaxSubAgents()) : 0;
+                int purchasedSeats = t.getPurchasedSubAgentSeats() != null ? Math.max(0, t.getPurchasedSubAgentSeats()) : 0;
+                t.setMaxSubAgents(planSeats + purchasedSeats);
             });
             t.setQuotaOverride(false);
             detail = "Cleared quota override — reverted to " + t.getPlan() + " plan defaults";

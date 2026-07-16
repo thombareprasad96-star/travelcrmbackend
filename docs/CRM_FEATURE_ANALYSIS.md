@@ -33,23 +33,17 @@ The platform is **far more complete than a typical CRM** — a mature, multi-ten
 
 ### High-value, clearly missing
 
-1. **Marketing & campaigns**
-   Transactional WhatsApp/email exists, but no **bulk broadcast, drip sequences, customer segments, or auto birthday/anniversary wishes**. Biggest gap for a travel agency (re-marketing to past travelers drives repeat sales). `LoyaltyTier` enum exists but isn't leveraged.
-
 2. **Customer-facing payment collection**
    Portal payment is a **stub SPI**; Razorpay is wired only for *platform* billing. Travelers can't actually pay online. Needed: "send payment link → collect → auto-reconcile to booking ledger". Highest-ROI addition.
 
 3. **Task & team calendar**
-   Reminders/follow-ups exist, but no unified **task board or calendar view** (assign tasks, due dates, team workload).
-
+   Reminders/follow-ups exist, but no uniTHAIRfied **task board or calendar view** (assign tasks, due dates, team workload).L
 4. **Lead workflow automation**
    No **round-robin auto-assignment, SLA/escalation rules, or duplicate detection** (confirmed absent). Leads are manually assigned today.
 
-5. **Accounting / GST depth**
-   Have tax rates + invoice PDF + payment ledger, but no **GST-compliant invoice numbering series, e-invoice, TDS, Tally/Zoho/QuickBooks sync, or P&L**. Important for Indian travel agencies.
-
+SE
 ### Domain-specific travel gaps
-
+   
 6. **Supplier/inventory integrations**
    All masters are manual. No **GDS/flight (Amadeus/TBO), hotel API, or live fares**. Even one supplier API is a differentiator.
 
@@ -57,7 +51,7 @@ The platform is **far more complete than a typical CRM** — a mature, multi-ten
    Customer has passport fields, but no **visa application pipeline / passport-expiry alerting** as a workflow.
 
 8. **Multi-currency**
-   Currency appears as labels only; no **FX conversion** for international bookings/quotes.
+   Currency appears as labels only; nr--- allo **FX conversion** for international bookings/quotes.
 
 9. **Post-trip feedback / NPS**
    Testimonials exist as a *master*, but no **automated post-trip survey → review capture** loop.
@@ -74,6 +68,7 @@ The platform is **far more complete than a typical CRM** — a mature, multi-ten
 ---
 
 ## Recommended sequencing
+
 
 1. **#2 Customer payment collection** — fastest revenue impact
 2. **#1 Marketing & campaigns** — repeat-sales driver

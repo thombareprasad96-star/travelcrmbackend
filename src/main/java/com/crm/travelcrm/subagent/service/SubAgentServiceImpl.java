@@ -7,11 +7,14 @@ import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.subagent.dto.CreateSubAgentRequest;
+import com.crm.travelcrm.subagent.dto.CreateSubAgentResponse;
 import com.crm.travelcrm.subagent.dto.SubAgentResponse;
 import com.crm.travelcrm.subagent.dto.UpdateSubAgentRequest;
 import com.crm.travelcrm.subagent.entity.SubAgentProfile;
 import com.crm.travelcrm.subagent.enums.MarkupType;
 import com.crm.travelcrm.subagent.enums.SubAgentStatus;
+import com.crm.travelcrm.subagent.license.dto.SubAgentLicenseRequestResponse;
+import com.crm.travelcrm.subagent.license.service.SubAgentLicenseService;
 import com.crm.travelcrm.subagent.repository.SubAgentProfileRepository;
 import com.crm.travelcrm.tenent.entity.Tenant;
 import com.crm.travelcrm.tenent.tenentsRepository.TenantRepository;
@@ -40,10 +43,11 @@ public class SubAgentServiceImpl implements SubAgentService {
     private final PasswordEncoder passwordEncoder;
     private final SubAgentProfileRepository profileRepository;
     private final TenantRepository tenantRepository;
+    private final SubAgentLicenseService licenseService;
 
     @Override
     @Transactional
-    public SubAgentResponse create(CreateSubAgentRequest req) {
+    public CreateSubAgentResponse create(CreateSubAgentRequest req) {
         Long tenantId = requireTenant();
         String email = req.getEmail().trim().toLowerCase();
 
@@ -54,17 +58,20 @@ public class SubAgentServiceImpl implements SubAgentService {
                     HttpStatus.CONFLICT);
         }
 
-        // Gated capability + per-tenant cap set by the SuperAdmin (mirrors the user-seat gate).
-        // null/0 = the tenant's plan grants no sub-agents.
-        enforceSubAgentCap(tenantId);
-
         MarkupType markupType = req.getMarkupType() != null ? req.getMarkupType() : MarkupType.PERCENT;
         BigDecimal markupValue = req.getMarkupValue() != null ? req.getMarkupValue() : BigDecimal.ZERO;
         validateMarkup(markupType, markupValue);
 
+        // Check available licensed seats FIRST. A licensed seat is any non-PENDING_LICENSE profile under
+        // the tenant cap. If one is free → provision ACTIVE (classic path). If not → provision
+        // PENDING_LICENSE (login disabled) and open a seat-license purchase the tenant must pay + a
+        // SuperAdmin must approve before it activates.
+        boolean seatAvailable = seatAvailable(tenantId);
+
         // 1) The login User (role SUB_AGENT). tenantId set explicitly (User extends BaseEntity, so it
         //    is NOT auto-stamped). No CREATABLE_ROLES whitelist here on purpose — SUB_AGENT is minted
-        //    only through this dedicated flow, never the generic /api/users endpoint.
+        //    only through this dedicated flow, never the generic /api/users endpoint. A PENDING_LICENSE
+        //    sub-agent's login stays disabled (isActive=false) until the seat is approved.
         User user = User.builder()
                 .name(req.getName().trim())
                 .email(email)
@@ -72,7 +79,7 @@ public class SubAgentServiceImpl implements SubAgentService {
                 .role(Role.SUB_AGENT)
                 .tenantId(tenantId)
                 .phoneNumber(req.getPhoneNumber())
-                .isActive(true)
+                .isActive(seatAvailable)
                 .build();
         User savedUser = userRepository.save(user);
 
@@ -81,7 +88,7 @@ public class SubAgentServiceImpl implements SubAgentService {
                 .userId(savedUser.getId())
                 .markupType(markupType)
                 .markupValue(markupValue)
-                .status(SubAgentStatus.ACTIVE)
+                .status(seatAvailable ? SubAgentStatus.ACTIVE : SubAgentStatus.PENDING_LICENSE)
                 .brandName(req.getBrandName())
                 .logoUrl(req.getLogoUrl())
                 .contactPhone(req.getContactPhone())
@@ -90,9 +97,25 @@ public class SubAgentServiceImpl implements SubAgentService {
                 .build();
         SubAgentProfile saved = profileRepository.save(profile);
 
-        log.info("Sub-agent provisioned | email={} tenantId={} markup={} {}",
-                email, tenantId, markupType, markupValue);
-        return toResponse(saved, savedUser);
+        if (seatAvailable) {
+            log.info("Sub-agent provisioned ACTIVE | email={} tenantId={} markup={} {}",
+                    email, tenantId, markupType, markupValue);
+            return CreateSubAgentResponse.builder()
+                    .subAgent(toResponse(saved, savedUser))
+                    .licenseRequired(false)
+                    .build();
+        }
+
+        // Over cap — open the seat-license purchase for this pending sub-agent (issues the invoice).
+        log.info("Sub-agent provisioned PENDING_LICENSE (over cap) | email={} tenantId={}", email, tenantId);
+        SubAgentLicenseRequestResponse licenseRequest = licenseService.openForPending(
+                tenantId, currentUserEmail(), saved.getPublicId(),
+                req.getPaymentMode(), req.getOfflineMode(), req.getOfflineReference(), req.getOfflineNotes());
+        return CreateSubAgentResponse.builder()
+                .subAgent(toResponse(saved, savedUser))
+                .licenseRequired(true)
+                .licenseRequest(licenseRequest)
+                .build();
     }
 
     @Override
@@ -122,6 +145,21 @@ public class SubAgentServiceImpl implements SubAgentService {
         Long tenantId = requireTenant();
         SubAgentProfile p = loadOwned(publicId, tenantId);
         User u = requireUser(p.getUserId(), tenantId);
+
+        // PENDING_LICENSE is driven only by the seat-purchase flow, never the generic update:
+        //  - you cannot manually move a sub-agent INTO PENDING_LICENSE, and
+        //  - you cannot activate/suspend one that is still awaiting seat approval (that would grant a
+        //    login the tenant hasn't paid for). Branding/markup/name edits stay allowed while pending.
+        if (req.getStatus() == SubAgentStatus.PENDING_LICENSE) {
+            throw new BusinessException("Licensing status is managed by the seat-purchase flow.",
+                    HttpStatus.BAD_REQUEST);
+        }
+        if (p.getStatus() == SubAgentStatus.PENDING_LICENSE
+                && (req.getStatus() != null || req.getActive() != null)) {
+            throw new BusinessException(
+                    "This sub-agent is awaiting seat-license approval and cannot be activated or suspended yet.",
+                    HttpStatus.CONFLICT);
+        }
 
         if (req.getMarkupType() != null)  p.setMarkupType(req.getMarkupType());
         if (req.getMarkupValue() != null) p.setMarkupValue(req.getMarkupValue());
@@ -160,6 +198,9 @@ public class SubAgentServiceImpl implements SubAgentService {
             u.softDelete(actor);
             userRepository.save(u);
         });
+
+        // If this sub-agent was still awaiting a seat license, void its unpaid invoice + cancel the request.
+        licenseService.onSubAgentDeleted(tenantId, p.getId());
         log.info("Sub-agent removed | profilePublicId={} tenantId={}", publicId, tenantId);
     }
 
@@ -176,22 +217,20 @@ public class SubAgentServiceImpl implements SubAgentService {
     }
 
     /**
-     * Sub-agent seat gate. Sub-agents are a GATED paid capability: a tenant may provision at most
-     * {@code Tenant.maxSubAgents} of them (null/0 = none). {@code Tenant} is platform-level (no tenant
-     * filter), so a direct {@code findById} is correct here. Mirrors the user-seat cap in
-     * {@code UserServiceImpl} and the booking-quota gate.
+     * Is a licensed seat free for a new sub-agent? The cap ({@code Tenant.maxSubAgents} = plan default +
+     * purchased add-on seats; null/0 = none) is compared against the LICENSED-consuming count — every
+     * profile except {@code PENDING_LICENSE}, so a not-yet-paid sub-agent never counts against the cap.
+     * When false, the caller provisions PENDING_LICENSE and routes the tenant to purchase a seat.
+     * {@code Tenant} is platform-level (no tenant filter), so a direct {@code findById} is correct here.
      */
-    private void enforceSubAgentCap(Long tenantId) {
-        Tenant tenant = tenantRepository.findById(tenantId).orElse(null);
+    private boolean seatAvailable(Long tenantId) {
+        // Pessimistic-write lock the tenant row so two concurrent create() calls can't both pass this
+        // check-then-act seat check and over-provision beyond the paid cap. Held until create() commits.
+        Tenant tenant = tenantRepository.findByIdForUpdate(tenantId).orElse(null);
         int cap = (tenant == null || tenant.getMaxSubAgents() == null) ? 0 : Math.max(0, tenant.getMaxSubAgents());
-        long used = profileRepository.countByTenantIdAndDeletedAtIsNull(tenantId);
-        if (used >= cap) {
-            String msg = cap == 0
-                    ? "Your plan does not include sub-agents. Contact support to enable them."
-                    : "Your plan allows up to " + cap + " sub-agent" + (cap == 1 ? "" : "s")
-                            + ". Remove one or contact support to add more.";
-            throw new BusinessException(msg, HttpStatus.FORBIDDEN);
-        }
+        long licensedUsed = profileRepository
+                .countByTenantIdAndStatusNotAndDeletedAtIsNull(tenantId, SubAgentStatus.PENDING_LICENSE);
+        return licensedUsed < cap;
     }
 
     private void validateMarkup(MarkupType type, BigDecimal value) {

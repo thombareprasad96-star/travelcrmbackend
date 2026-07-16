@@ -21,8 +21,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * Per-tenant email/SMTP settings. Reads open to any tenant user; save/test require SETTINGS_MANAGE
- * (same authority CompanyController uses for edits). Tenant comes from the JWT principal.
+ * Per-tenant email/SMTP settings. All operations (read + save/test) require SETTINGS_MANAGE — the
+ * config exposes the tenant's SMTP host/username/from-address, which low-privilege roles (e.g. a B2B
+ * SUB_AGENT) must not see. Tenant comes from the JWT principal.
  */
 @RestController
 @RequestMapping("/api/settings/email")
@@ -32,7 +33,7 @@ public class EmailConfigController {
     private final EmailConfigService service;
 
     @GetMapping("/config")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('SETTINGS_MANAGE')")
     public ResponseEntity<ApiResponse<EmailConfigDTO>> getConfig(@AuthenticationPrincipal User user) {
         return ResponseEntity.ok(ApiResponse.success(
                 "Email configuration retrieved", service.getConfig(user.getTenantId())));
@@ -57,7 +58,7 @@ public class EmailConfigController {
     }
 
     @GetMapping("/stats")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('SETTINGS_MANAGE')")
     public ResponseEntity<ApiResponse<EmailStatsDTO>> getStats(@AuthenticationPrincipal User user) {
         return ResponseEntity.ok(ApiResponse.success(
                 "Email stats retrieved", service.getStats(user.getTenantId())));

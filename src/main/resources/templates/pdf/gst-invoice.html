@@ -1,0 +1,231 @@
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8" />
+    <title>GST Invoice</title>
+    <!--
+      GST TAX INVOICE / BILL OF SUPPLY  (Flying Saucer + OpenPDF / Thymeleaf, XML mode)
+      FS-safe: tables + inline-block only. NO flex / grid / calc() / var() / box-shadow.
+      Model: ${doc} (TaxInvoiceModel, FROZEN at issue) + ${fmt} (PdfFormat)
+      Palette: gold #eeda92 (light band) + deep gold #b8891f (accents/text)
+    -->
+    <style th:inline="none">
+        @page { size: A4; margin: 13mm 12mm 15mm 12mm; }
+        * { box-sizing: border-box; }
+        body { font-family: "DejaVu Sans", Helvetica, Arial, sans-serif;
+               font-size: 9.5px; line-height: 1.45; color: #2b2b2b; margin: 0; padding: 0; }
+        table { border-collapse: collapse; width: 100%; }
+        td, th { vertical-align: top; }
+        .r { text-align: right; } .c { text-align: center; }
+        .muted { color: #7a7a7a; }
+
+        .head { border-bottom: 3px solid #b8891f; padding-bottom: 10px; }
+        .brand-name { font-size: 19px; font-weight: bold; color: #1f2937; }
+        .brand-logo { height: 40px; }
+        .brand-sub  { font-size: 8px; color: #7a7a7a; margin-top: 2px; }
+        .doc-badge  { display: inline-block; background-color: #eeda92; color: #6b4e12;
+                      font-size: 13px; font-weight: bold; letter-spacing: 1.4px;
+                      padding: 6px 13px; border-radius: 6px; text-transform: uppercase; }
+        .doc-meta   { font-size: 8.5px; color: #555; margin-top: 6px; }
+        .doc-meta b { color: #1f2937; }
+
+        .parties { margin-top: 13px; }
+        .parties td { width: 50%; padding: 0; }
+        .pbox { border: 1px solid #ece3c9; border-radius: 8px; padding: 10px 12px; }
+        .pbox-gold { background-color: #fdf9ec; }
+        .plabel { font-size: 7px; font-weight: bold; letter-spacing: 1.3px;
+                  text-transform: uppercase; color: #b8891f; margin-bottom: 3px; }
+        .pname  { font-size: 11.5px; font-weight: bold; color: #1f2937; }
+        .pline  { font-size: 8.5px; color: #444; margin-top: 2px; }
+
+        .sec { border-left: 4px solid #b8891f; padding-left: 9px; margin: 14px 0 7px 0; }
+        .sec-t { font-size: 10.5px; font-weight: bold; color: #1f2937; text-transform: uppercase; letter-spacing: 0.7px; }
+
+        table.items { border: 1px solid #e7e0cb; border-radius: 8px; overflow: hidden; }
+        table.items th { background-color: #eeda92; color: #5c4310; font-size: 7.5px;
+                         text-transform: uppercase; letter-spacing: 0.5px; font-weight: bold;
+                         padding: 7px 8px; text-align: left; }
+        table.items td { padding: 7px 8px; font-size: 9px; border-top: 1px solid #f0ead8; color: #333; }
+        table.items tr.zebra td { background-color: #fcfaf2; }
+        .it-title { font-weight: bold; color: #1f2937; }
+
+        table.sumt { border: 1px solid #e7e0cb; border-radius: 8px; overflow: hidden; }
+        table.sumt td { padding: 6px 12px; font-size: 9px; border-top: 1px solid #f0ead8; }
+        table.sumt tr:first-child td { border-top: none; }
+        .sumt .lab { color: #555; }
+        .sumt .val { text-align: right; font-weight: bold; color: #1f2937; }
+        .sumt .total td { background-color: #eeda92; color: #5c4310; font-size: 11px; font-weight: bold; }
+
+        .amt-words { font-size: 8.5px; color: #444; margin-top: 8px; font-style: italic; }
+        .note { font-size: 8px; color: #8a8a8a; }
+        .foot { margin-top: 18px; border-top: 1px solid #e7e0cb; padding-top: 9px; }
+        .foot-note { font-size: 7.5px; color: #8a8a8a; line-height: 1.6; }
+        .rcm { display:inline-block; background-color:#fee2e2; color:#b91c1c; font-size:7px;
+               font-weight:bold; padding:2px 7px; border-radius:9px; text-transform:uppercase; }
+    </style>
+</head>
+<body>
+
+<!-- HEADER -->
+<table class="head">
+    <tr>
+        <td style="width:58%; vertical-align:middle;">
+            <img class="brand-logo" th:if="${doc.companyLogoUrl != null and !doc.companyLogoUrl.isEmpty()}" th:src="${doc.companyLogoUrl}" />
+            <div class="brand-name" th:if="${doc.companyLogoUrl == null or doc.companyLogoUrl.isEmpty()}" th:text="${doc.companyName}">Company</div>
+            <div class="brand-sub" th:if="${doc.companyAddress != null}" th:text="${doc.companyAddress}">Address</div>
+            <div class="brand-sub" th:if="${doc.supplierGstin != null}" th:text="|GSTIN: ${doc.supplierGstin}|">GST</div>
+            <div class="brand-sub" th:if="${doc.companyPan != null}" th:text="|PAN: ${doc.companyPan}|">PAN</div>
+        </td>
+        <td class="r" style="width:42%; vertical-align:middle;">
+            <div class="doc-badge" th:text="${doc.documentTitle}">Tax Invoice</div>
+            <div class="doc-meta"><b>Invoice No:</b> <span th:text="${doc.invoiceNumber}">TI/2627/00001</span></div>
+            <div class="doc-meta"><b>Date:</b> <span th:text="${fmt.date(doc.invoiceDate)}">01 Apr 2026</span></div>
+            <div class="doc-meta"><b>FY:</b> <span th:text="${doc.financialYear}">2026-27</span></div>
+            <div class="doc-meta" th:if="${doc.reverseCharge}"><span class="rcm">Reverse Charge</span></div>
+        </td>
+    </tr>
+</table>
+
+<!-- PARTIES -->
+<table class="parties">
+    <tr>
+        <td style="padding-right:6px;">
+            <div class="pbox pbox-gold">
+                <div class="plabel">Supplier</div>
+                <div class="pname" th:text="${doc.companyName}">Company</div>
+                <div class="pline" th:if="${doc.companyAddress != null}" th:text="${doc.companyAddress}">Address</div>
+                <div class="pline" th:if="${doc.supplierGstin != null}" th:text="|GSTIN: ${doc.supplierGstin}|">GST</div>
+                <div class="pline" th:if="${doc.supplierStateLabel != null}" th:text="|State Code: ${doc.supplierStateLabel}|">State</div>
+                <div class="pline" th:if="${doc.companyPhone != null}" th:text="|Phone: ${doc.companyPhone}|">Phone</div>
+            </div>
+        </td>
+        <td style="padding-left:6px;">
+            <div class="pbox">
+                <div class="plabel">Recipient</div>
+                <div class="pname" th:text="${fmt.orElse(doc.recipientName, 'Guest')}">Guest</div>
+                <div class="pline" th:if="${doc.recipientAddress != null}" th:text="${doc.recipientAddress}">Address</div>
+                <div class="pline" th:if="${doc.recipientGstin != null}" th:text="|GSTIN: ${doc.recipientGstin}|">GST</div>
+                <div class="pline" th:if="${doc.recipientStateLabel != null}" th:text="|State Code: ${doc.recipientStateLabel}|">State</div>
+                <div class="pline" th:if="${doc.recipientPhone != null}" th:text="|Phone: ${doc.recipientPhone}|">Phone</div>
+            </div>
+        </td>
+    </tr>
+</table>
+
+<div class="doc-meta" style="margin-top:8px;">
+    <b>Place of Supply:</b> <span th:text="${fmt.orElse(doc.placeOfSupply, '-')}">-</span>
+    &nbsp;|&nbsp; <b>Supply Type:</b> <span th:text="${doc.supplyTypeLabel}">-</span>
+    &nbsp;|&nbsp; <b>Booking:</b> <span th:text="${fmt.orElse(doc.bookingCode, '-')}">-</span>
+    &nbsp;|&nbsp; <b>Destination:</b> <span th:text="${fmt.orElse(doc.destination, '-')}">-</span>
+</div>
+
+<!-- LINES -->
+<div class="sec"><span class="sec-t">Particulars</span></div>
+<table class="items">
+    <tr>
+        <th style="width:5%;">#</th>
+        <th style="width:37%;">Description</th>
+        <th style="width:11%;">HSN/SAC</th>
+        <th style="width:15%;" class="r">Taxable</th>
+        <th th:if="${doc.appliesGst and doc.intraState}" style="width:10%;" class="r">CGST</th>
+        <th th:if="${doc.appliesGst and doc.intraState}" style="width:10%;" class="r">SGST</th>
+        <th th:if="${doc.appliesGst and !doc.intraState}" style="width:20%;" class="r">IGST</th>
+        <th style="width:12%;" class="r">Amount</th>
+    </tr>
+    <tr th:each="l, st : ${doc.lines}" th:class="${st.index % 2 == 1} ? 'zebra' : ''">
+        <td th:text="${l.lineNo}">1</td>
+        <td>
+            <div class="it-title" th:text="${l.description}">Service</div>
+            <div class="note" th:if="${doc.appliesGst}" th:text="|GST @ ${l.gstRatePct}%|">GST</div>
+        </td>
+        <td th:text="${fmt.orElse(l.hsnSac, '-')}">998552</td>
+        <td class="r" th:text="${fmt.inr(l.taxableValue)}">Rs. 0</td>
+        <td th:if="${doc.appliesGst and doc.intraState}" class="r" th:text="${fmt.inr(l.cgstAmt)}">Rs. 0</td>
+        <td th:if="${doc.appliesGst and doc.intraState}" class="r" th:text="${fmt.inr(l.sgstAmt)}">Rs. 0</td>
+        <td th:if="${doc.appliesGst and !doc.intraState}" class="r" th:text="${fmt.inr(l.igstAmt)}">Rs. 0</td>
+        <td class="r" th:text="${fmt.inr(l.lineTotal)}">Rs. 0</td>
+    </tr>
+</table>
+
+<!-- TAX SUMMARY BY RATE (GST invoices only) -->
+<div th:if="${doc.appliesGst and doc.taxSummary != null and !doc.taxSummary.isEmpty()}">
+    <div class="sec"><span class="sec-t">Tax Summary</span></div>
+    <table class="items">
+        <tr>
+            <th style="width:16%;">Rate</th>
+            <th style="width:28%;" class="r">Taxable Value</th>
+            <th th:if="${doc.intraState}" style="width:19%;" class="r">CGST</th>
+            <th th:if="${doc.intraState}" style="width:19%;" class="r">SGST</th>
+            <th th:if="${!doc.intraState}" style="width:38%;" class="r">IGST</th>
+            <th style="width:18%;" class="r">Cess</th>
+        </tr>
+        <tr th:each="t : ${doc.taxSummary}">
+            <td th:text="|${t.gstRatePct}%|">5%</td>
+            <td class="r" th:text="${fmt.inr(t.taxableValue)}">Rs. 0</td>
+            <td th:if="${doc.intraState}" class="r" th:text="${fmt.inr(t.cgstAmt)}">Rs. 0</td>
+            <td th:if="${doc.intraState}" class="r" th:text="${fmt.inr(t.sgstAmt)}">Rs. 0</td>
+            <td th:if="${!doc.intraState}" class="r" th:text="${fmt.inr(t.igstAmt)}">Rs. 0</td>
+            <td class="r" th:text="${fmt.inr(t.cessAmt)}">Rs. 0</td>
+        </tr>
+    </table>
+</div>
+
+<!-- TOTALS -->
+<table class="parties" style="margin-top:14px;">
+    <tr>
+        <td style="width:52%; padding-right:10px; vertical-align:bottom;">
+            <div class="amt-words"><b>Amount in words:</b> <span th:text="${doc.amountInWords}">Rupees Zero Only</span></div>
+            <div class="note" th:if="${doc.irn != null}" style="margin-top:8px;"><b>IRN:</b> <span th:text="${doc.irn}">-</span></div>
+            <div class="note" th:if="${doc.irnAckNo != null}"><b>Ack No:</b> <span th:text="${doc.irnAckNo}">-</span></div>
+        </td>
+        <td style="width:48%;">
+            <table class="sumt">
+                <tr>
+                    <td class="lab">Taxable Value</td>
+                    <td class="val" th:text="${fmt.inr(doc.taxableValue)}">Rs. 0</td>
+                </tr>
+                <tr th:if="${doc.appliesGst and doc.intraState}">
+                    <td class="lab">CGST</td>
+                    <td class="val" th:text="${fmt.inr(doc.totalCgst)}">Rs. 0</td>
+                </tr>
+                <tr th:if="${doc.appliesGst and doc.intraState}">
+                    <td class="lab">SGST</td>
+                    <td class="val" th:text="${fmt.inr(doc.totalSgst)}">Rs. 0</td>
+                </tr>
+                <tr th:if="${doc.appliesGst and !doc.intraState}">
+                    <td class="lab">IGST</td>
+                    <td class="val" th:text="${fmt.inr(doc.totalIgst)}">Rs. 0</td>
+                </tr>
+                <tr th:if="${doc.totalCess != null and doc.totalCess.signum() > 0}">
+                    <td class="lab">Cess</td>
+                    <td class="val" th:text="${fmt.inr(doc.totalCess)}">Rs. 0</td>
+                </tr>
+                <tr th:if="${doc.tcs != null and doc.tcs.signum() > 0}">
+                    <td class="lab">TCS (206C(1G))</td>
+                    <td class="val" th:text="${fmt.inr(doc.tcs)}">Rs. 0</td>
+                </tr>
+                <tr th:if="${doc.roundOff != null and doc.roundOff.signum() != 0}">
+                    <td class="lab">Round Off</td>
+                    <td class="val" th:text="${fmt.inr(doc.roundOff)}">Rs. 0</td>
+                </tr>
+                <tr class="total">
+                    <td>Grand Total</td>
+                    <td class="r" th:text="${fmt.inr(doc.invoiceTotal)}">Rs. 0</td>
+                </tr>
+            </table>
+        </td>
+    </tr>
+</table>
+
+<!-- FOOTER -->
+<div class="foot">
+    <div class="foot-note">
+        This is a computer-generated document and does not require a physical signature.
+        <span th:if="${doc.appliesGst}">Tax is charged as per applicable GST regulations.</span>
+        <span th:if="${!doc.appliesGst}">This is not a tax invoice; no GST is charged on this document.</span>
+        <span th:if="${doc.overseasTourPackage and doc.tcs != null and doc.tcs.signum() > 0}">
+            TCS is collected under Section 206C(1G) on the overseas tour package and is creditable against the buyer's tax liability.</span>
+    </div>
+</div>
+
+</body>
+</html>

@@ -5,6 +5,7 @@ import com.crm.travelcrm.auth.repository.UserRepository;
 import com.crm.travelcrm.booking.repository.BookingRepository;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
+import com.crm.travelcrm.subagent.dto.MyCommissionResponse;
 import com.crm.travelcrm.subagent.dto.SubAgentCommissionLedgerDto;
 import com.crm.travelcrm.subagent.dto.SubAgentRollupRow;
 import com.crm.travelcrm.subagent.entity.SubAgentProfile;
@@ -102,6 +103,41 @@ public class SubAgentRollupService {
                 .subAgentPublicId(p.getPublicId())
                 .name(u.getName())
                 .totalEarned(commissionRepository.sumByTenantAndSubAgent(tenantId, p.getUserId()))
+                .entries(entries)
+                .build();
+    }
+
+    /**
+     * The CURRENT sub-agent's own commission (self-service): their rate + full ledger. Resolved
+     * strictly from the caller's own user id (never a path param), so a sub-agent can only ever see
+     * themselves. 404 if the caller isn't an active-or-suspended sub-agent in this tenant.
+     */
+    @Transactional(readOnly = true)
+    public MyCommissionResponse myCommission(Long userId) {
+        Long tenantId = requireTenant();
+        SubAgentProfile p = profileRepository.findByUserIdAndDeletedAtIsNull(userId)
+                .filter(sp -> tenantId.equals(sp.getTenantId()))
+                .orElseThrow(() -> new ResourceNotFoundException("You are not a sub-agent."));
+        User u = userRepository.findByIdAndTenantIdAndDeletedAtIsNull(userId, tenantId)
+                .orElseThrow(() -> new ResourceNotFoundException("Sub-agent login not found"));
+
+        List<SubAgentCommissionLedgerDto.Entry> entries = commissionRepository
+                .findByTenantIdAndSubAgentUserIdAndDeletedAtIsNullOrderByOccurredOnDescIdDesc(tenantId, userId)
+                .stream()
+                .map(c -> SubAgentCommissionLedgerDto.Entry.builder()
+                        .bookingCode(c.getBookingCode())
+                        .amount(c.getAmount())
+                        .note(c.getNote())
+                        .occurredOn(c.getOccurredOn())
+                        .createdAt(c.getCreatedAt())
+                        .build())
+                .toList();
+
+        return MyCommissionResponse.builder()
+                .name(u.getName())
+                .commissionType(p.getMarkupType())
+                .commissionRate(p.getMarkupValue())
+                .totalEarned(commissionRepository.sumByTenantAndSubAgent(tenantId, userId))
                 .entries(entries)
                 .build();
     }

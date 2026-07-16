@@ -1,6 +1,7 @@
 package com.crm.travelcrm.subagent.service;
 
 import com.crm.travelcrm.subagent.dto.CreateSubAgentRequest;
+import com.crm.travelcrm.subagent.dto.CreateSubAgentResponse;
 import com.crm.travelcrm.subagent.dto.SubAgentResponse;
 import com.crm.travelcrm.subagent.dto.UpdateSubAgentRequest;
 
@@ -9,7 +10,7 @@ import java.util.UUID;
 
 public interface SubAgentService {
 
-    SubAgentResponse create(CreateSubAgentRequest request);
+    CreateSubAgentResponse create(CreateSubAgentRequest request);
 
     List<SubAgentResponse> list();
 

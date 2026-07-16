@@ -74,6 +74,14 @@ public enum Permission {
     REMINDER_UPDATE ("Reminders",     "Edit reminder"),
     REMINDER_DELETE ("Reminders",     "Delete reminder"),
 
+    // ── Tasks & Calendar ────────────────────────────────────────────────────
+    // Also gates the unified calendar feed (GET /api/calendar). The tenant-wide task
+    // stats/workload and the calendar summary are additionally gated on CRM_FULL (blocks sub-agents).
+    TASK_READ   ("Tasks",             "View tasks & calendar"),
+    TASK_CREATE ("Tasks",             "Create task / calendar event"),
+    TASK_UPDATE ("Tasks",             "Edit task / move on board"),
+    TASK_DELETE ("Tasks",             "Delete task"),
+
     // ── Fleet / Vehicle Diary ───────────────────────────────────────────────
     FLEET_READ   ("Fleet",            "View fleet vehicles, drivers, trips & logs"),
     FLEET_CREATE ("Fleet",            "Add fleet vehicles, drivers, trips & logs"),
@@ -93,12 +101,30 @@ public enum Permission {
     // ── Reports ─────────────────────────────────────────────────────────────
     REPORT_VIEW ("Reports",           "View reports"),
 
+    // ── Marketing & Campaigns ────────────────────────────────────────────────
+    // Segments, bulk WhatsApp/email campaigns, drip sequences, birthday/anniversary automations.
+    // SEND is the money/outreach gate (dispatch a campaign, activate a drip, fire a test) —
+    // separated from CREATE/UPDATE so a role can build content without being able to broadcast.
+    MARKETING_READ   ("Marketing",    "View segments, campaigns, drips & automations"),
+    MARKETING_CREATE ("Marketing",    "Create segments, campaigns & drip sequences"),
+    MARKETING_UPDATE ("Marketing",    "Edit segments, campaigns, drips & automations"),
+    MARKETING_DELETE ("Marketing",    "Delete segments, campaigns & drip sequences"),
+    MARKETING_SEND   ("Marketing",    "Send campaigns, activate drips & send test messages"),
+
     // ── Trash / Recycle Bin ──────────────────────────────────────────────────
     // View trashed records, restore them, and (most-restricted) permanently delete now.
     TRASH_VIEW    ("Trash",           "View trashed records"),
     TRASH_RESTORE ("Trash",           "Restore trashed records"),
     // Irreversible hard delete before the auto-purge window — TENANT_ADMIN only by default.
     TRASH_DELETE  ("Trash",           "Permanently delete a trashed record (irreversible)"),
+
+    // ── Accounting / GST ──────────────────────────────────────────────────────
+    // Finance data is tenant-wide (admin/accountant), never sub-agent row-scoped.
+    ACCOUNTING_INVOICE_READ    ("Accounting", "View GST invoices & tax masters"),
+    ACCOUNTING_INVOICE_MANAGE  ("Accounting", "Issue / cancel GST invoices"),
+    ACCOUNTING_TDS_READ        ("Accounting", "View vendor bills, TDS & TCS"),
+    ACCOUNTING_TDS_MANAGE      ("Accounting", "Manage vendor bills, payments & TDS/TCS"),
+    ACCOUNTING_SETTINGS_MANAGE ("Accounting", "Manage GST settings & tax-rate masters"),
 
     // ── Settings ────────────────────────────────────────────────────────────
     SETTINGS_MANAGE ("Settings",      "Manage company settings");
@@ -148,8 +174,11 @@ public enum Permission {
                     QUOTATION_READ, QUOTATION_CREATE, QUOTATION_UPDATE, QUOTATION_DELETE,
                     VENDOR_READ, VENDOR_CREATE, VENDOR_UPDATE,
                     REMINDER_READ, REMINDER_CREATE, REMINDER_UPDATE, REMINDER_DELETE,
+                    TASK_READ, TASK_CREATE, TASK_UPDATE, TASK_DELETE,
                     FLEET_READ, FLEET_CREATE, FLEET_UPDATE, FLEET_DELETE,
                     MASTER_READ, MASTER_MANAGE, REPORT_VIEW, USER_READ,
+                    ACCOUNTING_INVOICE_READ, ACCOUNTING_TDS_READ,
+                    MARKETING_READ, MARKETING_CREATE, MARKETING_UPDATE, MARKETING_DELETE, MARKETING_SEND,
                     TRASH_VIEW, TRASH_RESTORE);
 
             case TRAVEL_AGENT -> EnumSet.of(
@@ -159,8 +188,10 @@ public enum Permission {
                     QUOTATION_READ, QUOTATION_CREATE, QUOTATION_UPDATE,
                     VENDOR_READ,
                     REMINDER_READ, REMINDER_CREATE, REMINDER_UPDATE,
+                    TASK_READ, TASK_CREATE, TASK_UPDATE,
                     FLEET_READ, FLEET_CREATE, FLEET_UPDATE,
                     MASTER_READ, REPORT_VIEW,
+                    MARKETING_READ,
                     TRASH_VIEW);
 
             // STAFF is deny-by-default: a new STAFF user holds NO permissions until a
@@ -174,7 +205,11 @@ public enum Permission {
                     QUOTATION_READ,
                     VENDOR_READ, VENDOR_UPDATE,
                     FLEET_READ,
-                    REPORT_VIEW, MASTER_READ);
+                    TASK_READ, TASK_CREATE, TASK_UPDATE,
+                    REPORT_VIEW, MASTER_READ,
+                    // Accounting is the accountant's core surface: full invoice + TDS/TCS + tax config.
+                    ACCOUNTING_INVOICE_READ, ACCOUNTING_INVOICE_MANAGE,
+                    ACCOUNTING_TDS_READ, ACCOUNTING_TDS_MANAGE, ACCOUNTING_SETTINGS_MANAGE);
 
             // B2B franchise partner — its OWN sales pipeline only (row-scope OWN via ScopeResolver).
             // Soft-delete allowed on own leads/quotations; deliberately NO booking cancel/refund/delete,
@@ -187,6 +222,7 @@ public enum Permission {
                     BOOKING_READ, BOOKING_CREATE, BOOKING_UPDATE,
                     CUSTOMER_READ, CUSTOMER_CREATE, CUSTOMER_UPDATE,
                     REMINDER_READ, REMINDER_CREATE, REMINDER_UPDATE, REMINDER_DELETE,
+                    TASK_READ, TASK_CREATE, TASK_UPDATE, TASK_DELETE,
                     MASTER_READ);
         };
     }

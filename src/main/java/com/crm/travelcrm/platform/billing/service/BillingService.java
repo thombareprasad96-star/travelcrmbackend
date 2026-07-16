@@ -3,7 +3,9 @@ package com.crm.travelcrm.platform.billing.service;
 import com.crm.travelcrm.platform.billing.dto.BillingRecordResponse;
 import com.crm.travelcrm.platform.billing.dto.CreateBillingRequest;
 import com.crm.travelcrm.platform.billing.dto.SeatFeeResponse;
+import com.crm.travelcrm.platform.billing.dto.SubAgentPricingResponse;
 import com.crm.travelcrm.platform.billing.dto.UpdateSeatFeeRequest;
+import com.crm.travelcrm.platform.billing.dto.UpdateSubAgentPricingRequest;
 import com.crm.travelcrm.tenent.enums.TenantPlan;
 
 import java.math.BigDecimal;
@@ -51,6 +53,14 @@ public interface BillingService {
                                                      LocalDate periodStart, LocalDate periodEnd, String notes);
 
     /**
+     * Issue the payable invoice for a tenant-initiated sub-agent SEAT-LICENSE purchase (one-time unlock
+     * of {@code quantity} seats). Modeled on {@link #issueUpgradeRequestInvoice}: NO {@code upgradeToPlan}
+     * tag (SuperAdmin approval grants the seats, not the payment) and NO due date (never trips dunning
+     * while in review). Tagged onto the tenant's current plan for display only. {@code amount} positive.
+     */
+    BillingRecordResponse issueSeatLicenseInvoice(Long tenantId, int quantity, BigDecimal amount, String notes);
+
+    /**
      * Void an outstanding (non-PAID) invoice — used when a plan-upgrade request is rejected or
      * cancelled so its unpaid invoice does not linger on the tenant's ledger. Throws if already PAID.
      */
@@ -64,4 +74,14 @@ public interface BillingService {
      * override. Independent of the quota-override pin. Returns the resulting seat-fee position.
      */
     SeatFeeResponse setSeatFee(UUID tenantPublicId, UpdateSeatFeeRequest request);
+
+    /** The platform-wide sub-agent (Travel Partner) seat pricing — same across all tenants. */
+    SubAgentPricingResponse getSubAgentPricing();
+
+    /**
+     * Set the platform-wide sub-agent seat pricing (recurring monthly + one-time unlock). Applies to
+     * every tenant. Persisted as PlatformConfig, so it survives restarts and is read by the seat-fee /
+     * seat-license flows immediately.
+     */
+    SubAgentPricingResponse setSubAgentPricing(UpdateSubAgentPricingRequest request);
 }

@@ -44,6 +44,7 @@ import com.crm.travelcrm.lead.enums.LeadStage;
 import com.crm.travelcrm.lead.repository.LeadRepository;
 import com.crm.travelcrm.lead.service.LeadAccessGuard;
 import com.crm.travelcrm.permission.service.SubAgentScope;
+import com.crm.travelcrm.subagent.service.SubAgentCommissionService;
 import com.crm.travelcrm.notification.api.NotifyEvent;
 import com.crm.travelcrm.notification.domain.enums.DeliveryChannel;
 import com.crm.travelcrm.notification.domain.enums.NotificationType;
@@ -113,6 +114,7 @@ public class BookingServiceImpl implements BookingService {
     private final BookingCancellationRepository cancellationRepository;
     private final CancellationDocumentService cancellationDocumentService;
     private final SubAgentScope subAgentScope;
+    private final SubAgentCommissionService commissionService;
 
     // ── Create ───────────────────────────────────────────────────────────────
 
@@ -164,6 +166,8 @@ public class BookingServiceImpl implements BookingService {
         if (initialPaid.signum() > 0) {
             recordPaymentLedgerRow(saved, initialPaid, "Opening balance",
                     saved.getBookingDate(), null, "Initial payment recorded at booking creation");
+            // Broker commission accrues on payment received — an upfront payment counts too.
+            commissionService.syncForBooking(saved);
         }
         log.info("Booking created successfully with code: {}", saved.getBookingCode());
         publishBookingEvent(NotificationType.BOOKING_CREATED, saved,
@@ -282,6 +286,8 @@ public class BookingServiceImpl implements BookingService {
         if (paid.signum() > 0) {
             recordPaymentLedgerRow(saved, paid, "Opening balance",
                     saved.getBookingDate(), null, "Initial payment recorded during lead conversion");
+            // Broker commission accrues on payment received — an upfront payment counts too.
+            commissionService.syncForBooking(saved);
         }
 
         // Flip the lead to CONVERTED — keep it for history, stamp the back-link to the booking.
@@ -770,6 +776,8 @@ public class BookingServiceImpl implements BookingService {
         // Payments-Received table — this PATCH path used to move paidAmount without a ledger row.
         recordPaymentLedgerRow(saved, request.getAmount(), "Payment",
                 request.getPaymentDate(), request.getPaymentReference(), request.getNotes());
+        // Broker commission accrues proportionally to net collection on every payment received.
+        commissionService.syncForBooking(saved);
         publishBookingEvent(NotificationType.BOOKING_PAYMENT_UPDATED, saved,
                 "Payment updated: " + saved.getBookingCode(),
                 "₹" + request.getAmount() + " received for booking " + saved.getBookingCode()

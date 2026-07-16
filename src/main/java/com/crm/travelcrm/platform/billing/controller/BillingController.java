@@ -4,7 +4,9 @@ import com.crm.travelcrm.common.dto.ApiResponse;
 import com.crm.travelcrm.platform.billing.dto.BillingRecordResponse;
 import com.crm.travelcrm.platform.billing.dto.CreateBillingRequest;
 import com.crm.travelcrm.platform.billing.dto.SeatFeeResponse;
+import com.crm.travelcrm.platform.billing.dto.SubAgentPricingResponse;
 import com.crm.travelcrm.platform.billing.dto.UpdateSeatFeeRequest;
+import com.crm.travelcrm.platform.billing.dto.UpdateSubAgentPricingRequest;
 import com.crm.travelcrm.platform.billing.service.BillingService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -49,6 +51,20 @@ public class BillingController {
             @PathVariable UUID tenantPublicId, @Valid @RequestBody UpdateSeatFeeRequest request) {
         return ResponseEntity.ok(ApiResponse.success(
                 "Seat fee updated", billingService.setSeatFee(tenantPublicId, request)));
+    }
+
+    // ── Platform-wide Travel Partner seat pricing (same across all tenants) ──
+    @GetMapping("/subagent-pricing")
+    public ResponseEntity<ApiResponse<SubAgentPricingResponse>> getSubAgentPricing() {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Travel Partner seat pricing fetched", billingService.getSubAgentPricing()));
+    }
+
+    @PutMapping("/subagent-pricing")
+    public ResponseEntity<ApiResponse<SubAgentPricingResponse>> setSubAgentPricing(
+            @Valid @RequestBody UpdateSubAgentPricingRequest request) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Travel Partner seat pricing updated", billingService.setSubAgentPricing(request)));
     }
 
     @PostMapping("/billing/{publicId}/mark-paid")

@@ -53,8 +53,21 @@ public class EffectivePermissionResolver {
     }
 
     private Set<String> effectiveKeys(User user) {
-        Role role = user.getRole();
+        return keysFor(user.getRole(),
+                permissionService.savedMapOrNull(user.getTenantId(), user.getId()));
+    }
 
+    /**
+     * The effective fine-grained permission keys for a role + its saved map — the single source of
+     * truth for "does this user hold permission X", reused by the per-user resolve path above AND by
+     * batch eligibility checks (e.g. {@code AssignableUserResolver}) that must apply the exact same
+     * rules to an arbitrary user without an N+1.
+     *
+     * @param savedOrNull the user's saved permission map, or {@code null} when the user has NO
+     *                    persisted row (never customised). An <b>empty</b> map is NOT null — it means
+     *                    "explicitly saved with everything off" and yields no grants.
+     */
+    public Set<String> keysFor(Role role, Map<String, PermissionEntry> savedOrNull) {
         // Tenant-admin bypass — full control of ITS OWN tenant, regardless of any saved
         // map. SUPERADMIN is excluded on purpose: it is the platform owner (PLATFORM_ADMIN),
         // not a tenant CRM user, so it gets no tenant-level permission keys here.
@@ -64,14 +77,11 @@ public class EffectivePermissionResolver {
                     .collect(Collectors.toSet());
         }
 
-        Map<String, PermissionEntry> saved =
-                permissionService.savedMapOrNull(user.getTenantId(), user.getId());
-
-        if (saved != null) {
+        if (savedOrNull != null) {
             // A persisted row is the source of truth — even an EMPTY map means "no grants",
             // NOT a silent fall-back to role defaults (otherwise turning every permission off
             // would hand the role's full default set straight back). Unknown/stale keys ignored.
-            return saved.entrySet().stream()
+            return savedOrNull.entrySet().stream()
                     .filter(e -> e.getValue() != null && e.getValue().isAccess())
                     .map(Map.Entry::getKey)
                     .filter(Permission::isValidKey)
