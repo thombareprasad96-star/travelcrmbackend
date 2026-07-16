@@ -111,6 +111,51 @@ public interface LeadRepository extends JpaRepository<Lead, Long> {
             UUID userPublicId, Long tenantId);
 
     /**
+     * ACTIVE-lead count per candidate user — the load input for load-based assignment. One GROUP BY
+     * query (never a per-user loop), aggregated in the database. Explicitly tenant-scoped (the
+     * Hibernate {@code tenantFilter} is not relied upon — {@code User} carries no filter and the
+     * filter is only enabled inside a transaction) and deletedAt-aware.
+     *
+     * <p><b>Zero-count users are absent</b> from the result (GROUP BY only returns users with ≥1
+     * active lead) — the caller must zero-fill every candidate before use, so a user with no active
+     * leads is a genuine (and most-attractive) candidate. Each row is {@code [userId (Long),
+     * count (Long)]}. Pass {@code activeStages = LeadStageGroups.ACTIVE_STAGES}.
+     */
+    @Query("""
+            SELECT l.assignedUser.id, COUNT(l)
+            FROM Lead l
+            WHERE l.tenantId = :tenantId
+              AND l.deletedAt IS NULL
+              AND l.assignedUser.id IN :userIds
+              AND l.leadStage IN :activeStages
+            GROUP BY l.assignedUser.id
+            """)
+    List<Object[]> countActiveLeadsPerUser(@Param("tenantId") Long tenantId,
+                                           @Param("userIds") Collection<Long> userIds,
+                                           @Param("activeStages") Collection<LeadStage> activeStages);
+
+    /**
+     * Per-user ACTIVE-lead count for the team-workload view (the Task workload). One tenant-scoped
+     * GROUP BY (no N+1); an INNER JOIN so ONLY users that currently own ≥1 active lead are returned —
+     * a caller merges these into its per-user list (adding lead-only users) and leaves everyone else
+     * at zero. Each row is {@code [userPublicId (UUID), userName (String), activeLeadCount (Long)]}.
+     * Pass {@code activeStages = LeadStageGroups.ACTIVE_STAGES}.
+     */
+    @Query("""
+            SELECT u.publicId, u.name, COUNT(l)
+            FROM User u
+            JOIN Lead l
+                   ON l.assignedUser = u
+                  AND l.deletedAt IS NULL
+                  AND l.leadStage IN :activeStages
+            WHERE u.tenantId = :tenantId
+              AND u.deletedAt IS NULL
+            GROUP BY u.publicId, u.name
+            """)
+    List<Object[]> findActiveLeadWorkloadPerUser(@Param("tenantId") Long tenantId,
+                                                 @Param("activeStages") Collection<LeadStage> activeStages);
+
+    /**
      * Workload dashboard: every active user of the tenant with their lead
      * count. LEFT JOIN from User so members with zero leads still appear.
      */

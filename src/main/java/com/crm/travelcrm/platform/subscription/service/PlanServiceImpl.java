@@ -45,6 +45,7 @@ public class PlanServiceImpl implements PlanService {
         plan.setMaxLeads(request.getMaxLeads());
         plan.setMaxBookingsPerMonth(request.getMaxBookingsPerMonth());
         plan.setMaxStorageMb(request.getMaxStorageMb());
+        plan.setMaxSubAgents(request.getMaxSubAgents());
         plan.setModules(request.getModules() != null ? new HashSet<>(request.getModules()) : new HashSet<>());
         plan.setActive(request.isActive());
 
@@ -71,6 +72,7 @@ public class PlanServiceImpl implements PlanService {
                 .maxLeads(p.getMaxLeads())
                 .maxBookingsPerMonth(p.getMaxBookingsPerMonth())
                 .maxStorageMb(p.getMaxStorageMb())
+                .maxSubAgents(p.getMaxSubAgents())
                 .modules(p.getModules())
                 .active(p.isActive())
                 .build();

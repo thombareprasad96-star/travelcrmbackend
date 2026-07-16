@@ -567,7 +567,7 @@
                         <div class="hcard-nameband">
                             <span class="hcard-name" th:text="${h.name}">Hotel</span>
                             <span class="hcard-namestar" th:if="${h.stars != null}"
-                                      th:text="|&#160;${&quot;★&quot;.repeat(h.stars)}|">5★</span></div>
+                                  th:text="|&#160;${&quot;★&quot;.repeat(h.stars)}|">5★</span></div>
                     </div>
                     <div class="hcard-namebar" th:unless="${!#strings.isEmpty(h.imagePath)}">
                         <span class="hcard-name" th:text="${h.name}">Hotel</span>

@@ -89,6 +89,7 @@ public class ScopeResolver {
         return switch (user.getRole()) {
             case MANAGER    -> Scope.TEAM;   // their team's records (User.managerId)
             case ACCOUNTANT -> Scope.ALL;    // finance works across the tenant
+            case SUB_AGENT  -> Scope.OWN;    // franchise partner: strictly its own records, never team/all
             default         -> Scope.OWN;    // TRAVEL_AGENT, STAFF → their own records
         };
     }

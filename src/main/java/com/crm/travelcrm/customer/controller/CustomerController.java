@@ -82,14 +82,14 @@ public class CustomerController {
     }
 
     @GetMapping("/stats")
-    @PreAuthorize("hasAuthority('CUSTOMER_READ')")
+    @PreAuthorize("hasAuthority('CRM_FULL')")   // tenant-wide aggregate — blocks sub-agents (no CRM_FULL)
     public ResponseEntity<ApiResponse<CustomerStatsResponse>> getStats() {
         return ResponseEntity.ok(
                 ApiResponse.success("Customer stats fetched", customerService.getStats()));
     }
 
     @GetMapping("/export")
-    @PreAuthorize("hasAuthority('CUSTOMER_READ')")
+    @PreAuthorize("hasAuthority('CRM_FULL')")   // full-tenant CSV export — blocks sub-agents
     public ResponseEntity<byte[]> exportCsv() {
         byte[] csvData = customerService.exportCsv();
 

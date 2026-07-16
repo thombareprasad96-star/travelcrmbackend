@@ -191,6 +191,7 @@ BookingController {
     // ── Stats ────────────────────────────────────────────────────────────────
 
     @GetMapping("/stats")
+    @PreAuthorize("hasAuthority('CRM_FULL')")   // tenant-wide financial aggregate — blocks sub-agents (they hold no CRM_FULL)
     public ResponseEntity<ApiResponse<BookingStatsResponseDTO>> getStats() {
         log.info("GET /api/bookings/stats");
         return ResponseEntity.ok(ApiResponse.success("Stats fetched successfully",
@@ -199,6 +200,7 @@ BookingController {
 
     // ── Page Summary ─────────────────────────────────────────────────────────
     @GetMapping("/page-summary")
+    @PreAuthorize("hasAuthority('CRM_FULL')")   // money summary (profit/gst/tcs) — blocks sub-agents
     public ResponseEntity<ApiResponse<BookingPageSummaryResponseDTO>> getPageSummary(
             @RequestParam(defaultValue = "0")    int    page,
             @RequestParam(defaultValue = "10")   int    size,
@@ -213,6 +215,7 @@ BookingController {
 
 
     @GetMapping("/export")
+    @PreAuthorize("hasAuthority('CRM_FULL')")   // full-tenant CSV export — blocks sub-agents
     public ResponseEntity<byte[]> export() {
         log.info("GET /api/bookings/export");
         byte[] csv = csvExportService.exportBookings();

@@ -1,3 +1,4 @@
+
 package com.crm.travelcrm.settings.controller;
 
 import com.crm.travelcrm.auth.entity.User;
@@ -21,8 +22,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * Per-tenant WhatsApp integration settings. Reads open to any tenant user; save/test require
- * SETTINGS_MANAGE. Tenant comes from the JWT principal.
+ * Per-tenant WhatsApp integration settings. All operations (read + save/test) require SETTINGS_MANAGE
+ * — the config exposes the tenant's WhatsApp phone/templates, which low-privilege roles (e.g. a B2B
+ * SUB_AGENT) must not see. Tenant comes from the JWT principal.
  */
 @RestController
 @RequestMapping("/api/settings/whatsapp")
@@ -32,7 +34,7 @@ public class WhatsAppConfigController {
     private final WhatsAppConfigService service;
 
     @GetMapping("/config")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('SETTINGS_MANAGE')")
     public ResponseEntity<ApiResponse<WhatsAppConfigDTO>> getConfig(@AuthenticationPrincipal User user) {
         return ResponseEntity.ok(ApiResponse.success(
                 "WhatsApp configuration retrieved", service.getConfig(user.getTenantId())));
@@ -57,7 +59,7 @@ public class WhatsAppConfigController {
     }
 
     @GetMapping("/stats")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('SETTINGS_MANAGE')")
     public ResponseEntity<ApiResponse<WhatsAppStatsDTO>> getStats(@AuthenticationPrincipal User user) {
         return ResponseEntity.ok(ApiResponse.success(
                 "WhatsApp stats retrieved", service.getStats(user.getTenantId())));

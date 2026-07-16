@@ -3,6 +3,7 @@ package com.crm.travelcrm.quotation.analytics;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.common.staffip.StaffIpService;
+import com.crm.travelcrm.permission.service.SubAgentScope;
 import com.crm.travelcrm.quotation.entity.Quotation;
 import com.crm.travelcrm.quotation.repository.QuotationRepository;
 import lombok.RequiredArgsConstructor;
@@ -24,6 +25,7 @@ public class WeblinkAnalyticsService {
     private final QuotationWeblinkViewRepository viewRepository;
     private final QuotationRepository quotationRepository;
     private final StaffIpService staffIpService;
+    private final SubAgentScope subAgentScope;
 
     /**
      * Record one public weblink view — async + best-effort. Resolves the quotation to get its
@@ -83,8 +85,10 @@ public class WeblinkAnalyticsService {
         }
 
         // Existence + ownership check (404 if not this tenant's quotation).
-        quotationRepository.findByPublicIdAndTenantIdAndDeletedAtIsNull(quotationPublicId, tenantId)
+        Quotation q = quotationRepository.findByPublicIdAndTenantIdAndDeletedAtIsNull(quotationPublicId, tenantId)
                 .orElseThrow(() -> new ResourceNotFoundException("Quotation not found: " + quotationPublicId));
+        // Sub-agent row scope: a sub-agent may only view analytics for a quotation it owns (else 404).
+        subAgentScope.assertVisible(q, quotationPublicId);
 
         List<QuotationWeblinkView> rows = viewRepository
                 .findAllByQuotationPublicIdAndTenantIdOrderByViewCountDescLastViewedAtDesc(quotationPublicId, tenantId);

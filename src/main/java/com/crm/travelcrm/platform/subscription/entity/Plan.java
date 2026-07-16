@@ -60,6 +60,14 @@ public class Plan extends BaseEntity {
     @Column(name = "max_storage_mb")
     private Integer maxStorageMb;
 
+    /**
+     * Max B2B sub-agents this plan grants. Unlike the other caps, sub-agents are a GATED paid
+     * capability: {@code null} or {@code 0} means the plan grants NONE (not unlimited). A positive
+     * value is the cap. Denormalized to {@code Tenant.maxSubAgents} on plan seed/change.
+     */
+    @Column(name = "max_sub_agents")
+    private Integer maxSubAgents;
+
     @Builder.Default
     @ElementCollection(fetch = FetchType.EAGER)
     @CollectionTable(name = "plan_modules", joinColumns = @JoinColumn(name = "plan_id"))

@@ -114,7 +114,7 @@ UPDATE vendors SET row_version = 0 WHERE row_version IS NULL;
 -- (DROP-then-ADD on every startup keeps it idempotent.)
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
 ALTER TABLE users ADD CONSTRAINT users_role_check
-        CHECK (role IN ('SUPERADMIN','TENANT_ADMIN','MANAGER','TRAVEL_AGENT','STAFF','ACCOUNTANT'));
+        CHECK (role IN ('SUPERADMIN','TENANT_ADMIN','MANAGER','TRAVEL_AGENT','STAFF','ACCOUNTANT','SUB_AGENT'));
 
 -- ── PlatformAuditAction enum CHECK constraint refresh ────────────────────────
 -- Same story as users_role_check: Hibernate generated platform_audit_logs_action_check from
@@ -149,6 +149,7 @@ ALTER TABLE platform_audit_logs ADD CONSTRAINT platform_audit_logs_action_check
                 'PAYMENT_ORDER_CREATED','PAYMENT_CAPTURED','PAYMENT_FAILED',
                 'SUBSCRIPTION_ACTIVATED','SUBSCRIPTION_CANCELLED','TENANT_PAST_DUE',
                 'UPGRADE_REQUEST_CREATE','UPGRADE_REQUEST_APPROVE','UPGRADE_REQUEST_REJECT','UPGRADE_REQUEST_CANCEL',
+                'SUBAGENT_LICENSE_CREATE','SUBAGENT_LICENSE_APPROVE','SUBAGENT_LICENSE_REJECT','SUBAGENT_LICENSE_CANCEL',
                 'IMPERSONATION_START','IMPERSONATION_END','USER_FORCE_RESET','USER_LOCK','USER_UNLOCK',
                 'FEATURE_FLAG_CHANGE','CONFIG_CHANGE','QUOTA_OVERRIDE','USAGE_LIMIT_EXCEEDED',
                 'ANNOUNCEMENT_SEND','MAINTENANCE_TOGGLE','DATA_EXPORT'));
@@ -169,3 +170,173 @@ ALTER TABLE upgrade_requests ADD CONSTRAINT upgrade_requests_payment_mode_check
 ALTER TABLE upgrade_requests DROP CONSTRAINT IF EXISTS upgrade_requests_offline_mode_check;
 ALTER TABLE upgrade_requests ADD CONSTRAINT upgrade_requests_offline_mode_check
         CHECK (offline_mode IS NULL OR offline_mode IN ('BANK_TRANSFER','CHEQUE','CASH'));
+
+-- ── SubAgentStatus enum CHECK constraint refresh ─────────────────────────────
+-- Hibernate generated sub_agent_profiles_status_check from SubAgentStatus (originally ACTIVE/SUSPENDED)
+-- when the table was first created; ddl-auto=update never alters it, so the later PENDING_LICENSE value
+-- (over-cap sub-agent awaiting a seat purchase) would be rejected at the DB level — breaking sub-agent
+-- creation when a tenant is over its cap. Drop + recreate with the full current set.
+ALTER TABLE sub_agent_profiles DROP CONSTRAINT IF EXISTS sub_agent_profiles_status_check;
+ALTER TABLE sub_agent_profiles ADD CONSTRAINT sub_agent_profiles_status_check
+        CHECK (status IN ('PENDING_LICENSE','ACTIVE','SUSPENDED'));
+
+-- ── SubAgentLicenseRequest enum CHECK constraint refresh ─────────────────────
+-- sub_agent_license_requests is a NEW table, so Hibernate creates its *_check constraints with the
+-- current enum values at first create and inserts work immediately. These drop+recreate blocks are
+-- belt-and-suspenders for any FUTURE value added to the status / PaymentMode / OfflinePaymentMode enums
+-- (ddl-auto=update never alters an existing constraint — same gotcha as above).
+ALTER TABLE sub_agent_license_requests DROP CONSTRAINT IF EXISTS sub_agent_license_requests_status_check;
+ALTER TABLE sub_agent_license_requests ADD CONSTRAINT sub_agent_license_requests_status_check
+        CHECK (status IN ('PENDING','APPROVED','REJECTED','CANCELLED'));
+
+ALTER TABLE sub_agent_license_requests DROP CONSTRAINT IF EXISTS sub_agent_license_requests_payment_mode_check;
+ALTER TABLE sub_agent_license_requests ADD CONSTRAINT sub_agent_license_requests_payment_mode_check
+        CHECK (payment_mode IN ('ONLINE','OFFLINE'));
+
+ALTER TABLE sub_agent_license_requests DROP CONSTRAINT IF EXISTS sub_agent_license_requests_offline_mode_check;
+ALTER TABLE sub_agent_license_requests ADD CONSTRAINT sub_agent_license_requests_offline_mode_check
+        CHECK (offline_mode IS NULL OR offline_mode IN ('BANK_TRANSFER','CHEQUE','CASH'));
+
+-- ── Task enum CHECK constraint refresh ───────────────────────────────────────
+-- tasks is a NEW table, so Hibernate creates its *_check constraints with the current enum values at
+-- first create and inserts work immediately. These drop+recreate blocks are belt-and-suspenders for
+-- any FUTURE value added to TaskStatus / TaskPriority / TaskCategory (ddl-auto=update never alters an
+-- existing constraint — same gotcha as billing_records_status_check above). Update the value lists
+-- here whenever a new enum constant is added, or inserts with it fail at the DB.
+ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_status_check;
+ALTER TABLE tasks ADD CONSTRAINT tasks_status_check
+        CHECK (status IN ('TODO','IN_PROGRESS','DONE','CANCELLED'));
+
+ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_priority_check;
+ALTER TABLE tasks ADD CONSTRAINT tasks_priority_check
+        CHECK (priority IN ('LOW','MEDIUM','HIGH','URGENT'));
+
+ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_category_check;
+ALTER TABLE tasks ADD CONSTRAINT tasks_category_check
+        CHECK (category IN ('GENERAL','FOLLOW_UP','CALL','MEETING','PAYMENT','DOCUMENT','VISA','TRAVEL','OTHER'));
+
+-- The calendar task-range feed + overdue/due-today counters filter on COALESCE(start_at, due_date)
+-- (the "calendar anchor"); a plain single-column index can't serve that expression, so add a partial
+-- expression index over live rows. Additive + idempotent.
+CREATE INDEX IF NOT EXISTS idx_task_anchor
+        ON tasks (tenant_id, COALESCE(start_at, due_date)) WHERE deleted_at IS NULL;
+
+-- ============================================================================
+-- ACCOUNTING / GST DEPTH MODULE (com.crm.travelcrm.accounting)
+-- ============================================================================
+
+-- HSN/SAC rate master: one live row per (tenant, code). Soft-delete-aware partial unique index so a
+-- code can be re-added after the original row is soft-deleted.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_hsn_sac_code_tenant
+        ON hsn_sac_rates (code, tenant_id) WHERE deleted_at IS NULL;
+
+-- At most ONE default rate per tenant (the fallback applied to invoice lines without a code).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_hsn_sac_default_tenant
+        ON hsn_sac_rates (tenant_id) WHERE is_default = true AND deleted_at IS NULL;
+
+-- accounting_settings.gst_scheme CHECK refresh. All accounting tables are NEW, so Hibernate creates
+-- their *_check constraints with the current enum values at first create and inserts work immediately.
+-- These drop+recreate blocks are belt-and-suspenders for any FUTURE enum value (ddl-auto=update never
+-- alters an existing constraint — the recurring gotcha across this file). Update the value lists here
+-- whenever a new enum constant is added, or inserts with it fail at the DB.
+ALTER TABLE accounting_settings DROP CONSTRAINT IF EXISTS accounting_settings_gst_scheme_check;
+ALTER TABLE accounting_settings ADD CONSTRAINT accounting_settings_gst_scheme_check
+        CHECK (gst_scheme IN ('REGULAR','COMPOSITION','UNREGISTERED'));
+
+-- tax_invoices enum CHECK refreshes (invoice_type / status / supply_type).
+ALTER TABLE tax_invoices DROP CONSTRAINT IF EXISTS tax_invoices_invoice_type_check;
+ALTER TABLE tax_invoices ADD CONSTRAINT tax_invoices_invoice_type_check
+        CHECK (invoice_type IN ('TAX_INVOICE','BILL_OF_SUPPLY','SIMPLE_INVOICE'));
+ALTER TABLE tax_invoices DROP CONSTRAINT IF EXISTS tax_invoices_status_check;
+ALTER TABLE tax_invoices ADD CONSTRAINT tax_invoices_status_check
+        CHECK (status IN ('ISSUED','CANCELLED'));
+ALTER TABLE tax_invoices DROP CONSTRAINT IF EXISTS tax_invoices_supply_type_check;
+ALTER TABLE tax_invoices ADD CONSTRAINT tax_invoices_supply_type_check
+        CHECK (supply_type IS NULL OR supply_type IN ('INTRA_STATE','INTER_STATE'));
+
+-- vendor_bills enum CHECK refreshes (tds_section nullable / status).
+ALTER TABLE vendor_bills DROP CONSTRAINT IF EXISTS vendor_bills_tds_section_check;
+ALTER TABLE vendor_bills ADD CONSTRAINT vendor_bills_tds_section_check
+        CHECK (tds_section IS NULL OR tds_section IN ('SEC_194C','SEC_194H','SEC_194J'));
+ALTER TABLE vendor_bills DROP CONSTRAINT IF EXISTS vendor_bills_status_check;
+ALTER TABLE vendor_bills ADD CONSTRAINT vendor_bills_status_check
+        CHECK (status IN ('UNPAID','PARTIALLY_PAID','PAID','CANCELLED'));
+
+-- vendor_payments idempotency: a resubmit with the same key collapses onto the original disbursement.
+-- Partial unique index (only where the key is set), scoped per tenant + bill.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_vendor_payment_idem
+        ON vendor_payments (tenant_id, vendor_bill_id, idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
+
+-- vendor_bills.row_version (@Version) — legacy NULL backfill so the first optimistic update won't choke.
+UPDATE vendor_bills SET row_version = 0 WHERE row_version IS NULL;
+
+-- ── Calendar hot path: booking service-line date lookups ─────────────────────
+-- The unified calendar derives flight/hotel/visa events from booking_service_items filtered by
+-- (tenant_id, service_date) — a column with no existing index. Additive + idempotent.
+CREATE INDEX IF NOT EXISTS idx_bksvc_service_date ON booking_service_items(tenant_id, service_date);
+
+-- ============================================================================
+-- MARKETING & CAMPAIGNS (com.crm.travelcrm.marketing)
+-- All marketing_* tables are NEW, so Hibernate creates their *_check constraints with the current
+-- enum values at first create and inserts work immediately. These refreshes exist so that when a
+-- future enum value is added, the check list here is the single place to update (ddl-auto=update
+-- never alters an existing constraint — same gotcha as billing_records_status_check above).
+-- ============================================================================
+
+-- ── Enum CHECK constraint refreshes ──────────────────────────────────────────
+ALTER TABLE marketing_segments DROP CONSTRAINT IF EXISTS marketing_segments_match_type_check;
+ALTER TABLE marketing_segments ADD CONSTRAINT marketing_segments_match_type_check
+        CHECK (match_type IN ('ALL','ANY'));
+
+ALTER TABLE marketing_campaigns DROP CONSTRAINT IF EXISTS marketing_campaigns_channel_check;
+ALTER TABLE marketing_campaigns ADD CONSTRAINT marketing_campaigns_channel_check
+        CHECK (channel IN ('WHATSAPP','EMAIL'));
+ALTER TABLE marketing_campaigns DROP CONSTRAINT IF EXISTS marketing_campaigns_status_check;
+ALTER TABLE marketing_campaigns ADD CONSTRAINT marketing_campaigns_status_check
+        CHECK (status IN ('DRAFT','SCHEDULED','SENDING','SENT','FAILED','CANCELLED'));
+ALTER TABLE marketing_campaigns DROP CONSTRAINT IF EXISTS marketing_campaigns_audience_type_check;
+ALTER TABLE marketing_campaigns ADD CONSTRAINT marketing_campaigns_audience_type_check
+        CHECK (audience_type IN ('SEGMENT','ALL_CUSTOMERS'));
+
+ALTER TABLE marketing_campaign_recipients DROP CONSTRAINT IF EXISTS marketing_campaign_recipients_channel_check;
+ALTER TABLE marketing_campaign_recipients ADD CONSTRAINT marketing_campaign_recipients_channel_check
+        CHECK (channel IN ('WHATSAPP','EMAIL'));
+ALTER TABLE marketing_campaign_recipients DROP CONSTRAINT IF EXISTS marketing_campaign_recipients_status_check;
+ALTER TABLE marketing_campaign_recipients ADD CONSTRAINT marketing_campaign_recipients_status_check
+        CHECK (status IN ('PENDING','SENT','FAILED','SKIPPED'));
+
+ALTER TABLE marketing_drip_sequences DROP CONSTRAINT IF EXISTS marketing_drip_sequences_status_check;
+ALTER TABLE marketing_drip_sequences ADD CONSTRAINT marketing_drip_sequences_status_check
+        CHECK (status IN ('DRAFT','ACTIVE','PAUSED'));
+ALTER TABLE marketing_drip_sequences DROP CONSTRAINT IF EXISTS marketing_drip_sequences_audience_type_check;
+ALTER TABLE marketing_drip_sequences ADD CONSTRAINT marketing_drip_sequences_audience_type_check
+        CHECK (audience_type IN ('SEGMENT','MANUAL'));
+
+ALTER TABLE marketing_drip_steps DROP CONSTRAINT IF EXISTS marketing_drip_steps_channel_check;
+ALTER TABLE marketing_drip_steps ADD CONSTRAINT marketing_drip_steps_channel_check
+        CHECK (channel IN ('WHATSAPP','EMAIL'));
+
+ALTER TABLE marketing_drip_enrollments DROP CONSTRAINT IF EXISTS marketing_drip_enrollments_status_check;
+ALTER TABLE marketing_drip_enrollments ADD CONSTRAINT marketing_drip_enrollments_status_check
+        CHECK (status IN ('ACTIVE','COMPLETED','CANCELLED'));
+
+ALTER TABLE marketing_automation_triggers DROP CONSTRAINT IF EXISTS marketing_automation_triggers_trigger_type_check;
+ALTER TABLE marketing_automation_triggers ADD CONSTRAINT marketing_automation_triggers_trigger_type_check
+        CHECK (trigger_type IN ('BIRTHDAY','ANNIVERSARY'));
+ALTER TABLE marketing_automation_triggers DROP CONSTRAINT IF EXISTS marketing_automation_triggers_channel_check;
+ALTER TABLE marketing_automation_triggers ADD CONSTRAINT marketing_automation_triggers_channel_check
+        CHECK (channel IN ('WHATSAPP','EMAIL'));
+
+-- ── Uniqueness (soft-delete-aware where the table soft-deletes) ──────────────
+-- Exactly one automation config row per (tenant, trigger_type). These rows are never soft-deleted
+-- (they are config, provisioned once and toggled), so an absolute unique index is correct.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mkt_auto_tenant_type
+        ON marketing_automation_triggers (tenant_id, trigger_type);
+
+-- A customer is enrolled in a given sequence at most once while that enrollment is live. The service
+-- already guards with existsBySequenceIdAndTenantIdAndCustomerId; this index is the hard backstop
+-- against a race double-enrolling. Partial on live rows so a re-enroll after soft-delete is allowed.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mkt_enroll_seq_customer
+        ON marketing_drip_enrollments (tenant_id, sequence_id, customer_id)
+        WHERE deleted_at IS NULL;

@@ -64,6 +64,25 @@ public class WhatsAppMessagingService {
     }
 
     /**
+     * Send using an explicit template name (falling back to the tenant's default when blank). Generic
+     * entry point for flows outside the fixed {@link Purpose} set — e.g. Marketing campaigns / drips /
+     * auto-triggers, which choose the template per message. Reuses the same normalisation + audit
+     * pipeline; existing callers are unaffected.
+     */
+    @Transactional
+    public Result sendTemplate(Long tenantId, String toPhone, String templateName, List<String> bodyValues) {
+        TenantSettings ts = loadConfigured(tenantId);
+        if (ts == null) {
+            return Result.fail("WhatsApp is not configured for this tenant.");
+        }
+        String template = StringUtils.hasText(templateName) ? templateName : ts.getWaTemplateName();
+        if (!StringUtils.hasText(template)) {
+            return Result.fail("No WhatsApp template configured. Set a default template in Settings → WhatsApp.");
+        }
+        return dispatch(ts, toPhone, template, ts.getWaTemplateLanguage(), bodyValues, ts.getWaHeaderImageUrl());
+    }
+
+    /**
      * Send a purpose-specific template (OTP / quotation / reminder). The template name comes from
      * {@code app.whatsapp.templates.*} when set, otherwise falls back to the tenant's default template.
      */

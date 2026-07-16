@@ -1,6 +1,7 @@
 package com.crm.travelcrm.reminder.entity;
 
 import com.crm.travelcrm.common.entity.BaseTenantEntity;
+import com.crm.travelcrm.common.entity.Ownable;
 import jakarta.persistence.*;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
@@ -30,7 +31,9 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 @SuperBuilder
-public class Reminder extends BaseTenantEntity {
+public class Reminder extends BaseTenantEntity implements Ownable {
+    // Note: owner_user_id already exists below (used for SSE routing) — implementing Ownable lets the
+    // sub-agent row-scope (SubAgentScope) reuse it. owner = creator (set in ReminderServiceImpl.create).
 
     @Column(name = "title", nullable = false)
     private String title;

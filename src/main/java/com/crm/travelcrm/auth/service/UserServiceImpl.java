@@ -54,10 +54,12 @@ public class UserServiceImpl implements UserService {
         // passed by the controller) — never taken from the request body.
         Tenant tenant = requireActiveTenant(tenantId);
 
-        // Plan seat limit — block creating users beyond the tenant's allowance.
+        // Plan seat limit — block creating users beyond the tenant's allowance. Sub-agents are
+        // EXCLUDED from the staff-seat count: they have their own cap (Tenant.maxSubAgents) + seat fee,
+        // so they must not consume a staff seat here.
         Integer maxUsers = tenant.getMaxUsers();
         if (maxUsers != null && maxUsers > 0
-                && userRepository.countByTenantIdAndDeletedAtIsNull(tenantId) >= maxUsers) {
+                && userRepository.countByTenantIdAndDeletedAtIsNullAndRoleNot(tenantId, Role.SUB_AGENT) >= maxUsers) {
             throw new BusinessException(
                     "Your plan allows up to " + maxUsers + " users. "
                             + "Upgrade your plan or remove a user to add more.",

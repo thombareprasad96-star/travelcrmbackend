@@ -24,6 +24,7 @@ import com.crm.travelcrm.customer.exception.DuplicateCustomerException;
 import com.crm.travelcrm.customer.mapper.CustomerMapper;
 import com.crm.travelcrm.customer.repository.CustomerRepository;
 import com.crm.travelcrm.customer.specification.CustomerSpecification;
+import com.crm.travelcrm.permission.service.SubAgentScope;
 import com.crm.travelcrm.customer.util.CustomerCodeGenerator;
 import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.notification.api.NotifyEvent;
@@ -84,6 +85,7 @@ public class CustomerServiceImpl implements CustomerService {
     private final CustomerMapper customerMapper;
     private final CustomerCodeGenerator customerCodeGenerator;
     private final ApplicationEventPublisher eventPublisher;
+    private final SubAgentScope subAgentScope;
 
     // ── Create ───────────────────────────────────────────────────────────────────
 
@@ -143,8 +145,12 @@ public class CustomerServiceImpl implements CustomerService {
         Long tenantId = currentTenantId();
 
         Pageable pageable = PageRequest.of(page, size, buildSort(sortBy, sortDir));
-        Page<Customer> customerPage =
-                customerRepository.findAllByTenantIdAndDeletedAtIsNull(tenantId, pageable);
+        Long ownerFilter = subAgentScope.ownerFilter();
+        Page<Customer> customerPage = (ownerFilter == null)
+                ? customerRepository.findAllByTenantIdAndDeletedAtIsNull(tenantId, pageable)
+                : customerRepository.findAll(
+                        CustomerSpecification.activeForTenant(tenantId)
+                                .and(CustomerSpecification.ownedBy(ownerFilter)), pageable);
 
         List<CustomerResponse> content = enrichList(customerPage.getContent(), tenantId);
         log.debug("Fetched {} customers (page {}) for tenantId: {}", content.size(), page, tenantId);
@@ -173,6 +179,7 @@ public class CustomerServiceImpl implements CustomerService {
                 .findByPhoneAndTenantIdAndDeletedAtIsNull(normalized, tenantId)
                 .orElseThrow(() -> new CustomerNotFoundException(
                         "No customer found with phone: " + phone));
+        subAgentScope.assertVisible(customer, phone);   // sub-agent may only fetch its own customer
 
         return enrichSingle(customer, tenantId);
     }
@@ -184,8 +191,12 @@ public class CustomerServiceImpl implements CustomerService {
         if (!StringUtils.hasText(name)) {
             return Collections.emptyList();
         }
+        Long ownerFilter = subAgentScope.ownerFilter();
         List<Customer> matches = customerRepository
-                .findByTenantIdAndDeletedAtIsNullAndNameContainingIgnoreCase(tenantId, name.trim());
+                .findByTenantIdAndDeletedAtIsNullAndNameContainingIgnoreCase(tenantId, name.trim())
+                .stream()
+                .filter(c -> ownerFilter == null || ownerFilter.equals(c.getOwnerUserId()))
+                .toList();
         return enrichList(matches, tenantId);
     }
 
@@ -262,6 +273,8 @@ public class CustomerServiceImpl implements CustomerService {
                 .and(CustomerSpecification.hasStatus(parseStatus(status)))
                 .and(CustomerSpecification.hasType(parseType(type)))
                 .and(CustomerSpecification.hasTier(parseTier(tier)));
+        Long ownerFilter = subAgentScope.ownerFilter();
+        if (ownerFilter != null) spec = spec.and(CustomerSpecification.ownedBy(ownerFilter));
 
         List<Customer> matches = customerRepository.findAll(spec);
         log.debug("Filter matched {} customers for tenantId: {} (status={}, type={}, tier={})",
@@ -392,9 +405,13 @@ public class CustomerServiceImpl implements CustomerService {
     // ── Generic helpers ───────────────────────────────────────────────────────────
 
     private Customer findOrThrow(UUID publicId, Long tenantId) {
-        return customerRepository
+        Customer customer = customerRepository
                 .findByPublicIdAndTenantIdAndDeletedAtIsNull(publicId, tenantId)
                 .orElseThrow(() -> new CustomerNotFoundException(publicId));
+        // Sub-agent row scope: 404 if a sub-agent doesn't own it (no-op for others). Single by-id
+        // chokepoint — covers getById/update/updateStatus/updateTier/delete/getBookingHistory.
+        subAgentScope.assertVisible(customer, publicId);
+        return customer;
     }
 
     /** Fill in business defaults so the DB invariants (NOT NULL enums) always hold. */

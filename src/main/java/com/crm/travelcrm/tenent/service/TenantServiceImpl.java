@@ -98,6 +98,7 @@ public class TenantServiceImpl implements TenantService {
             tenant.setMaxLeads(p.getMaxLeads());
             tenant.setMaxBookingsPerMonth(p.getMaxBookingsPerMonth());
             tenant.setMaxStorageMb(p.getMaxStorageMb());
+            tenant.setMaxSubAgents(p.getMaxSubAgents());
             tenant.setEnabledModules(new HashSet<>(p.getModules()));
         });
 
@@ -208,6 +209,11 @@ public class TenantServiceImpl implements TenantService {
             tenant.setMaxLeads(plan.getMaxLeads());
             tenant.setMaxBookingsPerMonth(plan.getMaxBookingsPerMonth());
             tenant.setMaxStorageMb(plan.getMaxStorageMb());
+            // Purchased add-on sub-agent seats survive a plan change: cap = plan default + paid seats
+            // (mirror TenantPlanApplier.applyPlan — the two MUST stay in sync).
+            int planSeats = plan.getMaxSubAgents() != null ? Math.max(0, plan.getMaxSubAgents()) : 0;
+            int purchasedSeats = tenant.getPurchasedSubAgentSeats() != null ? Math.max(0, tenant.getPurchasedSubAgentSeats()) : 0;
+            tenant.setMaxSubAgents(planSeats + purchasedSeats);
         }
         Tenant saved = tenantRepository.save(tenant);
 

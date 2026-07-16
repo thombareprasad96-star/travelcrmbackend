@@ -3,6 +3,7 @@ package com.crm.travelcrm.booking.entity;
 import com.crm.travelcrm.booking.enums.BookingStatus;
 import com.crm.travelcrm.booking.enums.PaymentStatus;
 import com.crm.travelcrm.common.entity.BaseTenantEntity;
+import com.crm.travelcrm.common.entity.Ownable;
 import jakarta.persistence.*;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
@@ -32,7 +33,13 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 @SuperBuilder
-public class Booking extends BaseTenantEntity {
+public class Booking extends BaseTenantEntity implements Ownable {
+
+    // Row-level owner: the sub-agent / user who created this booking (per-user data scoping).
+    // Nullable — pre-existing & system rows have none. Stamped on create by OwnershipEntityListener;
+    // read by BookingAccessGuard + list filters (Phase 2). Distinct from created_by (audit email).
+    @Column(name = "owner_user_id")
+    private Long ownerUserId;
 
     // ───────────────── Identity ─────────────────
 

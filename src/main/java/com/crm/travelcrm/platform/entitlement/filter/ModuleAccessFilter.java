@@ -56,6 +56,13 @@ public class ModuleAccessFilter extends OncePerRequestFilter {
         RULES.put("/api/vendors", "VENDORS");
         RULES.put("/api/reports", "REPORTS");
         RULES.put("/api/fleet", "FLEET");
+        // B2B sub-agents (Travel Partner). One rule covers both the management API and the tenant's
+        // seat-license purchases at "/api/subagents/license-requests" (prefix-or-slash match), so a
+        // tenant whose plan excludes the module can neither create partners nor buy seats for them.
+        // NOT gated here: "/api/me/commissions" (a sub-agent reading their OWN ledger — a shared /api/me
+        // namespace) and the SuperAdmin queue at "/api/super-admin/subagent-license-requests" (no
+        // TenantContext, so this filter skips it anyway).
+        RULES.put("/api/subagents", "SUBAGENT");
         RULES.put("/api/settings/whatsapp", "WHATSAPP");
         RULES.put("/api/hotels", "MASTERS");
         RULES.put("/api/airlines", "MASTERS");

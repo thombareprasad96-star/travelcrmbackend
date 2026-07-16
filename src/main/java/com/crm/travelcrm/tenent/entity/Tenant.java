@@ -8,6 +8,7 @@ import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.ColumnDefault;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.HashSet;
 import java.util.Set;
@@ -79,6 +80,30 @@ public class Tenant extends BaseEntity {
     // Storage cap in megabytes (Cloudinary assets + traveler documents); null = unlimited.
     @Column(name = "max_storage_mb")
     private Integer maxStorageMb;
+
+    // Max B2B sub-agents this tenant may provision (the licensed-seat cap). null or 0 = none from the
+    // plan. This equals the plan default PLUS purchasedSubAgentSeats (add-on seats bought via an
+    // approved SubAgentLicenseRequest). Denormalized from Plan on create / plan-change; a seat-license
+    // approval increments it; SuperAdmin-overridable.
+    @Column(name = "max_sub_agents")
+    private Integer maxSubAgents;
+
+    // Add-on sub-agent seats the tenant has PURCHASED (one-time seat-license approvals), on top of the
+    // plan default. Persisted so a later plan-change re-derives maxSubAgents = plan default + this
+    // (TenantPlanApplier), rather than wiping paid seats. null/0 = none purchased.
+    @Column(name = "purchased_sub_agent_seats")
+    private Integer purchasedSubAgentSeats;
+
+    // Per-tenant monthly seat fee charged per ACTIVE sub-agent (in the plan currency). null = use the
+    // platform-flat default (PlatformConfig billing.subagent.seat-fee). Independent of quotaOverride.
+    @Column(name = "sub_agent_seat_fee", precision = 12, scale = 2)
+    private BigDecimal subAgentSeatFee;
+
+    // Per-tenant ONE-TIME seat-license (unlock) fee charged per seat when a sub-agent is purchased.
+    // null = use the platform default (PlatformConfig billing.subagent.seat-license-fee), which itself
+    // falls back to the recurring seat rate when unset. Distinct from the recurring subAgentSeatFee.
+    @Column(name = "sub_agent_seat_license_fee", precision = 12, scale = 2)
+    private BigDecimal subAgentSeatLicenseFee;
 
     // When true, a SuperAdmin has manually overridden this tenant's quota limits, so a later
     // plan-change must NOT overwrite them with the plan defaults (the override wins until cleared).

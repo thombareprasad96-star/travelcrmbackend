@@ -173,4 +173,18 @@ public interface BookingRepository extends JpaRepository<Booking, Long>,
             HAVING COUNT(b) >= 3
             """)
     List<Long> findRepeatCustomerIds(@Param("tenantId") Long tenantId);
+
+    /**
+     * Per-owner booking aggregate for the B2B sub-agent roll-up: one row per {@code ownerUserId}
+     * with [ownerUserId, bookingCount, totalSaleValue (customerAmount), totalCollected (paidAmount)].
+     * Includes all non-deleted bookings (cancelled ones were still sales the sub-agent generated).
+     */
+    @Query("""
+            SELECT b.ownerUserId, COUNT(b),
+                   COALESCE(SUM(b.customerAmount), 0), COALESCE(SUM(b.paidAmount), 0)
+            FROM Booking b
+            WHERE b.deletedAt IS NULL AND b.tenantId = :tenantId AND b.ownerUserId IS NOT NULL
+            GROUP BY b.ownerUserId
+            """)
+    List<Object[]> aggregateByOwner(@Param("tenantId") Long tenantId);
 }

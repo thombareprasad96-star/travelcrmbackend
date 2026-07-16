@@ -5,6 +5,7 @@ import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.company.entity.Company;
 import com.crm.travelcrm.company.repository.CompanyRepository;
 import com.crm.travelcrm.quotation.dto.QuotationResponseDto;
+import com.crm.travelcrm.subagent.service.SubAgentBrandingService;
 import lombok.extern.slf4j.Slf4j;
 import org.openpdf.pdf.ITextRenderer;
 import org.openpdf.text.pdf.BaseFont;
@@ -55,6 +56,7 @@ public class QuotationPdfService {
 
     private final TemplateEngine templateEngine;
     private final CompanyRepository companyRepository;
+    private final SubAgentBrandingService brandingService;
 
     /**
      * The bundled font extracted to a temp file once at startup. OpenPDF's font resolver reads
@@ -75,6 +77,7 @@ public class QuotationPdfService {
 
     public QuotationPdfService(
             CompanyRepository companyRepository,
+            SubAgentBrandingService brandingService,
             @Value("${quotation.pdf.company-name:TravelCRM}") String companyName,
             @Value("${quotation.pdf.company-tagline:Your Journey, Our Passion}") String companyTagline,
             @Value("${quotation.pdf.company-phone:}") String companyPhone,
@@ -85,6 +88,7 @@ public class QuotationPdfService {
             @Value("${quotation.pdf.brand-color:#2563EB}") String brandColor) {
 
         this.companyRepository = companyRepository;
+        this.brandingService = brandingService;
         this.companyName = companyName;
         this.companyTagline = companyTagline;
         this.companyPhone = companyPhone;
@@ -127,6 +131,7 @@ public class QuotationPdfService {
         String cEmail   = companyEmail;
         String cWebsite = companyWebsite;
         String cAddress = companyAddress;
+        String cColor   = brandColor;
         String cGst     = null;
         Integer cReviews = null;
         Integer cYears   = null;
@@ -151,6 +156,23 @@ public class QuotationPdfService {
             }
         }
 
+        // White-label: when the quotation is owned by an active sub-agent, its brand overrides the
+        // tenant Company branding field-by-field (only the fields the sub-agent actually set). Works
+        // on the public share-link path too — resolved off the persisted owner, not TenantContext.
+        var branding = brandingService.resolve(dto.getOwnerUserId());
+        if (branding.isPresent()) {
+            var b = branding.get();
+            if (StringUtils.hasText(b.brandName()))    cName  = b.brandName();
+            if (StringUtils.hasText(b.logoUrl()))      cLogo  = b.logoUrl();
+            if (StringUtils.hasText(b.contactPhone())) cPhone = b.contactPhone();
+            if (StringUtils.hasText(b.contactEmail())) cEmail = b.contactEmail();
+            if (StringUtils.hasText(b.brandColor()))   cColor = b.brandColor();
+            // Address/website/GST/reviews stay the parent's — a sub-agent white-labels identity, not
+            // the parent's legal/registration details.
+            log.debug("White-label PDF branding applied for quotation {} (owner {})",
+                    dto.getPublicId(), dto.getOwnerUserId());
+        }
+
         ctx.setVariable("companyName", cName);
         ctx.setVariable("companyTagline", companyTagline);   // no dedicated Company field; configured default
         ctx.setVariable("companyPhone", cPhone);
@@ -158,7 +180,7 @@ public class QuotationPdfService {
         ctx.setVariable("companyWebsite", cWebsite);
         ctx.setVariable("companyAddress", cAddress);
         ctx.setVariable("companyLogoUrl", cLogo);
-        ctx.setVariable("brandColor", brandColor);
+        ctx.setVariable("brandColor", cColor);
         ctx.setVariable("companyGst", cGst);
         ctx.setVariable("companyGoogleReviews", cReviews);
         ctx.setVariable("companyYearsExperience", cYears);

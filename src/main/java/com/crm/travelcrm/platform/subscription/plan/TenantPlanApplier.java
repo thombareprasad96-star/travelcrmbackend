@@ -63,6 +63,11 @@ public class TenantPlanApplier {
             t.setMaxLeads(plan.getMaxLeads());
             t.setMaxBookingsPerMonth(plan.getMaxBookingsPerMonth());
             t.setMaxStorageMb(plan.getMaxStorageMb());
+            // Purchased add-on seats survive a plan change: the cap is the plan default PLUS whatever
+            // sub-agent seats the tenant has already paid for (a seat-license approval bumps both).
+            int planSeats = plan.getMaxSubAgents() != null ? Math.max(0, plan.getMaxSubAgents()) : 0;
+            int purchasedSeats = t.getPurchasedSubAgentSeats() != null ? Math.max(0, t.getPurchasedSubAgentSeats()) : 0;
+            t.setMaxSubAgents(planSeats + purchasedSeats);
         }
         tenantRepository.save(t);
 

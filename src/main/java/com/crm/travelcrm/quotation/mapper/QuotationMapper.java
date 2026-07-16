@@ -364,6 +364,7 @@ public class QuotationMapper {
                 .createdBy(q.getCreatedBy())
                 .createdAt(q.getCreatedAt())
                 .updatedAt(q.getUpdatedAt())
+                .ownerUserId(q.getOwnerUserId())   // @JsonIgnore carrier — white-label PDF branding only
                 .build();
     }
 

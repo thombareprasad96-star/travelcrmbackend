@@ -43,6 +43,8 @@ import com.crm.travelcrm.lead.entity.Lead;
 import com.crm.travelcrm.lead.enums.LeadStage;
 import com.crm.travelcrm.lead.repository.LeadRepository;
 import com.crm.travelcrm.lead.service.LeadAccessGuard;
+import com.crm.travelcrm.permission.service.SubAgentScope;
+import com.crm.travelcrm.subagent.service.SubAgentCommissionService;
 import com.crm.travelcrm.notification.api.NotifyEvent;
 import com.crm.travelcrm.notification.domain.enums.DeliveryChannel;
 import com.crm.travelcrm.notification.domain.enums.NotificationType;
@@ -111,6 +113,8 @@ public class BookingServiceImpl implements BookingService {
     private final CancellationCalculator cancellationCalculator;
     private final BookingCancellationRepository cancellationRepository;
     private final CancellationDocumentService cancellationDocumentService;
+    private final SubAgentScope subAgentScope;
+    private final SubAgentCommissionService commissionService;
 
     // ── Create ───────────────────────────────────────────────────────────────
 
@@ -162,6 +166,8 @@ public class BookingServiceImpl implements BookingService {
         if (initialPaid.signum() > 0) {
             recordPaymentLedgerRow(saved, initialPaid, "Opening balance",
                     saved.getBookingDate(), null, "Initial payment recorded at booking creation");
+            // Broker commission accrues on payment received — an upfront payment counts too.
+            commissionService.syncForBooking(saved);
         }
         log.info("Booking created successfully with code: {}", saved.getBookingCode());
         publishBookingEvent(NotificationType.BOOKING_CREATED, saved,
@@ -280,6 +286,8 @@ public class BookingServiceImpl implements BookingService {
         if (paid.signum() > 0) {
             recordPaymentLedgerRow(saved, paid, "Opening balance",
                     saved.getBookingDate(), null, "Initial payment recorded during lead conversion");
+            // Broker commission accrues on payment received — an upfront payment counts too.
+            commissionService.syncForBooking(saved);
         }
 
         // Flip the lead to CONVERTED — keep it for history, stamp the back-link to the booking.
@@ -369,6 +377,7 @@ public class BookingServiceImpl implements BookingService {
     public BookingResponseDTO getByCode(String code) {
         Booking booking = bookingRepository.findByBookingCodeAndDeletedAtIsNull(code)
                 .orElseThrow(() -> new BookingNotFoundException(code));
+        subAgentScope.assertVisible(booking, code);   // sub-agent may only fetch its own booking
         return bookingMapper.toResponse(booking);
     }
 
@@ -382,8 +391,10 @@ public class BookingServiceImpl implements BookingService {
                 : Sort.by(sortBy).ascending();
 
         Pageable pageable  = PageRequest.of(page, size, sort);
-        Page<Booking> bookingPage = bookingRepository.findAll(
-                BookingSpecification.isActive(), pageable);
+        Specification<Booking> spec = BookingSpecification.isActive();
+        Long ownerFilter = subAgentScope.ownerFilter();
+        if (ownerFilter != null) spec = spec.and(BookingSpecification.ownedBy(ownerFilter));
+        Page<Booking> bookingPage = bookingRepository.findAll(spec, pageable);
 
         List<BookingResponseDTO> content = bookingPage.getContent()
                 .stream()
@@ -765,6 +776,8 @@ public class BookingServiceImpl implements BookingService {
         // Payments-Received table — this PATCH path used to move paidAmount without a ledger row.
         recordPaymentLedgerRow(saved, request.getAmount(), "Payment",
                 request.getPaymentDate(), request.getPaymentReference(), request.getNotes());
+        // Broker commission accrues proportionally to net collection on every payment received.
+        commissionService.syncForBooking(saved);
         publishBookingEvent(NotificationType.BOOKING_PAYMENT_UPDATED, saved,
                 "Payment updated: " + saved.getBookingCode(),
                 "₹" + request.getAmount() + " received for booking " + saved.getBookingCode()
@@ -797,8 +810,10 @@ public class BookingServiceImpl implements BookingService {
     @Override
     @Transactional(readOnly = true)
     public List<BookingResponseDTO> getByCustomerId(Long customerId) {
+        Long ownerFilter = subAgentScope.ownerFilter();
         return bookingRepository.findAllByCustomerIdAndDeletedAtIsNull(customerId)
                 .stream()
+                .filter(b -> ownerFilter == null || ownerFilter.equals(b.getOwnerUserId()))
                 .map(bookingMapper::toResponse)
                 .toList();
     }
@@ -810,6 +825,9 @@ public class BookingServiceImpl implements BookingService {
     public List<BookingResponseDTO> search(String keyword) {
         Specification<Booking> spec = BookingSpecification.isActive()
                 .and(BookingSpecification.search(keyword));
+
+        Long ownerFilter = subAgentScope.ownerFilter();
+        if (ownerFilter != null) spec = spec.and(BookingSpecification.ownedBy(ownerFilter));
 
         return bookingRepository.findAll(spec)
                 .stream()
@@ -835,6 +853,9 @@ public class BookingServiceImpl implements BookingService {
         Specification<Booking> spec = BookingSpecification.filter(
                 status, paymentStatus, bookingMonth, travelMonth,
                 customerId, fromDate, toDate, minAmount, maxAmount);
+
+        Long ownerFilter = subAgentScope.ownerFilter();
+        if (ownerFilter != null) spec = spec.and(BookingSpecification.ownedBy(ownerFilter));
 
         return bookingRepository.findAll(spec)
                 .stream()
@@ -927,8 +948,12 @@ public class BookingServiceImpl implements BookingService {
     // ── Private Helpers ──────────────────────────────────────────────────────
 
     private Booking findActiveByPublicId(UUID publicId) {
-        return bookingRepository.findByPublicIdAndDeletedAtIsNull(publicId)
+        Booking booking = bookingRepository.findByPublicIdAndDeletedAtIsNull(publicId)
                 .orElseThrow(() -> new BookingNotFoundException(publicId));
+        // Single by-id chokepoint: 404s a sub-agent that doesn't own the booking (no-op for others).
+        // Covers getById/update/updateStatus/updatePayment/delete/cancel/sendVoucher in one place.
+        subAgentScope.assertVisible(booking, publicId);
+        return booking;
     }
 
     private Long requireTenantId() {

@@ -2,9 +2,11 @@ package com.crm.travelcrm.tenent.tenentsRepository;
 
 import com.crm.travelcrm.tenent.entity.Tenant;
 import com.crm.travelcrm.tenent.enums.TenantStatus;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -21,6 +23,15 @@ public interface TenantRepository extends JpaRepository<Tenant, Long> {
     boolean existsByEmail(String email);
     boolean existsByOrganizationCode(String organizationCode);
     boolean existsByEmailAndIdNot(String email, Long id);
+
+    /**
+     * Pessimistic-write lock on the tenant row — the serialization point for seat-mutating operations
+     * (sub-agent provisioning + seat-license open) so a concurrent pair cannot both pass a check-then-act
+     * seat-cap / duplicate check. Must be called inside a transaction; the lock is held to commit.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT t FROM Tenant t WHERE t.id = :id")
+    Optional<Tenant> findByIdForUpdate(@Param("id") Long id);
 
     // External lookups key on publicId (UUID) — the internal Long PK is never exposed.
     Optional<Tenant> findByPublicId(UUID publicId);

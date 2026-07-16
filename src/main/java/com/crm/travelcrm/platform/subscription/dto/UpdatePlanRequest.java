@@ -38,6 +38,10 @@ public class UpdatePlanRequest {
     @Min(value = 1, message = "Max storage (MB) must be at least 1")
     private Integer maxStorageMb;
 
+    /** Sub-agents this plan grants (gated capability): null/0 = none. */
+    @Min(value = 0, message = "Max sub-agents cannot be negative")
+    private Integer maxSubAgents;
+
     private Set<String> modules;
 
     private boolean active;

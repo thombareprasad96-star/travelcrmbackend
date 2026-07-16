@@ -17,6 +17,7 @@ import com.crm.travelcrm.reminder.entity.ReminderType;
 import com.crm.travelcrm.reminder.mapper.ReminderMapper;
 import com.crm.travelcrm.reminder.repository.ReminderRepository;
 import com.crm.travelcrm.reminder.specification.ReminderSpecification;
+import com.crm.travelcrm.permission.service.SubAgentScope;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Sort;
@@ -43,6 +44,7 @@ public class ReminderServiceImpl implements ReminderService {
     private final ReminderMapper reminderMapper;
     private final LeadAccessGuard leadAccessGuard;
     private final UserRepository userRepository;
+    private final SubAgentScope subAgentScope;
 
     private static final DateTimeFormatter CSV_TS =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneOffset.UTC);
@@ -165,6 +167,8 @@ public class ReminderServiceImpl implements ReminderService {
         Long tenantId = currentTenantId();
         var spec = ReminderSpecification.build(
                 tenantId, parseStatus(status), parsePriority(priority), parseType(type));
+        Long ownerFilter = subAgentScope.ownerFilter();
+        if (ownerFilter != null) spec = spec.and(ReminderSpecification.ownedBy(ownerFilter));
         return reminderRepository.findAll(spec, Sort.by(Sort.Direction.ASC, "dueDate"))
                 .stream().map(reminderMapper::toDto).toList();
     }
@@ -179,10 +183,13 @@ public class ReminderServiceImpl implements ReminderService {
     @Transactional(readOnly = true)
     public List<ReminderResponseDto> getOverdue() {
         Long tenantId = currentTenantId();
+        Long ownerFilter = subAgentScope.ownerFilter();
         return reminderRepository
                 .findByTenantIdAndStatusInAndDueDateLessThanAndDeletedAtIsNullOrderByDueDateAsc(
                         tenantId, OVERDUE_STATUSES, Instant.now())
-                .stream().map(reminderMapper::toDto).toList();
+                .stream()
+                .filter(r -> ownerFilter == null || ownerFilter.equals(r.getOwnerUserId()))
+                .map(reminderMapper::toDto).toList();
     }
 
     @Override
@@ -191,19 +198,25 @@ public class ReminderServiceImpl implements ReminderService {
         Long tenantId = currentTenantId();
         Instant startOfDay = Instant.now().truncatedTo(ChronoUnit.DAYS);
         Instant endOfDay = startOfDay.plus(1, ChronoUnit.DAYS);
+        Long ownerFilter = subAgentScope.ownerFilter();
         return reminderRepository
                 .findByTenantIdAndStatusAndDueDateBetweenAndDeletedAtIsNullOrderByDueDateAsc(
                         tenantId, ReminderStatus.Active, startOfDay, endOfDay)
-                .stream().map(reminderMapper::toDto).toList();
+                .stream()
+                .filter(r -> ownerFilter == null || ownerFilter.equals(r.getOwnerUserId()))
+                .map(reminderMapper::toDto).toList();
     }
 
     @Override
     @Transactional(readOnly = true)
     public List<ReminderResponseDto> getByLeadName(String leadName) {
         Long tenantId = currentTenantId();
+        Long ownerFilter = subAgentScope.ownerFilter();
         return reminderRepository
                 .findByTenantIdAndLeadNameIgnoreCaseAndDeletedAtIsNullOrderByDueDateAsc(tenantId, leadName)
-                .stream().map(reminderMapper::toDto).toList();
+                .stream()
+                .filter(r -> ownerFilter == null || ownerFilter.equals(r.getOwnerUserId()))
+                .map(reminderMapper::toDto).toList();
     }
 
     @Override
@@ -259,8 +272,12 @@ public class ReminderServiceImpl implements ReminderService {
 
     private Reminder findOrThrow(Long id) {
         Long tenantId = currentTenantId();
-        return reminderRepository.findByIdAndTenantIdAndDeletedAtIsNull(id, tenantId)
+        Reminder reminder = reminderRepository.findByIdAndTenantIdAndDeletedAtIsNull(id, tenantId)
                 .orElseThrow(() -> new ResourceNotFoundException("Reminder not found: " + id));
+        // Sub-agent row scope: 404 if a sub-agent doesn't own it (no-op for others). Single by-id
+        // chokepoint — covers getById/update/delete/markComplete/dismiss/snooze/addLog.
+        subAgentScope.assertVisible(reminder, id);
+        return reminder;
     }
 
     /**

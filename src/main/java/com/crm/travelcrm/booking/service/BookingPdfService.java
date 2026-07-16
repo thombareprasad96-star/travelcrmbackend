@@ -6,6 +6,7 @@ import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.company.entity.Company;
 import com.crm.travelcrm.company.repository.CompanyRepository;
 import com.crm.travelcrm.quotation.service.PdfFormat;
+import com.crm.travelcrm.subagent.service.SubAgentBrandingService;
 import lombok.extern.slf4j.Slf4j;
 import org.openpdf.pdf.ITextRenderer;
 import org.springframework.beans.factory.annotation.Value;
@@ -38,6 +39,7 @@ public class BookingPdfService {
 
     private final TemplateEngine templateEngine;
     private final CompanyRepository companyRepository;
+    private final SubAgentBrandingService brandingService;
 
     private final String companyName;
     private final String companyTagline;
@@ -50,6 +52,7 @@ public class BookingPdfService {
 
     public BookingPdfService(
             CompanyRepository companyRepository,
+            SubAgentBrandingService brandingService,
             @Value("${quotation.pdf.company-name:TravelCRM}") String companyName,
             @Value("${quotation.pdf.company-tagline:Your Journey, Our Passion}") String companyTagline,
             @Value("${quotation.pdf.company-phone:}") String companyPhone,
@@ -60,6 +63,7 @@ public class BookingPdfService {
             @Value("${booking.pdf.brand-color:#B8891F}") String brandColor) {
 
         this.companyRepository = companyRepository;
+        this.brandingService = brandingService;
         this.companyName = companyName;
         this.companyTagline = companyTagline;
         this.companyPhone = companyPhone;
@@ -98,7 +102,7 @@ public class BookingPdfService {
         ctx.setVariable("fmt", new PdfFormat());
         ctx.setVariable("generatedOn", doc.getGeneratedOn() != null ? doc.getGeneratedOn() : LocalDate.now());
 
-        applyBranding(ctx);
+        applyBranding(ctx, doc.getOwnerUserId());
 
         String html = templateEngine.process(template, ctx);
 
@@ -121,14 +125,19 @@ public class BookingPdfService {
         }
     }
 
-    /** Resolve branding fresh from the tenant Company profile, falling back to configured defaults. */
-    private void applyBranding(Context ctx) {
+    /**
+     * Resolve branding fresh from the tenant Company profile, falling back to configured defaults;
+     * then, when {@code ownerUserId} is an active sub-agent, white-label the identity fields with
+     * their brand (legal details — address/website/GST/reviews — stay the parent's).
+     */
+    private void applyBranding(Context ctx, Long ownerUserId) {
         String cName    = companyName;
         String cLogo    = companyLogoUrl;
         String cPhone   = companyPhone;
         String cEmail   = companyEmail;
         String cWebsite = companyWebsite;
         String cAddress = companyAddress;
+        String cColor   = brandColor;
         String cGst     = null;
         Integer cReviews = null;
         Integer cYears   = null;
@@ -151,6 +160,16 @@ public class BookingPdfService {
             }
         }
 
+        var branding = brandingService.resolve(ownerUserId);
+        if (branding.isPresent()) {
+            var b = branding.get();
+            if (StringUtils.hasText(b.brandName()))    cName  = b.brandName();
+            if (StringUtils.hasText(b.logoUrl()))      cLogo  = b.logoUrl();
+            if (StringUtils.hasText(b.contactPhone())) cPhone = b.contactPhone();
+            if (StringUtils.hasText(b.contactEmail())) cEmail = b.contactEmail();
+            if (StringUtils.hasText(b.brandColor()))   cColor = b.brandColor();
+        }
+
         ctx.setVariable("companyName", cName);
         ctx.setVariable("companyTagline", companyTagline);
         ctx.setVariable("companyPhone", cPhone);
@@ -158,7 +177,7 @@ public class BookingPdfService {
         ctx.setVariable("companyWebsite", cWebsite);
         ctx.setVariable("companyAddress", cAddress);
         ctx.setVariable("companyLogoUrl", cLogo);
-        ctx.setVariable("brandColor", brandColor);
+        ctx.setVariable("brandColor", cColor);
         ctx.setVariable("companyGst", cGst);
         ctx.setVariable("companyGoogleReviews", cReviews);
         ctx.setVariable("companyYearsExperience", cYears);

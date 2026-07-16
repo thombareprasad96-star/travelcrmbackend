@@ -46,7 +46,8 @@ deputy** — steered past a tenant/authz boundary the REST layer would enforce.
 - The Hibernate `tenantFilter` reliably activates on `@Transactional` methods (I verified `TenantFilterAspect`
   ordering). If AOP self-invocation or a missing `@Transactional` silently disables it, isolation conclusions shift.
 - `spring.jpa.hibernate.ddl-auto=update` means the live schema matches the entity mappings I read.
-- **F8** assumes a plan can actually be configured as *LEADS-enabled, BOOKINGS-disabled*. **F6/F10** depend on
+- **F8** assumes a plan can actually be configured a
+- s *LEADS-enabled, BOOKINGS-disabled*. **F6/F10** depend on
   business intent I can't settle statically.
 - Concurrency findings (**F4**) assume a real multi-threaded/multi-node deployment with no external serialization
   in front of the payment endpoints.

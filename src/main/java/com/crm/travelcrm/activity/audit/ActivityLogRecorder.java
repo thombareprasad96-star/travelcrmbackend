@@ -74,6 +74,7 @@ public class ActivityLogRecorder {
             case STAFF        -> "Staff";
             case ACCOUNTANT   -> "Accountant";
             case TRAVEL_AGENT -> "Agent";
+            case SUB_AGENT    -> "Sub-Agent";
             case SUPERADMIN   -> "SuperAdmin";
         };
     }
