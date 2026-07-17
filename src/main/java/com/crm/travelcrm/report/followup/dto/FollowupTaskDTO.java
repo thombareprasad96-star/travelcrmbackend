@@ -14,6 +14,7 @@ import java.util.UUID;
 @AllArgsConstructor
 public class FollowupTaskDTO {
     private UUID    publicId;             // reminder publicId (external id)
+    private UUID    leadPublicId;         // owning lead — drives the FE's view/edit-lead drill-down; null if unlinked
     private String  dueDate;             // "Jun 01, 2026"
     private String  dueTime;             // "20:07"
     private String  overdueBy;           // "Overdue by 21 days" | "Upcoming"

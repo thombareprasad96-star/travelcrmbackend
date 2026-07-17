@@ -507,6 +507,31 @@ a destructive change, take a backup first and don't rely on JAR rollback alone.
 - [ ] Login, create a lead → quotation → booking, download a PDF, check the notification bell (SSE)
 - [ ] `/ai/chat` returns 404 and the FE chat widget is hidden (AI is off this sprint)
 
+### Lead-source webhooks (Integrations → Lead Sources)
+
+Only needed if a lead source is being connected during the pilot. The endpoint is `permitAll` and
+creates rows, so these are not optional once it is live.
+
+- [ ] `nginx -t` passes **after** the `map`/`log_format travelcrm` block was added — a typo there takes
+      the whole site down, not just the log
+- [ ] **Token is not in the access log.** Send one delivery, then:
+      `grep -c 'lsk_' /var/log/nginx/travelcrm-access.log` → **0**, and the line reads
+      `/api/webhooks/leads/<channel>/[REDACTED]`. If a raw `lsk_…` appears, the `access_log` directive
+      is still on the default `combined` format and every ingest credential is being written to disk.
+- [ ] `APP_PUBLIC_BASE_URL` is `https://api.mytripsafar.com` — this is what the ingest URL handed to
+      JustDial/Google Ads is built from. **Treat it as permanent**: those URLs get pasted into a
+      provider's console (and for JustDial, emailed to an account manager who configures it by hand).
+      Changing this origin later silently kills every live integration, because no provider will
+      re-paste. If the tenant app ever moves to per-tenant subdomains, `api.` stays the webhook origin.
+- [ ] Connect one source, then confirm the round trip end-to-end: **Deliveries** panel shows the
+      delivery with its raw payload. For Google Ads, "Send test data" should appear as `test_lead` —
+      that proves the wiring without creating a real lead or burning plan quota.
+- [ ] `SELECT conname FROM pg_constraint WHERE conrelid='leads'::regclass;` includes
+      `leads_lead_source_check` **and** it lists `JUSTDIAL`/`GOOGLE_ADS`/`META_ADS`. `ddl-auto=update`
+      never alters an existing constraint, so a DB whose `leads` table predates these constants rejects
+      every inbound lead at the DB layer. `SchemaEnumConstraintValidator` refuses to boot if so — but
+      confirm rather than assume, since `db/indexes.sql` runs with `continue-on-error=true`.
+
 ---
 
 ## 12. Known gaps — accepted for a pilot, fix before real customers

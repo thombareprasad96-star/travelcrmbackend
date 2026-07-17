@@ -28,6 +28,7 @@ public class FollowupReportMapper {
     public FollowupTaskDTO toDTO(Reminder r, Lead lead) {
         return FollowupTaskDTO.builder()
                 .publicId(r.getPublicId())
+                .leadPublicId(lead != null ? lead.getPublicId() : null)
                 .dueDate(r.getDueDate() != null ? DATE_FMT.format(r.getDueDate()) : null)
                 .dueTime(r.getDueDate() != null ? TIME_FMT.format(r.getDueDate()) : null)
                 .overdueBy(overdueBy(r.getDueDate()))
