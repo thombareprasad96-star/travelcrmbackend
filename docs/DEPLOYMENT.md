@@ -218,17 +218,68 @@ journalctl -u travelcrm -f
 'JWT_SECRET'`. Dev value reused, localhost URL, seeder on → a `REFUSING TO START` block listing
 every problem at once. Fix the env file and restart.
 
-### TLS
+### The React SPA
 
-Edit `server_name` / `ssl_certificate*` in the nginx conf to the real hostname first:
+The nginx conf serves **two** vhosts: the API on `api.mytripsafar.com` and the SPA on
+`mytripsafar.com` / `www.mytripsafar.com` from `/var/www/travelcrm`. Deploy the SPA before nginx goes
+up — one bad server block fails the whole `nginx -t`, which takes the API vhost down with it.
+
+`VITE_API_URL` is compiled **into** the bundle, so it must be right at build time; a wrong value needs
+a rebuild, not a config edit. `.env.production` is gitignored — a fresh clone must recreate it from
+`.env.example`.
 
 ```bash
-sudo ln -s /etc/nginx/sites-available/travelcrm /etc/nginx/sites-enabled/
-sudo nginx -t && sudo systemctl reload nginx
-sudo certbot --nginx -d api.example.com        # installs a renewal timer
+# in travelcrmfrontend
+cat > .env.production <<'EOF'
+VITE_API_URL=https://api.mytripsafar.com/api
+VITE_CLOUDINARY_CLOUD_NAME=dfjawtgv6
+VITE_CLOUDINARY_UPLOAD_PRESET=travelcrm_destinations
+EOF
+npm ci && npm run build
+
+# Verify the bundle before shipping it — `built in 15s` is not evidence the URL is right.
+grep -rl 'api.mytripsafar.com' dist/ | wc -l    # must be > 0
+grep -rl 'localhost:8080'      dist/ | wc -l    # must be 0 — non-zero means .env.production wasn't read
+
+sudo mkdir -p /var/www/travelcrm
+rsync -a --delete dist/ root@187.127.159.81:/var/www/travelcrm/
 ```
 
-Verify: `curl https://api.example.com/actuator/health` → `{"status":"UP"}`
+### TLS
+
+**The install order is authoritative in the header of `deploy/nginx-travelcrm.conf` — follow its
+steps 1–8 verbatim.** Do not improvise it, and in particular do not run `certbot --nginx` against the
+shipped conf: its `ssl_certificate` lines name cert files that do not exist until certbot has run, so
+`nginx -t` fails, the reload fails, and `certbot --nginx` — which needs an nginx that loads — cannot
+run either. The conf must go up **HTTP-only first** (both `listen 443` blocks commented out), certs
+obtained by `--webroot`, then the TLS blocks uncommented.
+
+Two certificates are needed, not one:
+
+```bash
+sudo mkdir -p /var/www/html                    # the acme-challenge root
+
+sudo certbot certonly --webroot -w /var/www/html \
+  -d api.mytripsafar.com --deploy-hook "systemctl reload nginx"
+
+sudo certbot certonly --webroot -w /var/www/html \
+  -d mytripsafar.com -d www.mytripsafar.com --deploy-hook "systemctl reload nginx"
+```
+
+⚠ **Apex first** in the second command. certbot names the lineage after the first `-d`, and the SPA
+block hardcodes `/etc/letsencrypt/live/mytripsafar.com/`. Leading with `www` puts the cert in
+`live/www.mytripsafar.com/` and that path stays broken.
+
+⚠ `--deploy-hook` is **not** optional with `certonly`: it records no installer, so the ~60-day renewal
+writes a fresh cert to disk while nginx keeps serving the old one from memory until it expires — a
+site that goes down two months after a deploy that looked fine.
+
+Verify:
+```bash
+curl -s  https://api.mytripsafar.com/actuator/health     # {"status":"UP"}
+curl -sI https://mytripsafar.com/Allbookings | head -1    # 200 — SPA deep-link fallback
+sudo certbot renew --dry-run
+```
 
 ---
 
@@ -296,8 +347,19 @@ sudo systemctl restart postgresql
 
 ## 8. Database backups
 
-**The plan:** nightly `pg_dump` → gzip → local `/var/backups/travelcrm` (14 days) → **copied
-off-host**. Plus a VPS-level snapshot as a separate layer.
+**The plan:** **hourly** `pg_dump` → gzip → local `/var/backups/travelcrm`, two-tier retention →
+**copied off-host**. Plus a VPS-level snapshot as a separate layer.
+
+| Tier | What | Kept |
+|---|---|---|
+| `/var/backups/travelcrm/hourly/` | every run | 48 hours (`HOURLY_RETENTION_HOURS`) |
+| `/var/backups/travelcrm/daily/`  | the 02:00 run only, hardlinked from hourly | 14 days (`DAILY_RETENTION_DAYS`) |
+
+Hourly at a flat 14-day retention would mean 336 dumps; the tiers keep it at ~62. The daily copy is a
+**hardlink**, so it costs disk only once. 02:00 is deliberate — see the cron note below.
+
+⚠ **Watch the disk as the DB grows.** 62 dumps at a pilot's ~1 MB is nothing; at 500 MB/dump it is
+~31 GB, a third of this box. `df -h /`, and drop `HOURLY_RETENTION_HOURS` first — it is 48 of the 62.
 
 This is not optional here, for two reasons specific to this app:
 - `ddl-auto=update` lets Hibernate change the live schema at boot.
@@ -311,9 +373,23 @@ sudo crontab -e
 ```
 
 ```cron
-# 02:00 IST — deliberately BEFORE the 02:30 trash purge, so the night's backup still
-# contains whatever the purge is about to hard-delete.
-0 2 * * * /usr/local/bin/travelcrm-backup >> /var/log/travelcrm/backup.log 2>&1
+# Every hour. The 02:00 run is the one promoted to daily/ — deliberately BEFORE the 02:30
+# trash purge, so the retained daily copy still contains whatever the purge hard-deletes.
+0 * * * * /usr/local/bin/travelcrm-backup >> /var/log/travelcrm/backup.log 2>&1
+```
+
+⚠ **Add a logrotate rule.** This log now grows 24× faster, and nothing rotates it — log4j2 only
+manages the app's own files. `/etc/logrotate.d/travelcrm-backup`:
+
+```
+/var/log/travelcrm/backup.log {
+    weekly
+    rotate 8
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
 ```
 
 The script writes to `.partial` and renames only on success (so a crash can't leave a
@@ -332,17 +408,27 @@ successful run.
 3. **Restore-test it once, now.** An untested backup is a guess:
    ```bash
    sudo -u postgres createdb restore_test
-   gunzip -c /var/backups/travelcrm/travel_crm-*.sql.gz | sudo -u postgres psql -d restore_test
-   sudo -u postgres psql -d restore_test -c '\dt' | head
+   ls -lt /var/backups/travelcrm/hourly/ | head          # dumps live in hourly/ and daily/
+   gunzip -c /var/backups/travelcrm/hourly/travel_crm-YYYYMMDD-HHMMSS.sql.gz \
+     | sudo -u postgres psql -d restore_test
+
+   # Verify OWNERSHIP, not just existence. `\dt` as postgres passes even when the app cannot
+   # read a single row — it is not a real check. This is (expect 0):
+   sudo -u postgres psql -d restore_test -c \
+     "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tableowner <> 'travelcrm';"
+
    sudo -u postgres dropdb restore_test
    ```
+   `pg_dump` never dumps roles — restoring into a fresh cluster means recreating the `travelcrm`
+   role (§4) **first**, or every `OWNER TO travelcrm` in the dump fails.
 
 **Also enable your provider's snapshot backups** (Hostinger et al. sell weekly/daily snapshots).
 The dump protects the *data*; the snapshot protects the *box* — a bad `apt upgrade` or a lost
 disk is a restore-the-whole-VM problem that `pg_dump` cannot answer.
 
-**Recovery point:** nightly dumps ⇒ up to 24 h of loss in the worst case. Fine for a pilot. For
-real customers, move to WAL archiving / PITR (§12).
+**Recovery point:** hourly dumps ⇒ up to 1 h of loss in the worst case, for anything inside the 48 h
+hourly window; up to 24 h beyond it, where only the daily tier remains. Fine for a pilot. For real
+customers, move to WAL archiving / PITR (§12).
 
 ---
 
@@ -407,7 +493,14 @@ a destructive change, take a backup first and don't rely on JAR rollback alone.
 - [ ] TLS valid; HTTP redirects to HTTPS; certbot timer active
 - [ ] `ufw status` → only 22/80/443
 - [ ] Seeder off — confirm no `Demo Travels` tenant and no `superadmin@demo.crm`
-- [ ] SuperAdmin registered with the rotated signup secret; tenant created
+- [ ] `SELECT email FROM super_admins;` returns exactly the configured address, and nothing else
+      (the account is auto-created on the first boot from SUPER_ADMIN_EMAIL/SUPER_ADMIN_PASSWORD —
+      do NOT try to register it, see §6)
+- [ ] `SELECT code FROM plans;` returns 3 rows — an empty catalogue 403s every CRM page while the
+      sidebar still renders, which reads as a broken permission system, not a missing catalogue
+- [ ] SuperAdmin password rotated via the console (🔑 in the header) after the first login
+- [ ] `grep -rl 'localhost:8080' /var/www/travelcrm` is empty — the SPA was built with VITE_API_URL set
+- [ ] Tenant created
 - [ ] Backup cron installed **and restore-tested once**; off-host copy working
 - [ ] Provider snapshots enabled
 - [ ] `timedatectl` → `Asia/Kolkata`
@@ -444,9 +537,15 @@ Full annotated list: `deploy/travelcrm.env.example`.
 Required in prod (no defaults — a missing one fails the boot):
 `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`, `PORTAL_JWT_SECRET`,
 `SUPERADMIN_SIGNUP_SECRET`, `APP_ENCRYPTION_KEY`, `APP_PUBLIC_BASE_URL`,
-`APP_CORS_ALLOWED_ORIGINS`.
+`APP_CORS_ALLOWED_ORIGINS`, `SUPER_ADMIN_PASSWORD`.
 
-Optional: `MAIL_*`, `CLOUDINARY_*`, `RAZORPAY_*`, `TOMCAT_MAX_THREADS`, `DB_POOL_MAX_SIZE`,
-`TRASH_RETENTION_DAYS`, `LOG_DIR`, `JPA_DDL_AUTO`.
+`SUPER_ADMIN_PASSWORD` is enforced twice and is easy to miss: `ProductionConfigValidator` rejects it
+blank or as `CHANGE_ME`, and `DataInitializer` throws under `prod` rather than fall back to the
+development password that is public in this repository's git history.
+
+Optional: `SUPER_ADMIN_EMAIL` (defaults to `superadmin@travelcrm.com`), `MAIL_*`, `CLOUDINARY_*`,
+`WHATSAPP_TEMPLATE_*` (read by the live Interakt sender — unset means each flow falls back to the
+tenant's own default template), `RAZORPAY_*`, `TOMCAT_MAX_THREADS`, `DB_POOL_MAX_SIZE`,
+`TRASH_RETENTION_DAYS`, `LOG_DIR`, `JPA_DDL_AUTO`, `HOURLY_RETENTION_HOURS`, `DAILY_RETENTION_DAYS`.
 
 Not used this sprint: `GROQ_API_KEY` (AI is off).

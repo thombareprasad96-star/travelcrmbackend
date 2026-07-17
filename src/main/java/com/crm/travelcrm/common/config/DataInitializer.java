@@ -52,7 +52,12 @@ public class DataInitializer implements ApplicationRunner {
         if (email == null || email.isBlank()) {
             email = DEFAULT_EMAIL;
         }
-        email = email.trim().toLowerCase();
+        // trim() only — deliberately NOT toLowerCase(). SuperAdmin login resolves the account by an
+        // exact, case-sensitive match, so lowercasing here while the operator types the address as
+        // they wrote it in the env file would leave the console unable to authenticate the only
+        // platform account, on a first boot, with no signup route left to recover through.
+        // Store it exactly as configured and the two sides agree by construction.
+        email = email.trim();
 
         String password = environment.getProperty(PASSWORD_ENV_VAR);
         if (password == null || password.isBlank()) {
