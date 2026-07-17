@@ -7,6 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 
@@ -15,19 +16,24 @@ import org.springframework.stereotype.Component;
  *
  * <p>Runs after Hibernate schema creation (ApplicationRunner executes once the
  * context is fully started). If the super_admins table already has a row, this
- * is a no-op — so the plaintext credential banner below can only ever appear on
- * the very first run against an empty database.
+ * is a no-op.
  *
- * <p>The password comes from the SUPER_ADMIN_PASSWORD environment variable.
- * The fallback exists for local development only.
+ * <p>The password comes from the SUPER_ADMIN_PASSWORD environment variable. Under the
+ * {@code prod} profile that variable is MANDATORY and a missing one fails the boot.
+ * This class is deliberately ungated by {@code app.seed.enabled} — it is not demo data,
+ * it is the only way to obtain a platform login — so the dev fallback below would
+ * otherwise run on a production first boot and publish a known password on the public
+ * login form. The account is also unrecoverable-by-signup afterwards: AuthServiceImpl
+ * refuses to register a second SuperAdmin once this row exists.
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class DataInitializer implements ApplicationRunner {
 
-    private static final String SUPER_ADMIN_EMAIL = "superadmin@travelcrm.com";
+    private static final String DEFAULT_EMAIL     = "superadmin@travelcrm.com";
     private static final String SUPER_ADMIN_NAME  = "Platform Super Admin";
+    private static final String EMAIL_ENV_VAR     = "SUPER_ADMIN_EMAIL";
     private static final String PASSWORD_ENV_VAR  = "SUPER_ADMIN_PASSWORD";
     private static final String FALLBACK_PASSWORD = "Test@123";
 
@@ -42,8 +48,22 @@ public class DataInitializer implements ApplicationRunner {
             return;
         }
 
+        String email = environment.getProperty(EMAIL_ENV_VAR);
+        if (email == null || email.isBlank()) {
+            email = DEFAULT_EMAIL;
+        }
+        email = email.trim().toLowerCase();
+
         String password = environment.getProperty(PASSWORD_ENV_VAR);
         if (password == null || password.isBlank()) {
+            if (environment.acceptsProfiles(Profiles.of("prod"))) {
+                throw new IllegalStateException(
+                        PASSWORD_ENV_VAR + " is not set. It is required under the 'prod' profile: this "
+                        + "runner creates " + email + " on the first boot against an empty "
+                        + "database, and without it the account would be created with a password that is "
+                        + "public in this repository. Add " + PASSWORD_ENV_VAR + " to "
+                        + "/etc/travelcrm/travelcrm.env (openssl rand -base64 24) and restart.");
+            }
             password = FALLBACK_PASSWORD;
             log.warn("Environment variable {} is not set — falling back to the default "
                     + "development password. Set {} before running outside local dev.",
@@ -52,21 +72,25 @@ public class DataInitializer implements ApplicationRunner {
 
         SuperAdmin superAdmin = SuperAdmin.builder()
                 .name(SUPER_ADMIN_NAME)
-                .email(SUPER_ADMIN_EMAIL)
+                .email(email)
                 .password(passwordEncoder.encode(password))
                 .enabled(true)
                 .build();
         superAdminRepository.save(superAdmin);
 
         // Reached only when the table was empty, i.e. the true first run.
+        // The password is deliberately NOT logged: log4j2-prod.xml routes WARN to both
+        // travelcrm.log and travelcrm-error.log with 90-day retention, and to the journal —
+        // so printing it here would persist the live platform credential in three places
+        // that outlive the operator reading it.
         log.warn("""
 
                 ============================================================
                   SUPER ADMIN CREATED  (first run only)
                     Email    : {}
-                    Password : {}
+                    Password : the value of {} from the environment
                   Log in and change this password immediately.
                 ============================================================
-                """, SUPER_ADMIN_EMAIL, password);
+                """, email, PASSWORD_ENV_VAR);
     }
 }

@@ -6,6 +6,7 @@ import com.crm.travelcrm.booking.dto.request.LeadConversionRequestDTO;
 import com.crm.travelcrm.booking.dto.request.PaymentUpdateRequestDTO;
 import com.crm.travelcrm.booking.dto.request.StatusUpdateRequestDTO;
 import com.crm.travelcrm.booking.dto.request.UpdateBookingRequestDTO;
+import com.crm.travelcrm.booking.dto.response.BookingAssigneeDto;
 import com.crm.travelcrm.booking.dto.response.BookingPageSummaryResponseDTO;
 import com.crm.travelcrm.booking.dto.response.BookingResponseDTO;
 import com.crm.travelcrm.booking.dto.response.BookingStatsResponseDTO;
@@ -73,4 +74,10 @@ public interface BookingService {
     BookingPageSummaryResponseDTO getPageSummary(int page, int size, String sortBy, String sortDir);
 
     void sendVoucher(UUID publicId);
+
+    /**
+     * Staff who may be picked in the booking "Assigned To" dropdown, name-ordered. Read-only —
+     * the choice is validated again when the booking is actually created.
+     */
+    List<BookingAssigneeDto> eligibleAssignees();
 }

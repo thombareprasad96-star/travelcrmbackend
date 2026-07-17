@@ -37,6 +37,13 @@ public class BookingResponseDTO {
     private UUID sourceLeadPublicId;
     private UUID sourceQuotationPublicId;
 
+    // ── Assignment — who services this booking ───────────────────────────────
+    // publicId + denormalised name of the assignee, resolved through BookingAssigneeView so a
+    // paged response costs one query for the whole page. Both null when unassigned (every booking
+    // created before this feature) or when the assignee no longer resolves.
+    private UUID   assignedUserId;
+    private String assignedUserName;
+
     // Dates
     @JsonFormat(pattern = "yyyy-MM-dd")
     private LocalDate bookingDate;

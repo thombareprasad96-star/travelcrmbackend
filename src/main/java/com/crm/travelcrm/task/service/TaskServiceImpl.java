@@ -22,8 +22,11 @@ import com.crm.travelcrm.task.enums.TaskCategory;
 import com.crm.travelcrm.task.enums.TaskPriority;
 import com.crm.travelcrm.task.enums.TaskStatus;
 import com.crm.travelcrm.task.mapper.TaskMapper;
+import com.crm.travelcrm.reminder.repository.ReminderRepository;
 import com.crm.travelcrm.task.repository.TaskRepository;
 import com.crm.travelcrm.task.specification.TaskSpecification;
+import com.crm.travelcrm.workload.UserWorkload;
+import com.crm.travelcrm.workload.WorkloadService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -43,6 +46,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 @Service
@@ -55,6 +59,7 @@ public class TaskServiceImpl implements TaskService {
     private final UserRepository userRepository;
     private final LeadAccessGuard leadAccessGuard;
     private final LeadRepository leadRepository;
+    private final ReminderRepository reminderRepository;
     private final SubAgentScope subAgentScope;
     private final CurrentUserProvider currentUserProvider;
     private final ApplicationEventPublisher eventPublisher;
@@ -239,7 +244,7 @@ public class TaskServiceImpl implements TaskService {
         Map<Long, Workload> byUser = new LinkedHashMap<>();
         for (Task t : tasks) {
             Workload w = byUser.computeIfAbsent(t.getAssignToUserId(),
-                    k -> new Workload(t.getAssignToPublicId(), t.getAssignToName()));
+                    k -> new Workload(k, t.getAssignToPublicId(), t.getAssignToName()));
             w.total++;
             switch (t.getStatus()) {
                 case TODO -> w.todo++;
@@ -250,10 +255,9 @@ public class TaskServiceImpl implements TaskService {
             if (t.isOverdue()) w.overdue++;
         }
 
-        // Merge in each user's ACTIVE-lead count (the same open-pipeline metric the load-based lead
-        // assignment balances on), keyed by publicId, via ONE tenant-scoped GROUP BY (no N+1). A user
-        // who owns active leads but has no tasks is ADDED so the workload reflects their real load; the
-        // "Unassigned" task bucket (null publicId) has no lead counterpart.
+        // Merge in each user's ACTIVE-lead count, keyed by publicId, via ONE tenant-scoped GROUP BY
+        // (no N+1). A user who owns active leads but has no tasks is ADDED so the workload reflects
+        // their real load; the "Unassigned" task bucket (null publicId) has no lead counterpart.
         Map<UUID, Workload> byPublicId = new HashMap<>();
         for (Workload w : byUser.values()) {
             if (w.publicId != null) byPublicId.put(w.publicId, w);
@@ -261,12 +265,13 @@ public class TaskServiceImpl implements TaskService {
         List<Workload> leadOnly = new ArrayList<>();
         for (Object[] row : leadRepository.findActiveLeadWorkloadPerUser(
                 tenantId, LeadStageGroups.ACTIVE_STAGES)) {
-            UUID publicId   = (UUID) row[0];
-            String name     = (String) row[1];
-            long activeLeads = (Long) row[2];
+            Long userId      = (Long) row[0];
+            UUID publicId    = (UUID) row[1];
+            String name      = (String) row[2];
+            long activeLeads = (Long) row[3];
             Workload w = byPublicId.get(publicId);
             if (w == null) {                       // owns active leads but has no tasks — add them
-                w = new Workload(publicId, name);
+                w = new Workload(userId, publicId, name);
                 byPublicId.put(publicId, w);
                 leadOnly.add(w);
             }
@@ -276,9 +281,39 @@ public class TaskServiceImpl implements TaskService {
         List<Workload> all = new ArrayList<>(byUser.values());
         all.addAll(leadOnly);
 
+        // Merge in OPEN reminders (Active + OVERDUE) — one more GROUP BY, through the same repository
+        // method WorkloadService uses, so the number here and the number the auto-assignment balanced
+        // on are computed by the same query rather than two that agree today and drift later.
+        //
+        // NOTE: this adjusts the SCORE of users already listed; it does not add rows. A user with ONLY
+        // reminders (no tasks, no leads) still does not appear here — a pre-existing property of this
+        // view, which is the union of task assignees and lead owners.
+        List<Long> userIds = all.stream().map(w -> w.userId).filter(Objects::nonNull).toList();
+        if (!userIds.isEmpty()) {
+            Map<Long, Workload> byUserId = new HashMap<>();
+            for (Workload w : all) {
+                if (w.userId != null) byUserId.put(w.userId, w);
+            }
+            for (Object[] row : reminderRepository.countOpenRemindersPerUser(
+                    tenantId, userIds, WorkloadService.OPEN_REMINDER_STATUSES)) {
+                Workload w = byUserId.get((Long) row[0]);
+                if (w != null) w.openReminders = (Long) row[1];
+            }
+        }
+
         return all.stream()
-                // Busiest overall first: tasks + active leads.
-                .sorted(Comparator.comparingLong((Workload w) -> w.total + w.activeLeads).reversed())
+                // Busiest first, by the SHARED metric — todo + inProgress + activeLeads +
+                // openReminders (UserWorkload.score()).
+                //
+                // This deliberately no longer sorts on `total + activeLeads`. `total` counts DONE
+                // tasks, so finishing work made someone look busier and pushed them DOWN this list
+                // while the load-based lead assignment — which never counted DONE — kept sending them
+                // leads. The two views disagreed, and the more work an agent completed the more the
+                // manager's screen misrepresented them. `done` and `overdue` are still reported,
+                // because a manager wants to see them; they just do not decide the ordering.
+                .sorted(Comparator.comparingLong((Workload w) ->
+                        new UserWorkload(w.userId, w.todo, w.inProgress, w.activeLeads,
+                                w.openReminders).score()).reversed())
                 .map(w -> TaskWorkloadDto.builder()
                         .assigneePublicId(w.publicId)
                         .assigneeName(w.publicId == null ? "Unassigned"
@@ -289,6 +324,9 @@ public class TaskServiceImpl implements TaskService {
                         .overdue(w.overdue)
                         .total(w.total)
                         .activeLeads(w.activeLeads)
+                        .openReminders(w.openReminders)
+                        .workloadScore(new UserWorkload(w.userId, w.todo, w.inProgress, w.activeLeads,
+                                w.openReminders).score())
                         .build())
                 .toList();
     }
@@ -297,10 +335,13 @@ public class TaskServiceImpl implements TaskService {
 
     /** Mutable per-assignee accumulator for {@link #getWorkload()}. */
     private static final class Workload {
+        /** Internal id — needed to key the per-user reminder query. Null for the Unassigned bucket. */
+        final Long userId;
         final UUID publicId;
         final String name;
-        long todo, inProgress, done, overdue, total, activeLeads;
-        Workload(UUID publicId, String name) {
+        long todo, inProgress, done, overdue, total, activeLeads, openReminders;
+        Workload(Long userId, UUID publicId, String name) {
+            this.userId = userId;
             this.publicId = publicId;
             this.name = name;
         }

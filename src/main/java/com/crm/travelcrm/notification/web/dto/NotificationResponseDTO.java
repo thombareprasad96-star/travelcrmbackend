@@ -15,7 +15,10 @@ import java.util.UUID;
 @Builder
 public class NotificationResponseDTO {
 
-    private Long id;
+    // No internal Long id — publicId is the only identifier consumers get (BaseEntity's rule).
+    // It was never part of this DTO's documented contract, the FE keys off publicId, and
+    // ephemeral() could not populate it anyway (SSE pushes have no DB row), so it shipped as null
+    // on exactly the pushes a client would most want to identify.
     private UUID publicId;
     private String type;
     private String title;
@@ -28,7 +31,6 @@ public class NotificationResponseDTO {
 
     public static NotificationResponseDTO from(Notification n) {
         return NotificationResponseDTO.builder()
-                .id(n.getId())
                 .publicId(n.getPublicId())
                 .type(n.getType())
                 .title(n.getTitle())

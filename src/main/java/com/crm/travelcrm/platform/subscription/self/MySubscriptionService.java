@@ -7,6 +7,8 @@ import com.crm.travelcrm.platform.billing.enums.BillingStatus;
 import com.crm.travelcrm.platform.billing.proration.ProrationCalculator;
 import com.crm.travelcrm.platform.billing.proration.ProrationResult;
 import com.crm.travelcrm.platform.billing.service.BillingService;
+import com.crm.travelcrm.platform.notification.api.PlatformNotificationType;
+import com.crm.travelcrm.platform.notification.api.PlatformNotifyEvent;
 import com.crm.travelcrm.platform.subscription.dto.PlanResponse;
 import com.crm.travelcrm.platform.subscription.entity.Plan;
 import com.crm.travelcrm.platform.subscription.repository.PlanRepository;
@@ -18,6 +20,7 @@ import com.crm.travelcrm.tenent.enums.TenantStatus;
 import com.crm.travelcrm.tenent.service.TenantService;
 import com.crm.travelcrm.tenent.tenentsRepository.TenantRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -47,6 +50,7 @@ public class MySubscriptionService {
     private final TenantService tenantService;
     private final UserRepository userRepository;
     private final ProrationCalculator prorationCalculator;
+    private final ApplicationEventPublisher applicationEventPublisher;
 
     /** Active plans a tenant may switch to. */
     @Transactional(readOnly = true)
@@ -95,6 +99,10 @@ public class MySubscriptionService {
         boolean currencyMismatch = currentPlanEntity != null
                 && currentPlanEntity.getCurrency() != null && targetPlanEntity.getCurrency() != null
                 && !currentPlanEntity.getCurrency().equalsIgnoreCase(targetPlanEntity.getCurrency());
+        // Strictly cheaper, not merely "not an upgrade" — a lateral move prices equal. Only meaningful
+        // within one currency, for the same reason proration refuses to net two currencies.
+        boolean isDowngrade = currentPlanEntity != null && !currencyMismatch
+                && targetPrice.compareTo(currentPrice) < 0;
 
         // ── Pay-first upgrade: ACTIVE tenant, real positive proration, single currency ──
         if (isUpgrade && tenant.getStatus() == TenantStatus.ACTIVE && !currencyMismatch) {
@@ -153,6 +161,22 @@ public class MySubscriptionService {
         BillingRecordResponse proration = billingService.listForTenant(tenant.getPublicId())
                 .stream().filter(r -> !before.contains(r.getPublicId())).findFirst().orElse(null);
         boolean hasDue = proration != null && proration.getStatus() == BillingStatus.UNPAID;
+
+        if (isDowngrade) {
+            applicationEventPublisher.publishEvent(PlatformNotifyEvent.builder()
+                    .type(PlatformNotificationType.PLAN_DOWNGRADED)
+                    .title("Plan downgraded")
+                    .message(tenant.getOrganizationName() + " downgraded from "
+                            + currentPlanEntity.getDisplayName() + " to " + targetPlanEntity.getDisplayName()
+                            + " — monthly revenue " + currentPlanEntity.getCurrency() + " " + currentPrice
+                            + " → " + targetPlanEntity.getCurrency() + " " + targetPrice + ".")
+                    .referenceType(PlatformNotificationType.REF_SUBSCRIPTION)
+                    .referencePublicId(tenant.getPublicId())
+                    .tenantId(tenant.getId())
+                    .tenantName(tenant.getOrganizationName())
+                    .tenantPublicId(tenant.getPublicId())
+                    .build());
+        }
 
         String message = hasDue
                 ? "Plan changed to " + targetPlanEntity.getDisplayName() + ". A prorated invoice of "

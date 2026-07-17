@@ -11,6 +11,8 @@ import com.crm.travelcrm.platform.audit.entity.PlatformAuditAction;
 import com.crm.travelcrm.platform.billing.entity.BillingRecord;
 import com.crm.travelcrm.platform.billing.enums.BillingStatus;
 import com.crm.travelcrm.platform.billing.repository.BillingRecordRepository;
+import com.crm.travelcrm.platform.notification.api.PlatformNotificationType;
+import com.crm.travelcrm.platform.notification.api.PlatformNotifyEvent;
 import com.crm.travelcrm.platform.payment.dto.PaymentOrderResponse;
 import com.crm.travelcrm.platform.payment.entity.PaymentTransaction;
 import com.crm.travelcrm.platform.payment.entity.WebhookEvent;
@@ -252,6 +254,17 @@ public class SaasPaymentServiceImpl implements SaasPaymentService {
                 "Captured " + txn.getCurrency() + " " + txn.getAmount() + " for "
                         + txn.getInvoiceNumber() + " (payment " + paymentId + ")");
 
+        eventPublisher.publishEvent(PlatformNotifyEvent.builder()
+                .type(PlatformNotificationType.SAAS_PAYMENT_RECEIVED)
+                .title("Payment received")
+                .message(txn.getTenantName() + " paid " + txn.getCurrency() + " " + txn.getAmount()
+                        + " for invoice " + txn.getInvoiceNumber() + " (payment " + paymentId + ")")
+                .referenceType(PlatformNotificationType.REF_BILLING)
+                .referencePublicId(txn.getPublicId())
+                .tenantId(txn.getTenantId())
+                .tenantName(txn.getTenantName())
+                .build());
+
         notifyTenantAdmins(txn.getTenantId(), txn.getPublicId(), "Payment received",
                 "We received your payment of " + txn.getCurrency() + " " + txn.getAmount()
                         + " for invoice " + txn.getInvoiceNumber() + ". Thank you!");
@@ -276,6 +289,19 @@ public class SaasPaymentServiceImpl implements SaasPaymentService {
                 "PAYMENT", txn.getPublicId(),
                 "Payment failed for " + txn.getInvoiceNumber()
                         + (txn.getFailureReason() != null ? " — " + txn.getFailureReason() : ""));
+
+        eventPublisher.publishEvent(PlatformNotifyEvent.builder()
+                .type(PlatformNotificationType.SAAS_PAYMENT_FAILED)
+                .title("Payment failed")
+                .message(txn.getTenantName() + "'s payment of " + txn.getCurrency() + " " + txn.getAmount()
+                        + " for invoice " + txn.getInvoiceNumber() + " failed"
+                        + (txn.getFailureReason() != null ? " — " + txn.getFailureReason() : ""))
+                .referenceType(PlatformNotificationType.REF_BILLING)
+                .referencePublicId(txn.getPublicId())
+                .tenantId(txn.getTenantId())
+                .tenantName(txn.getTenantName())
+                .build());
+
         // Dunning: a failed SaaS payment opens the grace window (ACTIVE → PAST_DUE).
         dunningService.onPaymentFailed(txn.getTenantId());
         return orderId;

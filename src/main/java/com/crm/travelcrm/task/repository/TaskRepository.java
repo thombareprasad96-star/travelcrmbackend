@@ -53,4 +53,26 @@ public interface TaskRepository
                          @Param("openStatuses") Collection<TaskStatus> openStatuses,
                          @Param("start") Instant start,
                          @Param("end") Instant end);
+
+    /**
+     * Per-user task count split by status — a component of the shared workload metric
+     * ({@code UserWorkload.score()}).
+     *
+     * <p>One tenant-scoped GROUP BY, so a pool of N users costs one query rather than N. Returns rows
+     * ONLY for users that currently hold at least one task in {@code statuses}; the caller must
+     * zero-fill, so a user with nothing to do is a genuine (and most-attractive) candidate rather
+     * than an absent one. Each row is {@code [userId (Long), status (TaskStatus), count (Long)]}.
+     */
+    @Query("""
+            SELECT t.assignToUserId, t.status, COUNT(t)
+            FROM Task t
+            WHERE t.tenantId = :tenantId
+              AND t.deletedAt IS NULL
+              AND t.assignToUserId IN :userIds
+              AND t.status IN :statuses
+            GROUP BY t.assignToUserId, t.status
+            """)
+    List<Object[]> countTasksPerUserByStatus(@Param("tenantId") Long tenantId,
+                                             @Param("userIds") Collection<Long> userIds,
+                                             @Param("statuses") Collection<TaskStatus> statuses);
 }

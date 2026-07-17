@@ -53,4 +53,33 @@ public class LeadLog extends BaseTenantEntity {
     /** Denormalized display name of the author, so list views need no user join. */
     @Column(name = "added_by_name", length = 150)
     private String addedByName;
+
+    // ── Inbound ingestion (owner decision 1: a repeat contact APPENDS, it does not create) ────────
+
+    /**
+     * What wrote this log. Nullable ON PURPOSE: {@code ddl-auto=update} adds the column as NULL on
+     * every existing row, and a NOT NULL here would make Hibernate try to tighten a column full of
+     * nulls and fail. A null means a human wrote it — the only kind that existed before this column.
+     *
+     * <p>Kept a plain String rather than {@code @Enumerated}: this is a display/filter label, not a
+     * query or index predicate, and an enum column would need a CHECK-constraint refresh block in
+     * {@code db/indexes.sql} for every value added.
+     */
+    @Column(name = "activity_kind", length = 40)
+    private String activityKind;
+
+    /**
+     * Logical FK to {@code lead_ingest_events.id} — the raw delivery that produced this log. Null for
+     * human-written logs.
+     *
+     * <p>A pointer for debugging ONLY. Ingest events purge at 30 days, so this must never be the sole
+     * path to anything that matters; campaign and recording data live on {@code lead_attributions},
+     * which is permanent.
+     */
+    @Column(name = "ingest_event_id")
+    private Long ingestEventId;
+
+    /** Logical FK to {@code lead_source_integrations.id} — which connection delivered it. */
+    @Column(name = "source_integration_id")
+    private Long sourceIntegrationId;
 }

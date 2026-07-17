@@ -13,10 +13,9 @@ import com.crm.travelcrm.lead.assignment.repository.LeadAssignmentPointerReposit
 import com.crm.travelcrm.lead.assignment.strategy.AssignmentContext;
 import com.crm.travelcrm.lead.assignment.strategy.AssignmentStrategyType;
 import com.crm.travelcrm.lead.assignment.strategy.LeadAssignmentStrategyResolver;
-import com.crm.travelcrm.lead.enums.LeadStageGroups;
-import com.crm.travelcrm.lead.repository.LeadRepository;
 import com.crm.travelcrm.permission.enums.Permission;
 import com.crm.travelcrm.permission.service.ScopeResolver;
+import com.crm.travelcrm.workload.WorkloadService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -25,9 +24,9 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -55,12 +54,12 @@ import java.util.UUID;
 public class LeadAssignmentService {
 
     private final UserRepository userRepository;
-    private final LeadRepository leadRepository;
     private final AssignableUserResolver assignableUserResolver;
     private final LeadAssignmentPointerRepository pointerRepository;
     private final LeadAssignmentPointerProvisioner pointerProvisioner;
     private final LeadAssignmentStrategyResolver strategyResolver;
     private final ScopeResolver scopeResolver;
+    private final WorkloadService workloadService;
 
     /** Eligibility gate for the assignable pool: a user must be able to at least VIEW leads. */
     private static final Permission ELIGIBILITY_PERMISSION = Permission.LEAD_READ;
@@ -95,7 +94,7 @@ public class LeadAssignmentService {
         // than works the pipeline, so it is never auto-picked.
         List<User> pool = resolveScopedPool(tenantId, current);
         List<Long> poolIds = sortedIds(pool);
-        Map<Long, Long> counts = activeLeadCounts(tenantId, poolIds);
+        Map<Long, Long> counts = workloadScores(tenantId, poolIds);
         List<Long> candidateIds = recommendationCandidates(pool);
         Long cursor = pointerRepository.findFirstByTenantId(tenantId)
                 .map(LeadAssignmentPointer::getLastRecommendedUserId)
@@ -155,7 +154,7 @@ public class LeadAssignmentService {
         // candidates (but not from being an honoured explicit choice).
         List<User> pool = resolveScopedPool(tenantId, current);
         List<Long> candidateIds = recommendationCandidates(pool);
-        Map<Long, Long> counts = activeLeadCounts(tenantId, candidateIds);
+        Map<Long, Long> counts = workloadScores(tenantId, candidateIds);
 
         // Ensure the cursor row EXISTS in its own short transaction BEFORE we take the pessimistic
         // lock, so a losing first-ever INSERT aborts only that inner txn — never this lead-creation
@@ -200,6 +199,82 @@ public class LeadAssignmentService {
         return new AssignmentOutcome(finalUser, recommendedId, recommendedName, strategy, override);
     }
 
+    // ── Commit: inbound (machine) path — no security context, no requester ──
+
+    /**
+     * Decide an INBOUND lead's owner: lowest workload, round-robin among ties.
+     *
+     * <p><b>Why this cannot reuse {@link #assignForCreate}.</b> That method opens with
+     * {@code currentUser()}, which throws when no {@code User} is in the security context — and on the
+     * ingest path there is none: the caller is a webhook authenticated by an opaque token, not a
+     * person. Every downstream branch there (privileged check, self-assignment, honouring an explicit
+     * choice) is likewise meaningless for a machine. This is the same strategy and the same cursor,
+     * with the human-only decisions removed rather than faked with a synthetic user.
+     *
+     * <p>{@code tenantId} is passed in rather than read from {@code TenantContext}: the ingest gateway
+     * resolves the tenant from the ingest token, and depending on a ThreadLocal here would make the
+     * assignment silently follow whatever context happened to be on the thread.
+     *
+     * <p>Runs in the caller's transaction (the lead-creation one), so the pessimistic lock on the
+     * cursor is held to commit exactly as on the human path.
+     *
+     * @return the chosen owner, or {@link Optional#empty()} when the tenant has NOBODY eligible.
+     *         Empty is a real, reachable state — a tenant can deactivate every agent — and it is
+     *         returned rather than thrown because the caller must quarantine the lead (HTTP 200 +
+     *         notify) instead of failing the webhook. A 4xx/5xx to JustDial means retries and
+     *         eventually a disabled integration; the lead would be lost to protect an invariant that
+     *         quarantine already protects.
+     */
+    @Transactional
+    public Optional<AssignmentOutcome> assignForInbound(Long tenantId) {
+        if (tenantId == null) {
+            throw new IllegalArgumentException("assignForInbound requires an explicit tenantId");
+        }
+
+        // The FULL eligible pool: there is no requesting user, so there is no row-scope to narrow by.
+        // resolveScopedPool exists to stop a TEAM-scoped manager seeing other teams' names in a
+        // dropdown — a privacy concern with no meaning here.
+        List<User> pool = assignableUserResolver.resolve(tenantId, ELIGIBILITY_PERMISSION);
+        List<Long> candidateIds = recommendationCandidates(pool);
+        if (candidateIds.isEmpty()) {
+            log.warn("Inbound lead assignment found NO eligible user for tenant {} — caller must "
+                    + "quarantine the lead rather than drop it.", tenantId);
+            return Optional.empty();
+        }
+
+        Map<Long, Long> scores = workloadScores(tenantId, candidateIds);
+
+        pointerProvisioner.ensureExists(tenantId);
+        LeadAssignmentPointer pointer = pointerRepository.findByTenantId(tenantId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Lead assignment pointer missing after provisioning for tenant " + tenantId));
+
+        Long recommendedId = strategyResolver
+                .resolve(AssignmentStrategyType.LOAD_BASED)
+                .recommend(context(tenantId, null, null,
+                        candidateIds, scores, pointer.getLastRecommendedUserId()))
+                .orElse(null);
+
+        if (recommendedId == null) {
+            // Candidates existed but the strategy declined — defensive; treated as "nobody available".
+            log.warn("Inbound lead assignment: LOAD_BASED returned no pick for tenant {} despite {} "
+                    + "candidate(s).", tenantId, candidateIds.size());
+            return Optional.empty();
+        }
+
+        pointer.setLastRecommendedUserId(recommendedId);
+        pointerRepository.saveAndFlush(pointer);
+
+        User assignee = userRepository.findByIdAndTenantIdAndDeletedAtIsNull(recommendedId, tenantId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Recommended user not found for inbound assignment"));
+
+        // manualOverride=false: no human chose this. The audit reads "LOAD_BASED, not overridden",
+        // which is exactly what happened.
+        return Optional.of(new AssignmentOutcome(assignee, recommendedId, assignee.getName(),
+                AssignmentStrategyType.LOAD_BASED, false));
+    }
+
     // ── helpers ────────────────────────────────────────────────────────────────
 
     private boolean isPrivilegedAssigner(User u) {
@@ -213,7 +288,7 @@ public class LeadAssignmentService {
                 .currentUserId(currentUserId)
                 .requestedAssigneeUserId(requestedAssigneeUserId)
                 .candidateUserIds(candidateIds)
-                .activeLeadCounts(counts)
+                .workloadScores(counts)
                 .lastAssignedUserId(cursor)
                 .build();
     }
@@ -236,20 +311,18 @@ public class LeadAssignmentService {
                 .toList();
     }
 
-    /** Active-lead count per candidate, zero-filled so a user with no active leads is present with 0. */
-    private Map<Long, Long> activeLeadCounts(Long tenantId, List<Long> candidateIds) {
-        Map<Long, Long> counts = new HashMap<>();
-        for (Long id : candidateIds) {
-            counts.put(id, 0L);
-        }
+    /**
+     * Workload score per candidate, zero-filled so an idle user is present with 0.
+     *
+     * <p>Delegates to {@link WorkloadService} rather than counting leads here: the calendar's
+     * workload tab reads the same service, so what a manager sees and what the auto-assignment
+     * balances on cannot drift. This used to count active leads only.
+     */
+    private Map<Long, Long> workloadScores(Long tenantId, List<Long> candidateIds) {
         if (candidateIds.isEmpty()) {
-            return counts;
+            return Map.of();
         }
-        for (Object[] row : leadRepository.countActiveLeadsPerUser(
-                tenantId, candidateIds, LeadStageGroups.ACTIVE_STAGES)) {
-            counts.put((Long) row[0], (Long) row[1]);
-        }
-        return counts;
+        return workloadService.scoresFor(tenantId, candidateIds);
     }
 
     private User findInPool(List<User> pool, Long userId) {

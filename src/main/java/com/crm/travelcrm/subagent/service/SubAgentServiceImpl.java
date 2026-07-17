@@ -51,10 +51,11 @@ public class SubAgentServiceImpl implements SubAgentService {
         Long tenantId = requireTenant();
         String email = req.getEmail().trim().toLowerCase();
 
-        // Email is unique per tenant (uq_user_email_tenant).
-        if (userRepository.existsByEmailAndTenantId(email, tenantId)) {
+        // Email is unique platform-wide (uq_users_email_active) — a partner already onboarded by
+        // another agency cannot be re-onboarded under the same address and needs a distinct one.
+        if (userRepository.existsByEmail(email)) {
             throw new BusinessException(
-                    "A user with email " + email + " already exists in your organization.",
+                    "A user with email " + email + " already exists.",
                     HttpStatus.CONFLICT);
         }
 

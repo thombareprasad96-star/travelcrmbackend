@@ -16,11 +16,15 @@ import com.crm.travelcrm.lead.assignment.service.LeadAssignmentService;
 import com.crm.travelcrm.lead.entity.Lead;
 import com.crm.travelcrm.lead.entity.LeadItinerary;
 import com.crm.travelcrm.lead.enums.LeadStage;
+import com.crm.travelcrm.lead.ingest.IngestPolicy;
+import com.crm.travelcrm.lead.ingest.LeadActor;
 import com.crm.travelcrm.lead.enums.LeadStageGroups;
 import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.common.exception.RestoreAvailableException;
 import com.crm.travelcrm.lead.exception.DuplicateLeadException;
+import com.crm.travelcrm.lead.exception.LeadQuotaExceededException;
+import com.crm.travelcrm.lead.exception.NoEligibleAssigneeException;
 import com.crm.travelcrm.lead.mapper.LeadMapper;
 import com.crm.travelcrm.lead.repository.LeadRepository;
 import com.crm.travelcrm.notification.api.NotifyEvent;
@@ -80,33 +84,57 @@ public class LeadServiceImpl implements LeadService {
     @Override
     @Transactional
     public LeadResponseDto createLead(CreateLeadRequestDto request) {
+        return createLead(request, LeadActor.human(currentUser()), IngestPolicy.INTERACTIVE);
+    }
+
+    @Override
+    @Transactional
+    public LeadResponseDto createLead(CreateLeadRequestDto request, LeadActor actor,
+                                      IngestPolicy policy) {
         Long tenantId = currentTenantId();
         enforceLeadQuota(tenantId);
 
-        log.info("Creating lead for email: {} | tenantId: {}", request.getEmail(), tenantId);
+        log.info("Creating lead for email: {} | tenantId: {} | actor: {}",
+                request.getEmail(), tenantId, actor);
 
         validateNoDuplicates(request, tenantId, null);
         // Active duplicates errored above; a match that lives ONLY in Trash becomes a
         // structured "restore available" response instead of a dead "already exists".
         checkTrashedForRestore(request, tenantId);
 
-        Lead lead = leadMapper.toEntity(request);
+        Lead lead = leadMapper.toEntity(request, actor);
         // tenantId is set here so it's available immediately in this transaction;
         // TenantEntityListener also guards it on @PrePersist as a safety net.
         lead.setTenantId(tenantId);
 
-        // Intelligent assignment (Strategy Pattern): a privileged creator's explicit choice is
-        // honoured while the load-based recommendation is recomputed for the audit; agents/staff/
-        // sub-agents are force-assigned to themselves. Runs inside this transaction so the
-        // round-robin cursor's pessimistic lock is held to commit.
-        AssignmentOutcome outcome = leadAssignmentService.assignForCreate(request.getAssignedUserId());
+        // Intelligent assignment (Strategy Pattern). Runs inside this transaction so the round-robin
+        // cursor's pessimistic lock is held to commit — which is why assignment happens HERE and is
+        // not resolved by the caller and passed in.
+        AssignmentOutcome outcome = switch (policy) {
+            // A privileged creator's explicit choice is honoured while the load-based recommendation
+            // is recomputed for the audit; agents/staff/sub-agents are force-assigned to themselves.
+            case INTERACTIVE -> leadAssignmentService.assignForCreate(request.getAssignedUserId());
+
+            // No security context and no requester, so assignForCreate cannot run — it opens with
+            // currentUser(). request.getAssignedUserId() is deliberately IGNORED: an adapter parses
+            // bytes and must never get to choose a tenant's user.
+            case MACHINE -> leadAssignmentService.assignForInbound(tenantId)
+                    .orElseThrow(() -> new NoEligibleAssigneeException(tenantId));
+        };
         lead.setAssignedUser(outcome.finalUser());
 
         Lead savedLead = leadRepository.save(lead);
         log.info("Lead created | id: {} | tenantId: {} | strategy: {} | override: {}",
                 savedLead.getPublicId(), tenantId, outcome.strategyUsed(), outcome.manualOverride());
+
+        // ORDER IS LOAD-BEARING: audit BEFORE publish. NotifyEventListener is a plain synchronous
+        // @EventListener that clears TenantContext in its finally block, on THIS thread — so
+        // anything after a publish runs with a null context, and TenantFilterAspect fails OPEN on a
+        // null tenant (returns without enabling the filter, no error, no log). Publishing first left
+        // the audit's REQUIRES_NEW write unfiltered; it survived only on the explicit .tenantId()
+        // below. Publish last, and keep it last.
+        recordAssignmentAudit(savedLead, outcome, tenantId, actor);
         publishLeadCreatedNotification(savedLead, tenantId);
-        recordAssignmentAudit(savedLead, outcome, tenantId);
         return leadMapper.toResponse(savedLead);
     }
 
@@ -114,9 +142,14 @@ public class LeadServiceImpl implements LeadService {
      * Best-effort audit of how the lead's owner was decided (createdBy, recommendedUser,
      * finalAssignedUser, strategyUsed, manualOverride, timestamp). Written in its own transaction by
      * {@link LeadAssignmentAuditRecorder} so it can never roll back the creation.
+     *
+     * <p>The actor is passed in rather than read from the security context: this used to call
+     * {@code currentUser()} on the line ABOVE the try, so on a context-less thread it threw and
+     * rolled back the very lead the comment below promises it cannot break. It also made the whole
+     * method unreachable for any non-human caller.
      */
-    private void recordAssignmentAudit(Lead lead, AssignmentOutcome outcome, Long tenantId) {
-        User creator = currentUser();
+    private void recordAssignmentAudit(Lead lead, AssignmentOutcome outcome, Long tenantId,
+                                       LeadActor actor) {
         try {
             // record() runs in its own REQUIRES_NEW transaction (cross-bean call = proxy applies), so
             // swallowing a failure here leaves this lead-creation transaction intact — an audit
@@ -125,8 +158,11 @@ public class LeadServiceImpl implements LeadService {
                     .tenantId(tenantId)
                     .leadId(lead.getId())
                     .leadPublicId(lead.getPublicId())
-                    .createdByUserId(creator.getId())
-                    .createdByName(creator.getName())
+                    // Null for INTEGRATION / SYSTEM — there is no user behind them. displayName
+                    // carries the connection label or the system reason instead, so the trail still
+                    // reads "who did this" for a human six months later.
+                    .createdByUserId(actor.userId())
+                    .createdByName(actor.displayName())
                     .recommendedUserId(outcome.recommendedUserId())
                     .recommendedUserName(outcome.recommendedUserName())
                     .finalAssignedUserId(outcome.finalUser().getId())
@@ -231,9 +267,15 @@ public class LeadServiceImpl implements LeadService {
         // Basic details
         lead.setCustomerName(request.getCustomerName());
         // Lowercase to match create + duplicate checks — otherwise an updated
-        // email can dodge the tenant-scoped uniqueness validation
-        lead.setEmail(request.getEmail().toLowerCase());
+        // email can dodge the tenant-scoped uniqueness validation.
+        // Null-guarded since leads.email became nullable; the DTO's @NotBlank only covers callers
+        // that go through @Valid, which the machine path does not.
+        lead.setEmail(request.getEmail() == null ? null : request.getEmail().toLowerCase());
         lead.setPhone(request.getPhone());
+        // The shadow canonical key must move with the raw phone or it silently rots: an edited phone
+        // would keep matching on the OLD canonical value, and the append-on-repeat path would attach
+        // a new enquiry to the wrong lead. Same derivation as create — LeadMapper owns it.
+        lead.setPhoneNormalized(leadMapper.canonicalPhone(request.getPhone()));
         lead.setLeadType(request.getLeadType());
         lead.setLeadSource(request.getLeadSource());
         // Editing a lead must not smuggle it into/out of CONVERTED behind the booking's back.
@@ -507,10 +549,13 @@ public class LeadServiceImpl implements LeadService {
         Integer maxLeads = tenant != null ? tenant.getMaxLeads() : null;
         if (maxLeads != null && maxLeads > 0
                 && leadRepository.countByTenantIdAndDeletedAtIsNull(tenantId) >= maxLeads) {
-            throw new BusinessException(
+            // A dedicated subtype of BusinessException(FORBIDDEN): the human path is unchanged (same
+            // 403, same message), but the inbound path can now tell "plan full" apart from every other
+            // business failure without catching a supertype and swallowing unrelated bugs. Inbound
+            // quarantines instead of 403-ing — see LeadQuotaExceededException.
+            throw new LeadQuotaExceededException(
                     "Your plan allows up to " + maxLeads + " leads. "
-                            + "Upgrade your plan or remove leads to add more.",
-                    HttpStatus.FORBIDDEN);
+                            + "Upgrade your plan or remove leads to add more.");
         }
     }
 

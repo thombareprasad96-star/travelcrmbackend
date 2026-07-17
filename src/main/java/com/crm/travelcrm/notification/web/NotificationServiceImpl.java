@@ -1,6 +1,7 @@
 package com.crm.travelcrm.notification.web;
 
 import com.crm.travelcrm.auth.api.CurrentUserProvider;
+import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.notification.domain.entity.Notification;
 import com.crm.travelcrm.notification.domain.enums.NotificationStatus;
@@ -12,6 +13,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -105,15 +107,19 @@ public class NotificationServiceImpl implements NotificationService {
     // ── Private helpers ───────────────────────────────────────────────────────
 
     /**
-     * Internal Long id of the authenticated tenant user. SuperAdmin is a separate
-     * entity type and does not receive in-app notifications, so a null actor is an error here.
+     * Internal Long id of the authenticated tenant user. A SuperAdmin is a separate entity type
+     * with its own feed under {@code /api/super-admin/notifications}, so it has no place here.
+     *
+     * <p>This is a 403, not an {@code IllegalStateException}: a platform session reaching this
+     * method is a routing mistake the caller can act on, not an impossible state. The old
+     * {@code IllegalStateException} had no handler and fell through to the catch-all as a 500.
      */
     private Long currentUserId() {
         Long userId = currentUserProvider.currentUserIdOrNull();
         if (userId == null) {
-            throw new IllegalStateException(
-                    "No authenticated User in SecurityContext. " +
-                    "Notifications are only available to tenant users, not SuperAdmin.");
+            throw new BusinessException(
+                    "Notifications are not available for platform sessions.",
+                    HttpStatus.FORBIDDEN);
         }
         return userId;
     }

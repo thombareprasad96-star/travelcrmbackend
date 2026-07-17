@@ -14,9 +14,11 @@ import java.util.Collection;
 @Entity
 @Table(
     name = "users",
-    uniqueConstraints = @UniqueConstraint(
-            name = "uq_user_email_tenant",
-            columnNames = {"email", "tenant_id"}),
+    // No uniqueConstraints here by design. Email is unique PLATFORM-WIDE, but only among live rows:
+    // a soft-deleted user keeps its address, and an absolute UNIQUE(email) would let a deleted
+    // account squat on it forever. That needs a partial index (WHERE deleted_at IS NULL), which JPA
+    // cannot express — so uq_users_email_active is declared in db/indexes.sql, which runs after
+    // Hibernate DDL on every startup. Mirrors the uq_leads_*_tenant_open treatment.
     indexes = {
         @Index(name = "idx_user_email",  columnList = "email"),
         @Index(name = "idx_user_tenant", columnList = "tenant_id"),

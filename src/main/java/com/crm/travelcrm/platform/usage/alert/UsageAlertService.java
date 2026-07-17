@@ -7,6 +7,8 @@ import com.crm.travelcrm.notification.api.NotifyEvent;
 import com.crm.travelcrm.notification.domain.enums.DeliveryChannel;
 import com.crm.travelcrm.platform.audit.PlatformAuditRecorder;
 import com.crm.travelcrm.platform.audit.entity.PlatformAuditAction;
+import com.crm.travelcrm.platform.notification.api.PlatformNotificationType;
+import com.crm.travelcrm.platform.notification.api.PlatformNotifyEvent;
 import com.crm.travelcrm.platform.usage.storage.TenantStorageAssetRepository;
 import com.crm.travelcrm.portal.document.repository.TravelerDocumentRepository;
 import com.crm.travelcrm.tenent.entity.Tenant;
@@ -27,8 +29,9 @@ import java.util.Set;
  * and is {@code @Transactional} so the Hibernate tenant filter is engaged for the tenant-scoped count
  * queries. For each metric (users / bookings-this-month / storage) it warns the tenant's
  * admins/managers via a {@link NotifyEvent} as usage approaches or exceeds the limit; over-limit
- * crossings are also recorded on the platform audit log (the SuperAdmin has no in-app feed). The
- * saved {@link UsageAlertMarker} is both the idempotency guard and the alert history.
+ * crossings additionally raise a {@link PlatformNotifyEvent} to the SuperAdmin console and are
+ * recorded on the platform audit log. The saved {@link UsageAlertMarker} is both the idempotency
+ * guard and the alert history.
  */
 @Service
 @Slf4j
@@ -132,6 +135,18 @@ public class UsageAlertService {
             platformAuditRecorder.safeRecord(PlatformAuditAction.USAGE_LIMIT_EXCEEDED, true,
                     tenantId, tenant.getOrganizationCode(), "TENANT", tenant.getPublicId(),
                     capitalize(label) + " over limit: " + usedStr + " / " + limitStr);
+
+            eventPublisher.publishEvent(PlatformNotifyEvent.builder()
+                    .type(PlatformNotificationType.USAGE_LIMIT_EXCEEDED)
+                    .title("Plan limit exceeded — " + label)
+                    .message(tenant.getOrganizationName() + " is over its plan limit for " + label
+                            + ": " + usedStr + " of " + limitStr + " (" + pct + "%)")
+                    .referenceType(PlatformNotificationType.REF_TENANT)
+                    .referencePublicId(tenant.getPublicId())
+                    .tenantId(tenantId)
+                    .tenantName(tenant.getOrganizationName())
+                    .tenantPublicId(tenant.getPublicId())
+                    .build());
         }
 
         log.info("[USAGE-ALERT] tenant={} metric={} level={} used={} limit={}",

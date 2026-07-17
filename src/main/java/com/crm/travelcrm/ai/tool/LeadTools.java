@@ -12,8 +12,15 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Read-only lead tools. Pure delegation to {@link LeadService}, which already enforces tenant
- * isolation AND the caller's row-level scope (own/team/all). No new queries; publicId only.
+ * Read-only lead tools. Delegates to {@link LeadService}, which enforces tenant isolation AND the
+ * caller's row-level scope (own/team/all). No new queries; publicId only.
+ *
+ * <p><b>The row-level scope is not a substitute for the access gate.</b> {@code ScopeResolver}
+ * falls back to a <i>role default</i> when a user has no saved {@code LEAD_READ} entry — and that
+ * default is {@code Scope.ALL} for ACCOUNTANT. So delegation alone would let a user who was never
+ * granted {@code LEAD_READ} (403 from {@code GET /api/leads}) read leads through the chatbot
+ * instead. {@code authorizer.require} restores the same gate {@code LeadController}'s
+ * {@code @PreAuthorize("hasAuthority('LEAD_READ')")} applies, so both entry points agree.
  */
 @Component
 @RequiredArgsConstructor
@@ -21,6 +28,7 @@ public class LeadTools {
 
     private final LeadService leadService;
     private final AiAuditService audit;
+    private final AiToolAuthorizer authorizer;
 
     public record LeadSummary(String publicId, String customerName, String phone, String email,
                               String leadStage, String leadType, String assignedTo,
@@ -41,9 +49,12 @@ public class LeadTools {
             @ToolParam(required = false, description = "Page size, max 50 (default 20)") Integer size) {
         return audit.recordToolCall("findLeads", Map.of(
                         "page", ToolFmt.pageOrDefault(page), "size", ToolFmt.sizeOrDefault(size)),
-                () -> leadService.getAllLeads(ToolFmt.pageOrDefault(page), ToolFmt.sizeOrDefault(size),
-                                "createdAt", "desc")
-                        .getContent().stream().map(LeadTools::toSummary).toList());
+                () -> {
+                    authorizer.require("LEAD_READ");
+                    return leadService.getAllLeads(ToolFmt.pageOrDefault(page), ToolFmt.sizeOrDefault(size),
+                                    "createdAt", "desc")
+                            .getContent().stream().map(LeadTools::toSummary).toList();
+                });
     }
 
     @Tool(description = "Find a single lead by a free-text keyword (name, phone or email). "
@@ -52,6 +63,7 @@ public class LeadTools {
             @ToolParam(description = "Search keyword: customer name, phone or email") String keyword) {
         return audit.recordToolCall("searchLeadByKeyword", Map.of("keyword", ToolFmt.str(keyword)),
                 () -> {
+                    authorizer.require("LEAD_READ");
                     LeadResponseDto d = leadService.searchLead(keyword);
                     return d == null ? null : toSummary(d);
                 });
@@ -62,7 +74,10 @@ public class LeadTools {
     public LeadDetail getLeadDetails(
             @ToolParam(description = "The lead's publicId (UUID)") String leadPublicId) {
         return audit.recordToolCall("getLeadDetails", Map.of("leadPublicId", ToolFmt.str(leadPublicId)),
-                () -> toDetail(leadService.getLeadById(ToolFmt.uuid(leadPublicId))));
+                () -> {
+                    authorizer.require("LEAD_READ");
+                    return toDetail(leadService.getLeadById(ToolFmt.uuid(leadPublicId)));
+                });
     }
 
     private static LeadSummary toSummary(LeadResponseDto d) {

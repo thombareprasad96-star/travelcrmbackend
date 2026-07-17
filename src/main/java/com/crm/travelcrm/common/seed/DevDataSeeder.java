@@ -117,6 +117,8 @@ public class DevDataSeeder implements CommandLineRunner {
 
     private static final int N = 5;
     private static final String PWD = "Password@123";
+    /** The one tenant this seeder owns. Everything it writes is scoped to this code. */
+    private static final String DEMO_CODE = "DEMO";
 
 
     private final PasswordEncoder passwordEncoder;
@@ -158,8 +160,9 @@ public class DevDataSeeder implements CommandLineRunner {
         log.info("[DevDataSeeder] starting (app.seed.enabled=true)…");
 
         seedSuperAdmin();
-        seedPlans();
-        backfillPlanEntitlements();
+        // Plans are seeded by PlanCatalogueInitializer (@Order(0), unconditional) — they are
+        // platform data every deployment needs, not demo data. They used to be seeded here,
+        // which left the plans table permanently empty in prod, where this seeder is hard-off.
         Tenant tenant = getOrCreateTenant();
 
         // Everything below is tenant-scoped — stamp tenant_id via TenantContext.
@@ -209,69 +212,18 @@ public class DevDataSeeder implements CommandLineRunner {
         log.info("[DevDataSeeder] seeded SuperAdmin (superadmin@demo.crm / {})", PWD);
     }
 
-    private void seedPlans() {
-        if (planRepository.count() > 0) return;
-        planRepository.save(Plan.builder()
-                .code(TenantPlan.STARTER).displayName("Basic")
-                .monthlyPrice(new BigDecimal("2999")).currency("INR")
-                .maxUsers(5).maxLeads(500)
-                .maxBookingsPerMonth(50).maxStorageMb(512).maxSubAgents(0)
-                .modules(new HashSet<>(Set.of("LEADS", "BOOKINGS", "QUOTATIONS", "CUSTOMERS", "MASTERS")))
-                .active(true).build());
-        planRepository.save(Plan.builder()
-                .code(TenantPlan.PRO).displayName("Pro")
-                .monthlyPrice(new BigDecimal("7999")).currency("INR")
-                .maxUsers(20).maxLeads(5000)
-                .maxBookingsPerMonth(500).maxStorageMb(5120).maxSubAgents(5)
-                .modules(new HashSet<>(Set.of("LEADS", "BOOKINGS", "QUOTATIONS", "CUSTOMERS", "MASTERS",
-                        "VENDORS", "REPORTS", "FLEET", "WHATSAPP", "SUBAGENT")))
-                .active(true).build());
-        planRepository.save(Plan.builder()
-                .code(TenantPlan.ENTERPRISE).displayName("Enterprise")
-                .monthlyPrice(new BigDecimal("19999")).currency("INR")
-                .maxUsers(null).maxLeads(null)
-                .maxBookingsPerMonth(null).maxStorageMb(null).maxSubAgents(50)
-                .modules(new HashSet<>(Set.of("LEADS", "BOOKINGS", "QUOTATIONS", "CUSTOMERS", "MASTERS",
-                        "VENDORS", "REPORTS", "FLEET", "WHATSAPP", "DISHA_AI", "PORTAL", "SUBAGENT")))
-                .active(true).build());
-        log.info("[DevDataSeeder] seeded 3 plans (Basic/Pro/Enterprise)");
-    }
+    // seedPlans(), backfillPlanEntitlements() and ensureSubAgentEntitlement() moved to
+    // platform/subscription/config/PlanCatalogueInitializer — see the class javadoc there.
 
-    /**
-     * Backfill for plans seeded before a capability was introduced. {@link #seedPlans()} writes only
-     * when the table is empty, so a DB seeded before the SUBAGENT module existed never received it —
-     * which hides the module from the SuperAdmin Feature-Flag catalogue ({@code availableModules()} is
-     * the union of persisted plan modules) and from the plan editor, and leaves {@code max_sub_agents}
-     * NULL. This runs on every startup: it is additive (never removes a module the SuperAdmin has
-     * configured) and idempotent (a no-op once the keys are present).
-     */
-    private void backfillPlanEntitlements() {
-        ensureSubAgentEntitlement(TenantPlan.PRO, 5);
-        ensureSubAgentEntitlement(TenantPlan.ENTERPRISE, 50);
-    }
-
-    /** Ensure {@code plan} grants the SUBAGENT module, and give it a seat cap only if none was ever set. */
-    private void ensureSubAgentEntitlement(TenantPlan code, int defaultSeats) {
-        planRepository.findByCode(code).ifPresent(plan -> {
-            boolean changed = plan.getModules().add("SUBAGENT");   // Set.add == true only when newly added
-            // A plan that unlocks the module but caps seats at 0 can't actually create partners. Seed the
-            // default only when the SuperAdmin has never set a cap (NULL); a deliberate 0 is left intact.
-            if (plan.getMaxSubAgents() == null) {
-                plan.setMaxSubAgents(defaultSeats);
-                changed = true;
-            }
-            if (changed) {
-                planRepository.save(plan);
-                log.info("[DevDataSeeder] backfilled SUBAGENT entitlement on plan {}", code);
-            }
-        });
-    }
-
+    // Resolve the demo tenant by its code, never by "whichever row comes back first". An unordered
+    // findAll().findFirst() would attach the seeder to a real customer's tenant as soon as one exists
+    // (Postgres returns heap order, which any UPDATE reshuffles), injecting demo staff — with a
+    // hard-coded password — into an organization the seeder does not own.
     private Tenant getOrCreateTenant() {
-        return tenantRepository.findAll().stream().findFirst().orElseGet(() ->
+        return tenantRepository.findByOrganizationCode(DEMO_CODE).orElseGet(() ->
                 tenantRepository.save(Tenant.builder()
                         .organizationName("Demo Travels")
-                        .organizationCode("DEMO")
+                        .organizationCode(DEMO_CODE)
                         .email("org@demo.crm")
                         .phone("+91 90000 00000")
                         .address("1 Demo Street, Demo City")
@@ -291,7 +243,9 @@ public class DevDataSeeder implements CommandLineRunner {
         List<User> out = new ArrayList<>();
         for (int i = 0; i < N; i++) {
             String email = roles[i].name().toLowerCase() + "@demo.crm";
-            if (userRepository.findByEmailAndTenantId(email, tenantId).isPresent()) continue;
+            // Global check — email is unique platform-wide (uq_users_email_active). A tenant-scoped
+            // guard would pass for a tenant that has not seen the address and hit the DB constraint.
+            if (userRepository.existsByEmail(email)) continue;
             out.add(userRepository.save(User.builder()
                     .name(names[i])
                     .email(email)

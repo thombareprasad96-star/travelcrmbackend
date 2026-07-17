@@ -16,6 +16,8 @@ import com.crm.travelcrm.platform.billing.entity.BillingRecord;
 import com.crm.travelcrm.platform.billing.enums.BillingStatus;
 import com.crm.travelcrm.platform.billing.repository.BillingRecordRepository;
 import com.crm.travelcrm.platform.billing.service.BillingService;
+import com.crm.travelcrm.platform.notification.api.PlatformNotificationType;
+import com.crm.travelcrm.platform.notification.api.PlatformNotifyEvent;
 import com.crm.travelcrm.platform.payment.entity.PaymentTransaction;
 import com.crm.travelcrm.platform.payment.enums.PaymentTransactionStatus;
 import com.crm.travelcrm.platform.payment.repository.PaymentTransactionRepository;
@@ -195,6 +197,23 @@ public class UpgradeRequestServiceImpl implements UpgradeRequestService {
         platformAuditRecorder.safeRecord(PlatformAuditAction.UPGRADE_REQUEST_CREATE, true,
                 tenant.getId(), tenant.getOrganizationCode(), "UPGRADE_REQUEST", saved.getPublicId(),
                 "Upgrade request " + tenant.getPlan() + " → " + targetPlan + " (" + paymentMode + ") by " + requestedByEmail);
+
+        // Offline is the blocking case: the money is already in and only approval activates the plan.
+        String paymentDetail = paymentMode == PaymentMode.OFFLINE
+                ? "Paid offline via " + offlineMode + " (ref " + offlineReference + ") — verify, then approve."
+                : "Online payment pending; approve once it is confirmed.";
+        eventPublisher.publishEvent(PlatformNotifyEvent.builder()
+                .type(PlatformNotificationType.UPGRADE_REQUEST_CREATED)
+                .title("Upgrade request awaiting approval")
+                .message(tenant.getOrganizationName() + " requested " + planName(tenant.getPlan()) + " → "
+                        + planName(targetPlan) + " for " + currency + " " + amount + ". " + paymentDetail
+                        + " Requested by " + requestedByEmail + ".")
+                .referenceType(PlatformNotificationType.REF_UPGRADE_REQUEST)
+                .referencePublicId(saved.getPublicId())
+                .tenantId(tenant.getId())
+                .tenantName(tenant.getOrganizationName())
+                .tenantPublicId(tenant.getPublicId())
+                .build());
 
         return toResponse(saved);
     }

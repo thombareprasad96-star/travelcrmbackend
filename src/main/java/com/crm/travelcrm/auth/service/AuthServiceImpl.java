@@ -137,10 +137,18 @@ public class AuthServiceImpl implements AuthService {
         logger.trace("Entered userLogin()");
         logger.debug("Login request for email: {}", request.getEmail());
 
+        // Email alone identifies exactly one account platform-wide (uq_users_email_active), so this
+        // needs no tenant discriminator — the tenant is a RESULT of the lookup, not an input to it.
+        // Under the old per-tenant constraint this same line matched two rows and threw
+        // NonUniqueResultException: an unauthenticated 500, fired before the password check.
+        //
+        // Normalized to match how every writer stores it; the index is case-sensitive and all
+        // stored addresses are lowercase, so an un-normalized lookup would just miss.
         // Soft-deleted users are never found — they cannot authenticate.
-        User user = userRepository.findByEmailAndDeletedAtIsNull(request.getEmail())
+        String email = request.getEmail() == null ? "" : request.getEmail().trim().toLowerCase();
+        User user = userRepository.findByEmailAndDeletedAtIsNull(email)
                 .orElseThrow(() -> {
-                    logger.warn("User not found: {}", request.getEmail());
+                    logger.warn("User not found: {}", email);
                     return new BadCredentialsException("Invalid email or password");
                 });
 
@@ -201,9 +209,13 @@ public class AuthServiceImpl implements AuthService {
 
         logger.trace("Entered changePassword()");
 
-        // Re-load a managed, non-deleted entity from the authenticated principal's email
-        // (the principal can be detached, and soft-deleted users must never proceed).
-        User user = userRepository.findByEmailAndDeletedAtIsNull(currentUser.getEmail())
+        // Re-load a managed, non-deleted entity (the principal can be detached, and soft-deleted
+        // users must never proceed). Keyed on the principal's id + tenantId, NOT its email: the
+        // principal already carries the exact identity, so re-resolving by a weaker key can only
+        // lose information. Writing a password hash is the highest-consequence operation here — an
+        // email-keyed lookup that ever resolved to the wrong row would be an account takeover.
+        User user = userRepository
+                .findByIdAndTenantIdAndDeletedAtIsNull(currentUser.getId(), currentUser.getTenantId())
                 .orElseThrow(() -> {
                     logger.warn("Change-password requested for unknown user: {}", currentUser.getEmail());
                     return new BadCredentialsException("Invalid email or password");

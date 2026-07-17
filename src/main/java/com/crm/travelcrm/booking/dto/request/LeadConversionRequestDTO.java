@@ -30,6 +30,14 @@ public class LeadConversionRequestDTO {
      */
     private UUID quotationPublicId;
 
+    /**
+     * publicId of the staff member who will service this booking. Optional — when omitted the
+     * server assigns the LEAD's assignee (the person who nurtured the deal keeps it, rather than
+     * whoever clicked Convert). The UI prefills the dropdown with that same default and sends it
+     * back; sending anything else is an explicit, validated override.
+     */
+    private UUID assignedUserId;
+
     @NotBlank(message = "Customer name is required")
     @Size(max = 255, message = "Customer name too long")
     private String customerName;

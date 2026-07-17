@@ -76,6 +76,14 @@ public class TenantServiceImpl implements TenantService {
             throw new DuplicateTenantException("Email already registered: " + request.getEmail());
         }
 
+        // The admin's LOGIN email — a different thing from the organization's contact email checked
+        // above, and against a different table. Staff email is unique platform-wide, so this must be
+        // a global check: without it this flow mints a duplicate that breaks login for both accounts.
+        String adminEmail = request.getAdminEmail().trim().toLowerCase();
+        if (userRepository.existsByEmail(adminEmail)) {
+            throw new DuplicateTenantException("Admin email already registered: " + adminEmail);
+        }
+
         TenantPlan plan = request.getPlan() != null ? request.getPlan() : TenantPlan.STARTER;
         TenantStatus status = request.getStatus() != null ? request.getStatus() : TenantStatus.TRIAL;
         int maxUsers = request.getMaxUsers() != null ? request.getMaxUsers() : 5;
@@ -94,13 +102,20 @@ public class TenantServiceImpl implements TenantService {
                 .build();
 
         // Seed plan entitlements (module access + lead/booking/storage caps) from the plan catalogue.
-        planRepository.findByCode(plan).ifPresent(p -> {
-            tenant.setMaxLeads(p.getMaxLeads());
-            tenant.setMaxBookingsPerMonth(p.getMaxBookingsPerMonth());
-            tenant.setMaxStorageMb(p.getMaxStorageMb());
-            tenant.setMaxSubAgents(p.getMaxSubAgents());
-            tenant.setEnabledModules(new HashSet<>(p.getModules()));
-        });
+        // orElseThrow, not ifPresent: a missing plan row used to no-op silently, saving a tenant with
+        // no modules and null caps. That tenant could never be repaired — ModuleAccessFilter 403s every
+        // CRM endpoint, and the console's updateModules whitelists against availableModules(), which is
+        // the union of persisted plan modules and therefore also empty. It presented as a broken
+        // permission system rather than an empty catalogue. Fail here instead, where the cause is legible.
+        Plan planRow = planRepository.findByCode(plan).orElseThrow(() -> new IllegalStateException(
+                "Plan '" + plan + "' is not in the plan catalogue — cannot create tenant '"
+                + request.getOrganizationCode() + "'. The plans table is seeded on startup by "
+                + "PlanCatalogueInitializer; an empty catalogue means that runner did not complete."));
+        tenant.setMaxLeads(planRow.getMaxLeads());
+        tenant.setMaxBookingsPerMonth(planRow.getMaxBookingsPerMonth());
+        tenant.setMaxStorageMb(planRow.getMaxStorageMb());
+        tenant.setMaxSubAgents(planRow.getMaxSubAgents());
+        tenant.setEnabledModules(new HashSet<>(planRow.getModules()));
 
         Tenant saved = tenantRepository.save(tenant);
         log.info("Tenant saved with id: {}", saved.getId());
@@ -108,7 +123,7 @@ public class TenantServiceImpl implements TenantService {
         // First TENANT_ADMIN for this tenant.
         User adminUser = User.builder()
                 .name(request.getAdminUsername())
-                .email(request.getAdminEmail())
+                .email(adminEmail)
                 .password(passwordEncoder.encode(request.getAdminPassword()))
                 .role(Role.TENANT_ADMIN)
                 .tenantId(saved.getId())

@@ -3,6 +3,7 @@ package com.crm.travelcrm.lead.entity;
 import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.common.entity.BaseEntity;
 import com.crm.travelcrm.common.entity.BaseTenantEntity;
+import com.crm.travelcrm.lead.enums.LeadOrigin;
 import com.crm.travelcrm.lead.enums.LeadSource;
 import com.crm.travelcrm.lead.enums.LeadStage;
 import com.crm.travelcrm.lead.enums.LeadType;
@@ -47,12 +48,51 @@ public class Lead extends BaseTenantEntity {
     @Column(name = "phone", nullable = false, length = 20)
     private String phone;
 
-    @Column(name = "email", nullable = false, length = 150)
+    /**
+     * E.164-canonical form of {@link #phone}, derived on write. A SHADOW column, not a replacement:
+     * {@code PhoneNormalizer} is deliberately trim-only so it cannot break matches against existing
+     * rows, and rewriting the stored phone in place would do exactly that.
+     *
+     * <p>This exists because duplicate detection compares the RAW phone, so {@code +919812345678},
+     * {@code 919812345678} and {@code 09812345678} are three different people to it. Inbound
+     * channels deliver E.164; without a canonical column to match on, the append-on-repeat
+     * behaviour never fires and every repeat caller becomes a new lead.
+     */
+    @Column(name = "phone_normalized", length = 20)
+    private String phoneNormalized;
+
+    /**
+     * Nullable since an inbound enquiry (an IVR call, most obviously) has a phone and nothing else.
+     * The NOT NULL drop is a hand-written {@code db/indexes.sql} block — {@code ddl-auto=update}
+     * will not relax an existing NOT NULL. Safe against {@code uq_leads_email_tenant_open}: Postgres
+     * treats NULLs as distinct in a unique index, so many email-less leads coexist.
+     */
+    @Column(name = "email", length = 150)
     private String email;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "lead_source", nullable = false, length = 50)
     private LeadSource leadSource;
+
+    /**
+     * How this lead got here. Nullable in the entity ON PURPOSE — {@code ddl-auto=update} adds the
+     * column as NULL on every existing row, and a {@code nullable = false} here would make Hibernate
+     * try to add a NOT NULL to a column full of nulls and fail. {@code db/indexes.sql} backfills
+     * MANUAL first; do not "correct" this to non-nullable without checking that block.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "origin", length = 20)
+    @Builder.Default
+    private LeadOrigin origin = LeadOrigin.MANUAL;
+
+    /**
+     * Logical FK to {@code lead_source_integrations.id} — which connection delivered this lead.
+     * Null for MANUAL and for SYSTEM (the sub-agent portal and repeat-customer automation are
+     * machine-made but have no integration row), so <b>a null here does NOT mean "a human made
+     * it"</b> — read {@link #origin} for that.
+     */
+    @Column(name = "source_integration_id")
+    private Long sourceIntegrationId;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "lead_type", nullable = false, length = 50)

@@ -78,6 +78,26 @@ public interface LeadRepository extends JpaRepository<Lead, Long> {
     boolean existsByEmailAndTenantIdAndDeletedAtIsNullAndLeadStageNotIn(
             String email, Long tenantId, Collection<LeadStage> excludedStages);
 
+    /**
+     * The append-on-repeat target (owner decision 1): the tenant's most recent OPEN lead for a
+     * canonical phone.
+     *
+     * <p><b>Reads {@code phoneNormalized}, not the raw phone — and only the MACHINE path may.</b>
+     * Inbound channels deliver bare E.164 while human-typed rows carry separators, so matching on the
+     * raw phone would match nothing and every repeat caller would silently become a duplicate lead.
+     * The human path deliberately still compares raw: two pre-existing open leads that canonicalise
+     * identically are legal today, and moving the human dedup onto this column would make BOTH of them
+     * permanently un-editable. The machine path has no such legacy — it has only ever written the
+     * canonical column.
+     *
+     * <p>Ordered newest-first and takes the first: the partial unique index is not yet on the
+     * canonical column, so more than one match is possible in principle. Appending to the most recent
+     * open lead is the behaviour a human would expect.
+     */
+    @EntityGraph(attributePaths = "assignedUser")
+    Optional<Lead> findFirstByPhoneNormalizedAndTenantIdAndDeletedAtIsNullAndLeadStageNotInOrderByCreatedAtDesc(
+            String phoneNormalized, Long tenantId, Collection<LeadStage> excludedStages);
+
     boolean existsByPhoneAndTenantIdAndDeletedAtIsNullAndLeadStageNotIn(
             String phone, Long tenantId, Collection<LeadStage> excludedStages);
 
@@ -138,11 +158,16 @@ public interface LeadRepository extends JpaRepository<Lead, Long> {
      * Per-user ACTIVE-lead count for the team-workload view (the Task workload). One tenant-scoped
      * GROUP BY (no N+1); an INNER JOIN so ONLY users that currently own ≥1 active lead are returned —
      * a caller merges these into its per-user list (adding lead-only users) and leaves everyone else
-     * at zero. Each row is {@code [userPublicId (UUID), userName (String), activeLeadCount (Long)]}.
+     * at zero. Each row is
+     * {@code [userId (Long), userPublicId (UUID), userName (String), activeLeadCount (Long)]}.
      * Pass {@code activeStages = LeadStageGroups.ACTIVE_STAGES}.
+     *
+     * <p>The internal {@code id} is selected alongside the publicId so the caller can key the
+     * <em>other</em> per-user workload queries (which take internal ids) for a user who owns leads but
+     * has no tasks. It never leaves the service — the DTO exposes the publicId.
      */
     @Query("""
-            SELECT u.publicId, u.name, COUNT(l)
+            SELECT u.id, u.publicId, u.name, COUNT(l)
             FROM User u
             JOIN Lead l
                    ON l.assignedUser = u
@@ -150,7 +175,7 @@ public interface LeadRepository extends JpaRepository<Lead, Long> {
                   AND l.leadStage IN :activeStages
             WHERE u.tenantId = :tenantId
               AND u.deletedAt IS NULL
-            GROUP BY u.publicId, u.name
+            GROUP BY u.id, u.publicId, u.name
             """)
     List<Object[]> findActiveLeadWorkloadPerUser(@Param("tenantId") Long tenantId,
                                                  @Param("activeStages") Collection<LeadStage> activeStages);

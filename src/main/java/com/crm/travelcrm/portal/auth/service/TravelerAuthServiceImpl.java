@@ -32,9 +32,17 @@ import java.util.Optional;
  *
  * <p><b>Tenant flow.</b> The first lookup deliberately resolves the {@code Customer} cross-tenant
  * from the identifier (no tenant known yet → tenant filter inactive). Its tenant is then set on
- * {@code TenantContext} so the account write is stamped/scoped; it is NOT cleared here — the portal
- * filter's {@code finally} clears it at request end (same contract as the staff path), so the
- * commit-time entity listener still sees the right tenant.</p>
+ * {@code TenantContext} so the account write is stamped/scoped; it is NOT cleared here, so the
+ * commit-time entity listener still sees the right tenant. {@code ContextCleanupFilter} clears it
+ * at request end.
+ *
+ * <p><b>The cross-tenant first lookup only works if the thread arrives clean.</b> These endpoints
+ * are {@code @Transactional}, so {@code TenantFilterAspect} enables {@code tenantFilter} from
+ * whatever {@code TenantContext} holds <i>on method entry</i> — before {@code resolveCustomer}
+ * runs. A tenant left on the pooled thread by a previous request would therefore silently narrow
+ * that deliberately un-scoped lookup to the wrong tenant, and the traveler would get no OTP.
+ * That is why cleanup must be unconditional and must not depend on a {@code Bearer} header these
+ * pre-auth endpoints never send.</p>
  */
 @Service
 @Slf4j
@@ -64,7 +72,9 @@ public class TravelerAuthServiceImpl implements TravelerAuthService {
             log.info("[PORTAL] OTP request for unknown identifier — silently ignored");
             return;   // no leak: the controller responds 200 regardless
         }
-        TenantContext.setTenantId(customer.getTenantId());   // cleared by the portal filter's finally
+        // Cleared by ContextCleanupFilter (NOT the portal filter — this endpoint is pre-auth and
+        // carries no Bearer header, so TravelerJwtAuthFilter early-returns before its finally).
+        TenantContext.setTenantId(customer.getTenantId());
 
         TravelerAccount account = travelerAccountRepository
                 .findByTenantIdAndCustomerIdAndDeletedAtIsNull(customer.getTenantId(), customer.getId())
@@ -88,7 +98,7 @@ public class TravelerAuthServiceImpl implements TravelerAuthService {
     public PortalLoginResponse verifyOtp(String identifier, String otp) {
         String id = normalize(identifier);
         Customer customer = resolveCustomer(id).orElseThrow(this::invalid);
-        TenantContext.setTenantId(customer.getTenantId());
+        TenantContext.setTenantId(customer.getTenantId());   // cleared by ContextCleanupFilter
 
         TravelerAccount account = travelerAccountRepository
                 .findByTenantIdAndCustomerIdAndDeletedAtIsNull(customer.getTenantId(), customer.getId())

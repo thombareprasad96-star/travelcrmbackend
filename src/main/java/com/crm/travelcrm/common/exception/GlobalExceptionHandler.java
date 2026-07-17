@@ -26,6 +26,7 @@ import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.validation.FieldError;
+import org.springframework.web.HttpMediaTypeNotAcceptableException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -312,6 +313,29 @@ public class GlobalExceptionHandler {
         log.warn("Unsupported media type: {}", ex.getMessage());
         return build(ApiError.of(ErrorCode.UNSUPPORTED_MEDIA_TYPE,
                 "That file type isn't supported here."));
+    }
+
+    /**
+     * Content negotiation failed during NORMAL dispatch — {@code RequestMappingInfoHandlerMapping}
+     * throws this when the {@code Accept} header cannot satisfy an endpoint's {@code produces}
+     * (e.g. {@code GET /api/notifications/stream} with {@code Accept: application/json}). Before this
+     * handler existed the catch-all caught it and mislabelled a client error as INTERNAL_ERROR/500.
+     *
+     * <p>The body is deliberately empty: any body we could write is, by definition, unacceptable to
+     * this client. Do not "fix" this by returning an {@link ApiError}.
+     *
+     * <p><b>What this does NOT do.</b> It does not rescue an exception raised while writing another
+     * {@code @ExceptionHandler}'s body into a narrow {@code produces} response — the SSE 500 this
+     * codebase actually hit. {@code ExceptionHandlerExceptionResolver} catches that one itself, logs
+     * {@code "Failure in @ExceptionHandler"}, returns null, and falls through to the ORIGINAL
+     * exception; this advice is never consulted. That is why the bodyless guards in
+     * {@code NotificationController#stream} and {@code PlatformNotificationController#stream} are
+     * mandatory rather than belt-and-braces. Do not delete them on the strength of this handler.
+     */
+    @ExceptionHandler(HttpMediaTypeNotAcceptableException.class)
+    public ResponseEntity<Void> handleMediaTypeNotAcceptable(HttpMediaTypeNotAcceptableException ex) {
+        log.warn("No acceptable representation (traceId={}): {}", TraceId.current(), ex.getMessage());
+        return ResponseEntity.status(HttpStatus.NOT_ACCEPTABLE).build();
     }
 
     /**

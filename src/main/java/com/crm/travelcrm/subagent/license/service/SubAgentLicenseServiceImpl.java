@@ -17,6 +17,8 @@ import com.crm.travelcrm.platform.billing.entity.BillingRecord;
 import com.crm.travelcrm.platform.billing.enums.BillingStatus;
 import com.crm.travelcrm.platform.billing.repository.BillingRecordRepository;
 import com.crm.travelcrm.platform.billing.service.BillingService;
+import com.crm.travelcrm.platform.notification.api.PlatformNotificationType;
+import com.crm.travelcrm.platform.notification.api.PlatformNotifyEvent;
 import com.crm.travelcrm.platform.subscription.upgrade.enums.OfflinePaymentMode;
 import com.crm.travelcrm.platform.subscription.upgrade.enums.PaymentMode;
 import com.crm.travelcrm.subagent.entity.SubAgentProfile;
@@ -160,6 +162,20 @@ public class SubAgentLicenseServiceImpl implements SubAgentLicenseService {
                 tenant.getId(), tenant.getOrganizationCode(), "SUBAGENT_LICENSE", saved.getPublicId(),
                 "Seat-license purchase (" + quote.quantity() + " seat, " + paymentMode + ") for "
                         + subAgentName + " by " + requestedByEmail);
+
+        eventPublisher.publishEvent(PlatformNotifyEvent.builder()
+                .type(PlatformNotificationType.SUBAGENT_LICENSE_REQUEST_CREATED)
+                .title("Seat-license request")
+                .message(tenant.getOrganizationName() + " requested " + quote.quantity() + " sub-agent seat"
+                        + (quote.quantity() == 1 ? "" : "s") + " for " + safe(subAgentName) + " — "
+                        + invoice.getCurrency() + " " + quote.total().stripTrailingZeros().toPlainString()
+                        + " (" + paymentMode + "), by " + requestedByEmail + ". Awaiting approval.")
+                .referenceType(PlatformNotificationType.REF_SUBAGENT_LICENSE)
+                .referencePublicId(saved.getPublicId())
+                .tenantId(tenant.getId())
+                .tenantName(tenant.getOrganizationName())
+                .tenantPublicId(tenant.getPublicId())
+                .build());
 
         log.info("Sub-agent seat-license request opened | tenantId={} subAgent={} amount={} {}",
                 tenantId, subAgentPublicId, invoice.getCurrency(), quote.total());

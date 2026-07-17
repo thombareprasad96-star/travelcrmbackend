@@ -9,6 +9,7 @@ import com.crm.travelcrm.ai.service.ChatSessionService;
 import com.crm.travelcrm.common.dto.ApiResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -28,11 +29,20 @@ import java.util.UUID;
  * Disha chat API. Thin controller — all logic lives in the services. Every endpoint runs as the
  * authenticated tenant user (JWT → SecurityContext + TenantContext), and sessions are owner-scoped,
  * so users only ever touch their own conversations.
+ *
+ * <p><strong>Kill switch.</strong> This is the ONLY HTTP entry point into the Disha/AI module, so
+ * {@code disha.enabled=false} takes the whole feature off the wire — the bean is never created and
+ * {@code /ai/chat/**} 404s. Production currently ships with it OFF: the assistant is not part of this
+ * sprint's release, and shipping a disabled-but-reachable LLM endpoint would still let a tenant burn
+ * the Groq quota (and leak CRM rows into a third-party prompt) the moment a key landed in the env.
+ * The rest of the module (entities, repositories, tool beans) stays wired and harmless — flipping
+ * this flag back to true is the entire re-enable. Defaults to true so local dev is unchanged.
  */
 @RestController
 @RequestMapping("/ai/chat")
 @RequiredArgsConstructor
 @PreAuthorize("isAuthenticated()")
+@ConditionalOnProperty(name = "disha.enabled", havingValue = "true", matchIfMissing = true)
 public class ChatController {
 
     /** Two-minute window for a single answer (covers Groq latency + multi-step tool calls). */

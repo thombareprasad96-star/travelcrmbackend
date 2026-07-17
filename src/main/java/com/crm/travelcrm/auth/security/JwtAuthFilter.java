@@ -1,6 +1,5 @@
 package com.crm.travelcrm.auth.security;
 
-import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.common.context.PlatformActor;
 import com.crm.travelcrm.common.context.PlatformContext;
 import com.crm.travelcrm.common.context.TenantContext;
@@ -26,6 +25,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     private final JwtUtil jwtUtil;
     private final SuperAdminDetailsService superAdminDetailsService;
     private final UserDetailsServiceImpl userDetailsService;
+    private final JwtPrincipalValidator principalValidator;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
@@ -70,11 +70,9 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                         userDetails = userDetailsService.loadUserByUsername(email);
                     }
 
-                    // Reject deactivated principals (User.isEnabled() == isActive;
-                    // SuperAdmin.isEnabled() == enabled). Soft-deleted users are already
-                    // excluded by the loaders, so they surface as "not found" above.
-                    if (!userDetails.isEnabled() || !userDetails.isAccountNonLocked()
-                            || isStaleToken(userDetails, token)) {
+                    // Shared with the header-less SSE entry point (TokenAuthenticatorImpl) so both
+                    // reject the same principals — see JwtPrincipalValidator.
+                    if (!principalValidator.isAcceptable(userDetails, token)) {
                         logger.warn("JWT principal is disabled/locked/stale: " + email);
                         SecurityContextHolder.clearContext();
                     } else {
@@ -107,23 +105,12 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             chain.doFilter(request, response);
 
         } finally {
-            TenantContext.clear();     // ← CRITICAL — always runs, even on exception
+            // Clears eagerly on the authenticated path. NOTE: this finally is NOT reached by the
+            // early returns above (no/!valid Bearer token) — ContextCleanupFilter wraps every
+            // request and is what actually guarantees cleanup on those paths.
+            TenantContext.clear();
             PlatformContext.clear();   // platform (god-mode) marker — same lifecycle
         }
     }
 
-    /**
-     * "Reset + kick": a tenant user's live tokens are invalidated when a SuperAdmin force-reset or
-     * lock bumped {@code User.tokenVersion}. Old tokens carry a lower (or absent → 0) 'tv' claim, so
-     * they stop matching and are rejected here on the very next request. SuperAdmin tokens are not
-     * versioned, so they are never considered stale.
-     */
-    private boolean isStaleToken(UserDetails userDetails, String token) {
-        if (userDetails instanceof User user) {
-            Integer claimTv = jwtUtil.extractTokenVersion(token);
-            int tokenTv = claimTv != null ? claimTv : 0;
-            return tokenTv != user.getTokenVersionOrZero();
-        }
-        return false;
-    }
 }

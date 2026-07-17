@@ -1,5 +1,6 @@
 package com.crm.travelcrm.notification.web;
 
+import com.crm.travelcrm.auth.api.CurrentUserProvider;
 import com.crm.travelcrm.auth.api.TokenAuthenticator;
 import com.crm.travelcrm.common.dto.ApiResponse;
 import com.crm.travelcrm.common.dto.PagedApiResponse;
@@ -43,6 +44,7 @@ public class NotificationController {
 
     private final NotificationService  notificationService;
     private final TokenAuthenticator   tokenAuthenticator;
+    private final CurrentUserProvider  currentUserProvider;
 
     // ── Feed ──────────────────────────────────────────────────────────────────
 
@@ -140,8 +142,21 @@ public class NotificationController {
             return null;
         }
 
+        // A SuperAdmin token authenticates *successfully* above — it is validly signed and its
+        // principal loads — so it walks straight past the 401 door and into a tenant-only feed.
+        // It must be turned away here, bodyless, for the same reason: subscribe() would throw, and
+        // the JSON @ExceptionHandler cannot render into a text/event-stream response. A
+        // BusinessException would NOT help — it serializes to JSON too. Platform sessions have
+        // their own feed at /api/super-admin/notifications/stream.
+        if (currentUserProvider.currentUserIdOrNull() == null) {
+            log.warn("SSE connection rejected: non-tenant principal on the tenant notification stream");
+            response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+            return null;
+        }
+
         return notificationService.subscribe();
-        // Note: TenantContext.clear() is NOT called here — the SSE response is async
-        // and the thread is held open. The registry cleanup callbacks handle lifecycle.
+        // Note: TenantContext.clear() is NOT called here — ContextCleanupFilter clears it when this
+        // (async) request releases the worker thread back to the pool, which is exactly when it
+        // must stop carrying a tenant. Only the connection stays open, not the thread.
     }
 }

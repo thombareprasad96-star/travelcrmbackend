@@ -10,6 +10,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 @Getter
 @Setter
@@ -53,6 +54,14 @@ public class CreateBookingRequestDTO {
 
     // Lead this booking was created from — optional
     private Long leadId;
+
+    /**
+     * publicId of the staff member who will service this booking. Optional — defaults to the
+     * current user (there is no lead to inherit an assignee from on this path). Never the internal
+     * Long id, and never trusted: the service validates it is a live user of this tenant who is
+     * allowed to hold bookings.
+     */
+    private UUID assignedUserId;
 
     private List<String> services = new ArrayList<>();
 

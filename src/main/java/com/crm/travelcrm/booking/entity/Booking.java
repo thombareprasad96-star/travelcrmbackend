@@ -25,7 +25,8 @@ import java.util.List;
                 @Index(name = "idx_booking_customer",    columnList = "customer_id"),
                 @Index(name = "idx_booking_status",      columnList = "tenant_id,status"),
                 @Index(name = "idx_booking_travel_date", columnList = "tenant_id,travel_date"),
-                @Index(name = "idx_booking_deleted",     columnList = "tenant_id,deleted_at")
+                @Index(name = "idx_booking_deleted",     columnList = "tenant_id,deleted_at"),
+                @Index(name = "idx_booking_assigned_user", columnList = "tenant_id,assigned_user_id")
         }
 )
 @Getter
@@ -77,6 +78,20 @@ public class Booking extends BaseTenantEntity implements Ownable {
     // No DB-level FK — cross-aggregate reference to leads.id, enforced at the application layer.
     @Column(name = "lead_id")
     private Long leadId;
+
+    // The staff member RESPONSIBLE for servicing this booking — who the customer's calls come to.
+    // Distinct from both neighbours it sits between:
+    //   ownerUserId → row-level data scope (who may SEE the row); stamped by OwnershipEntityListener.
+    //   createdBy   → audit (which email pressed the button).
+    // On conversion this defaults to the LEAD's assignee — the person who nurtured the deal keeps it
+    // — not whoever clicked Convert. Editable at conversion/creation time.
+    //
+    // A plain Long logical FK, matching customerId / leadId / ownerUserId on this entity: Booking
+    // deliberately holds no DB-level FKs to other aggregates and validates them in the service.
+    // (Lead uses a real @ManyToOne for its assignee; Booking's convention is the opposite one.)
+    // Nullable — every booking created before this column existed has none.
+    @Column(name = "assigned_user_id")
+    private Long assignedUserId;
 
     // ── Conversion traceability (Lead → Quotation → Booking) ──────────────────
     // Set only when this booking was produced by converting a lead. They store the

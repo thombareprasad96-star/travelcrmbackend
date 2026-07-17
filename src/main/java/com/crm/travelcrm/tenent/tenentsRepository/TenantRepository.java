@@ -24,6 +24,10 @@ public interface TenantRepository extends JpaRepository<Tenant, Long> {
     boolean existsByOrganizationCode(String organizationCode);
     boolean existsByEmailAndIdNot(String email, Long id);
 
+    /** Codes are stored uppercased and are globally unique — the dev seeder resolves its own
+     *  demo tenant by code so it can never attach to a real customer's tenant. */
+    Optional<Tenant> findByOrganizationCode(String organizationCode);
+
     /**
      * Pessimistic-write lock on the tenant row — the serialization point for seat-mutating operations
      * (sub-agent provisioning + seat-license open) so a concurrent pair cannot both pass a check-then-act

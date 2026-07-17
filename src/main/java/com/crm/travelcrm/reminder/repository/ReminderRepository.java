@@ -4,6 +4,8 @@ import com.crm.travelcrm.reminder.entity.Reminder;
 import com.crm.travelcrm.reminder.entity.ReminderStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
 import java.util.Collection;
@@ -50,4 +52,28 @@ public interface ReminderRepository
      */
     List<Reminder> findByStatusAndNotifiedFalseAndDueDateLessThanEqualAndDeletedAtIsNull(
             ReminderStatus status, Instant now);
+
+    /**
+     * Per-user OPEN-reminder count — a component of the shared workload metric
+     * ({@code UserWorkload.score()}).
+     *
+     * <p>"Open" is {@code Active} + {@code OVERDUE} (pass {@code WorkloadService.OPEN_REMINDER_STATUSES}).
+     * Snoozed is deliberately NOT open: a snooze is an explicit "not now", and counting it would
+     * penalise the person who triaged their queue.
+     *
+     * <p>One tenant-scoped GROUP BY. Returns rows only for users holding at least one open reminder —
+     * the caller zero-fills. Each row is {@code [userId (Long), count (Long)]}.
+     */
+    @Query("""
+            SELECT r.assignToUserId, COUNT(r)
+            FROM Reminder r
+            WHERE r.tenantId = :tenantId
+              AND r.deletedAt IS NULL
+              AND r.assignToUserId IN :userIds
+              AND r.status IN :statuses
+            GROUP BY r.assignToUserId
+            """)
+    List<Object[]> countOpenRemindersPerUser(@Param("tenantId") Long tenantId,
+                                             @Param("userIds") Collection<Long> userIds,
+                                             @Param("statuses") Collection<ReminderStatus> statuses);
 }

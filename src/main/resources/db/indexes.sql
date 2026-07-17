@@ -86,11 +86,44 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_leads_phone_tenant_open
         ON leads (phone, tenant_id)
         WHERE deleted_at IS NULL AND lead_stage NOT IN ('CONVERTED', 'LOST');
 
--- NOTE: users(email, tenant_id) and tenants(organization_code) are intentionally
--- left on their existing absolute UNIQUE constraints. Converting them to partial
--- indexes would require dropping Hibernate-managed constraints on the tables that
--- back the protected Create-Organization + Tenant-Admin flow, so that change is
--- deferred to a deliberate, manually-reviewed migration.
+-- ── Staff email: per-tenant → PLATFORM-WIDE unique ──────────────────────────
+-- REVERSES the earlier "email is unique per tenant" decision. One email now means
+-- exactly one account across every tenant, so the login lookup — which resolves by
+-- email alone with no tenant discriminator (AuthServiceImpl.userLogin) — is finally
+-- asking a question the schema can answer. Under the old uq_user_email_tenant the same
+-- address could exist in two tenants and that lookup threw NonUniqueResultException,
+-- a pre-auth 500 for both accounts.
+--
+-- Partial (WHERE deleted_at IS NULL) so a soft-deleted user does not squat on its
+-- address forever — same treatment as uq_leads_*_tenant_open above. Hibernate cannot
+-- express a partial index, so this is the ONLY declaration of the constraint; the
+-- @UniqueConstraint was removed from User.java rather than left to contradict it.
+--
+-- ddl-auto=update never drops an existing constraint, so the DROP is required to
+-- retire uq_user_email_tenant on databases created before this change.
+--
+-- The index is case-SENSITIVE, so uniqueness only means anything if every stored
+-- address is already normalized — otherwise Admin@X.com and admin@x.com are two
+-- accounts and "one email, one account" is a fiction. All four writers now lowercase
+-- on the way in (UserServiceImpl, SubAgentServiceImpl, TenantServiceImpl, DevDataSeeder);
+-- the UPDATE below retires rows written before TenantServiceImpl did so. Idempotent.
+UPDATE users SET email = LOWER(email) WHERE email <> LOWER(email);
+--
+-- ⚠ spring.sql.init.continue-on-error=true: if duplicate live emails exist, the CREATE
+-- below FAILS and startup CONTINUES — leaving no constraint at all. It is not enough to
+-- see a clean boot; verify with:
+--   SELECT indexname FROM pg_indexes WHERE tablename='users' AND indexname='uq_users_email_active';
+-- and find offenders with:
+--   SELECT email, count(*) FROM users WHERE deleted_at IS NULL GROUP BY email HAVING count(*) > 1;
+ALTER TABLE users DROP CONSTRAINT IF EXISTS uq_user_email_tenant;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_users_email_active
+        ON users (email)
+        WHERE deleted_at IS NULL;
+
+-- NOTE: tenants(organization_code) is intentionally left on its existing absolute
+-- UNIQUE constraint. Converting it to a partial index would require dropping a
+-- Hibernate-managed constraint on the table backing the protected Create-Organization
+-- flow, so that change is deferred to a deliberate, manually-reviewed migration.
 
 -- ── Legacy data normalization: Vendor status / pay_status → enum names ───────
 -- Vendor.status & Vendor.payStatus are now @Enumerated(STRING). Existing free-text
@@ -340,3 +373,218 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_mkt_auto_tenant_type
 CREATE UNIQUE INDEX IF NOT EXISTS uq_mkt_enroll_seq_customer
         ON marketing_drip_enrollments (tenant_id, sequence_id, customer_id)
         WHERE deleted_at IS NULL;
+-- ── LeadSource enum CHECK constraint refresh ────────────────────────────────
+-- Same story as users_role_check above: Hibernate generated leads_lead_source_check from the
+-- LeadSource enum when the leads table was first created (the original 9 sources), and
+-- ddl-auto=update never alters an existing constraint. The 16 constants added for the lead-source
+-- integration framework would be rejected at the DB level on any database whose leads table
+-- predates them -- i.e. every real one. Verified present with exactly the original 9 on a live
+-- database before this block was written.
+-- (DROP-then-ADD on every startup keeps it idempotent.)
+--
+-- NOTE: this file runs with spring.sql.init.continue-on-error=true, so if the ADD below fails the
+-- error is SWALLOWED and the table is left with NO constraint at all -- weaker than before, and
+-- silent. SchemaEnumConstraintValidator asserts at boot that this constraint exists and names every
+-- LeadSource constant, and refuses to start otherwise. That runner is the only thing that makes a
+-- failure here visible; do not delete it.
+ALTER TABLE leads DROP CONSTRAINT IF EXISTS leads_lead_source_check;
+ALTER TABLE leads ADD CONSTRAINT leads_lead_source_check
+        CHECK (lead_source IN (
+            'SOCIAL_MEDIA','WEBSITE','GOOGLE_ADS','FACEBOOK','INSTAGRAM','WHATSAPP','REFERRAL',
+            'DIRECT_CALL','OTHER',
+            'MANUAL','WALK_IN','PHONE_MANUAL','TRAVEL_MARKETPLACE',
+            'JUSTDIAL','INDIAMART','TRADEINDIA','SULEKHA',
+            'META_ADS','INSTAGRAM_DM','FB_MESSENGER',
+            'IVR_CALL',
+            'WEBSITE_FORM','WEBLINK_ENQUIRY',
+            'SUB_AGENT','REPEAT_CUSTOMER'));
+
+-- ── LeadStage enum CHECK constraint refresh ─────────────────────────────────
+-- REOPENED was added to LeadStage with no refresh block. On any database whose leads table predates
+-- it, REOPENED is rejected at the DB -- which means a converted booking that gets cancelled cannot
+-- flip its lead back, and nobody would see why. Not observed on the dev database (its constraint
+-- already lists all 8), but that database post-dates the enum change; an older one will not.
+ALTER TABLE leads DROP CONSTRAINT IF EXISTS leads_lead_stage_check;
+ALTER TABLE leads ADD CONSTRAINT leads_lead_stage_check
+        CHECK (lead_stage IN (
+            'NEW_LEAD','CONTACTED','FOLLOW_UP','QUALIFIED','PROPOSAL_SENT','CONVERTED',
+            'REOPENED','LOST'));
+
+-- ── LeadOrigin enum CHECK constraint ────────────────────────────────────────
+-- New column (Lead.origin). Hibernate generates leads_origin_check itself the first time it adds the
+-- column, so this block is belt-and-braces for databases where the column arrives before the enum
+-- gains a constant. Backfill first: ddl-auto=update adds the column as NULL on every existing row,
+-- and every pre-existing lead was, by definition, created by a human.
+UPDATE leads SET origin = 'MANUAL' WHERE origin IS NULL;
+ALTER TABLE leads DROP CONSTRAINT IF EXISTS leads_origin_check;
+ALTER TABLE leads ADD CONSTRAINT leads_origin_check
+        CHECK (origin IN ('MANUAL','INTEGRATION','SYSTEM'));
+
+-- ── leads.email: DROP NOT NULL ──────────────────────────────────────────────
+-- An inbound enquiry may have a phone and nothing else — an IVR call is the obvious case, and
+-- several marketplace payloads withhold the email until the lead is claimed. ddl-auto=update ADDS
+-- columns but never RELAXES an existing NOT NULL, so this has to be hand-written here.
+--
+-- Safe against uq_leads_email_tenant_open: Postgres treats NULLs as DISTINCT in a unique index, so
+-- any number of email-less open leads coexist without tripping it.
+--
+-- Idempotent: DROP NOT NULL on an already-nullable column is a no-op, not an error.
+ALTER TABLE leads ALTER COLUMN email DROP NOT NULL;
+
+-- ── leads.phone_normalized: WRITE-ONLY for now ──────────────────────────────
+-- The canonical shadow key. Dedup compares the RAW phone today (LeadServiceImpl.validateNoDuplicates)
+-- and uq_leads_phone_tenant_open indexes the raw column. Real rows carry separators (DevDataSeeder
+-- writes "+91 91234 5000" + i, with spaces) while inbound channels deliver bare E.164, so
+-- "+919123450001" never string-matches "+91 91234 50001": the append-on-repeat path would fire
+-- never, and every repeat caller would silently become a duplicate lead.
+--
+-- The raw `phone` column is NEVER rewritten in place. PhoneNormalizer's javadoc records why —
+-- stronger canonicalisation "belongs with a deliberate one-time data migration, not a passive
+-- read-path change" — and Customer.phone / uq_customers_phone_tenant key off the same strings, so a
+-- non-atomic rewrite would spawn duplicate customers.
+--
+-- The BACKFILL IS JAVA-SIDE (LeadPhoneNormalizationBackfill), deliberately not SQL: it must reuse
+-- the exact PhoneCanonicalizer.canonical() the write path uses. A SQL reimplementation that
+-- disagrees on one edge case IS the migration risk.
+
+-- Non-unique lookup index. Safe to ship immediately — the append path probes by canonical phone.
+CREATE INDEX IF NOT EXISTS idx_leads_phone_norm_tenant
+        ON leads (tenant_id, phone_normalized) WHERE phone_normalized IS NOT NULL;
+
+-- ── DELIBERATELY COMMENTED OUT — DO NOT UNCOMMENT WITHOUT READING THIS ──────
+-- The unique constraint on the canonical phone, and the move of the dedup check onto it, are a
+-- LATER phase. Uncommenting early is a foot-gun with a large blast radius:
+--
+-- Two pre-existing OPEN leads that canonicalise to the same value (e.g. "+91 98765 43210" and
+-- "09876543210" — different raw strings, one canonical form) are legal today. The moment dedup
+-- reads the canonical column, BOTH become permanently un-editable for a human: every save trips the
+-- duplicate check against the other. That is a bigger blast radius than the un-creatable case, and
+-- its volume is unknown until the report below is run.
+--
+-- REQUIRED FIRST — the collision report must come back EMPTY on the real database:
+--
+--   SELECT phone_normalized, tenant_id, count(*)
+--     FROM leads
+--    WHERE deleted_at IS NULL
+--      AND lead_stage NOT IN ('CONVERTED','LOST')
+--      AND phone_normalized IS NOT NULL
+--    GROUP BY phone_normalized, tenant_id
+--   HAVING count(*) > 1;
+--
+-- Only once it is clean:
+--   1. uncomment the index below,
+--   2. move LeadServiceImpl.validateNoDuplicates onto phone_normalized, and
+--   3. move checkTrashedForRestore's phone finder IN THE SAME CHANGE — leaving it on the raw phone
+--      silently kills the restore affordance for exactly the format-mismatch cases it exists for.
+--
+-- The machine path reads the canonical column from day one; it has no legacy rows to collide with.
+--
+-- CREATE UNIQUE INDEX IF NOT EXISTS uq_leads_phone_norm_tenant_open
+--         ON leads (phone_normalized, tenant_id)
+--         WHERE deleted_at IS NULL AND phone_normalized IS NOT NULL
+--           AND lead_stage NOT IN ('CONVERTED', 'LOST');
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- LEAD SOURCE INTEGRATION FRAMEWORK
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- ── lead_source_integrations ────────────────────────────────────────────────
+-- NOTE: `channel` is deliberately a plain VARCHAR holding LeadSourceChannel.slug() — NOT an
+-- @Enumerated column, and there is NO check constraint for it here, on purpose. The registry is the
+-- constraint and a strictly stricter one: it rejects an unknown slug at save time AND again at
+-- ingest, whereas a CHECK only validates spelling and would happily accept a 'meta_ads' row on a node
+-- with no Meta adapter deployed. It also keeps "add a channel" to "write one adapter" rather than
+-- "write one adapter and remember to refresh a constraint, or every insert is rejected".
+
+-- The ingest token is THE tenant resolver, so its uniqueness is a security property, not hygiene.
+-- Partial (WHERE ... IS NOT NULL) because PROVIDER_ACCOUNT connections have no token: Postgres treats
+-- NULLs as distinct in a unique index, but being explicit documents the intent.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_lsi_token_hash
+        ON lead_source_integrations (ingest_token_hash)
+        WHERE ingest_token_hash IS NOT NULL AND deleted_at IS NULL;
+
+-- The PREVIOUS token needs its own unique index for the same reason: during an overlap window it is
+-- just as capable of resolving a tenant as the current one.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_lsi_token_hash_previous
+        ON lead_source_integrations (ingest_token_hash_previous)
+        WHERE ingest_token_hash_previous IS NOT NULL AND deleted_at IS NULL;
+
+-- PROVIDER_ACCOUNT resolution: one provider account maps to exactly one connection, or a Meta page
+-- delivering a lead would be ambiguous between two tenants — the worst possible ambiguity.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_lsi_channel_external_account
+        ON lead_source_integrations (channel, external_account_id)
+        WHERE external_account_id IS NOT NULL AND deleted_at IS NULL;
+
+-- Deliberately NO unique on (tenant_id, channel): the row is a CONNECTION, not a config. Two JustDial
+-- city accounts are two rows. Forcing one-per-channel pushes connections into a child table later —
+-- the same mistake at a different grain.
+
+-- The cross-tenant credential-expiry sweep. This partial index is the entire reason
+-- credentials_expire_at is a typed column rather than living inside the encrypted blob: the sweep must
+-- ask "which connections expire within 7 days" WITHOUT decrypting every row.
+CREATE INDEX IF NOT EXISTS idx_lsi_credentials_expire
+        ON lead_source_integrations (credentials_expire_at)
+        WHERE credentials_expire_at IS NOT NULL AND deleted_at IS NULL;
+
+-- ── lead_attributions ───────────────────────────────────────────────────────
+-- lead_id is a LOGICAL FK: there is deliberately NO REFERENCES clause. A real FK would make the
+-- nightly trash purge — one transactional loop over every TrashableType calling em.remove() — throw on
+-- a 31-day-old trashed inbound lead, rolling back EVERY TrashableType purge for that tenant, forever,
+-- because the same row is retried the next night. Consistent with the codebase's cross-aggregate rule
+-- (Booking.customerId) and with lead_ingest_events.lead_id.
+--
+-- The unique index below still enforces 1:1, so the logical FK costs nothing.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_lead_attributions_lead
+        ON lead_attributions (lead_id);
+
+-- Reporting: "which campaigns produced leads". Partial — most rows have no campaign.
+CREATE INDEX IF NOT EXISTS idx_lead_attributions_campaign
+        ON lead_attributions (tenant_id, campaign_name) WHERE campaign_name IS NOT NULL;
+
+-- ── lead_ingest_events ──────────────────────────────────────────────────────
+-- Content-level idempotency, scoped to (tenant, channel) and deliberately NOT platform-wide.
+-- An external event id is provider-controlled and namespaced by an account we do not administer, so a
+-- platform-wide unique would let any ONE connection permanently poison a key for every other tenant —
+-- silent cross-tenant lead LOSS.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_lie_external_event
+        ON lead_ingest_events (tenant_id, channel, external_event_id)
+        WHERE external_event_id IS NOT NULL;
+
+-- The delivery-history list (newest first, per connection).
+CREATE INDEX IF NOT EXISTS idx_lie_tenant_integration_created
+        ON lead_ingest_events (tenant_id, integration_id, created_at DESC);
+
+-- The transport-window dedup probe.
+CREATE INDEX IF NOT EXISTS idx_lie_dedup_key
+        ON lead_ingest_events (tenant_id, channel, dedup_key) WHERE dedup_key IS NOT NULL;
+
+-- LeadIngestStatus CHECK. lead_ingest_events is a NEW table, so Hibernate creates this constraint
+-- itself with the current enum values the first time it creates the table; this block is
+-- belt-and-braces for any FUTURE value (ddl-auto=update never alters an existing constraint).
+-- SchemaEnumConstraintValidator guards it at boot.
+ALTER TABLE lead_ingest_events DROP CONSTRAINT IF EXISTS lead_ingest_events_status_check;
+ALTER TABLE lead_ingest_events ADD CONSTRAINT lead_ingest_events_status_check
+        CHECK (status IN ('RECEIVED','PROCESSED','APPENDED','DUPLICATE','IGNORED','DEFERRED',
+                          'QUARANTINED_QUOTA','FAILED'));
+
+-- ── lead_logs: FK gains ON DELETE CASCADE ───────────────────────────────────
+-- A PRE-EXISTING hole, widened by this framework and fixed here.
+--
+-- LeadLog.lead is a real FK (optional=false); Lead has no LeadLog collection and does not cascade to
+-- it; TrashableType has LEAD but no LEAD_LOG. So the nightly purge's em.remove() on a 31-day-old
+-- trashed lead hits its live lead_logs rows, Postgres throws, and the whole tenant's purge — every
+-- type — rolls back and retries the same row forever.
+--
+-- It survives today only because lead_logs rows exist when a HUMAN wrote one. Under owner decision 1
+-- every repeat inbound contact writes a LeadLog, so the blast radius goes from incidental to
+-- universal.
+--
+-- ON DELETE CASCADE is correct here, unlike lead_attributions' logical FK: a log genuinely SHOULD die
+-- with its lead (it is a child), whereas an attribution row is queried by reporting and an ingest
+-- event is an audit record that must survive.
+--
+-- Ordering is safe and idempotent: Hibernate runs first and leaves a same-named constraint alone; this
+-- then drops and re-adds it with the cascade, every boot.
+ALTER TABLE lead_logs DROP CONSTRAINT IF EXISTS fk_lead_log_lead;
+ALTER TABLE lead_logs ADD CONSTRAINT fk_lead_log_lead
+        FOREIGN KEY (lead_id) REFERENCES leads (id) ON DELETE CASCADE;

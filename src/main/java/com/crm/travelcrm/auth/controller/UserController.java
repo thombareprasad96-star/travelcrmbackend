@@ -76,14 +76,15 @@ public class UserController {
         return ResponseEntity.ok(ApiResponse.success("Users retrieved successfully", users));
     }
 
-    // Real-time email-availability check for the Create User form.
+    // Real-time email-availability check for the Create User form. Answers platform-wide, so a
+    // "taken" here may mean taken by another organization — the caller is told availability only,
+    // never where the address lives. Stays behind USER_READ so it is not a public existence oracle.
     @GetMapping("/check-email")
     @PreAuthorize("hasAuthority('USER_READ')")
     public ResponseEntity<ApiResponse<Map<String, Boolean>>> checkEmail(
-            @RequestParam String email,
-            @AuthenticationPrincipal User currentUser) {
+            @RequestParam String email) {
 
-        boolean available = userService.isEmailAvailable(email, currentUser.getTenantId());
+        boolean available = userService.isEmailAvailable(email);
         return ResponseEntity.ok(
                 ApiResponse.success("Email availability checked", Map.of("available", available)));
     }

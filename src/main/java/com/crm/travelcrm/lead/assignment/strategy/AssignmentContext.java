@@ -37,11 +37,15 @@ public class AssignmentContext {
     private final List<Long> candidateUserIds = List.of();
 
     /**
-     * Active-lead count per candidate id, zero-filled for every candidate (so a user with no active
-     * leads — the most attractive target — is present with 0, not absent). Never null.
+     * Workload score per candidate id — {@code UserWorkload.score()}, i.e.
+     * {@code todo + inProgress + activeLeads + openReminders} — zero-filled for every candidate (so
+     * an idle user, the most attractive target, is present with 0 rather than absent). Never null.
+     *
+     * <p>Was previously the active-lead count alone. It is deliberately NOT named for its components:
+     * the strategy only needs "who is least busy", and {@code WorkloadService} owns what that means.
      */
     @Builder.Default
-    private final Map<Long, Long> activeLeadCounts = Map.of();
+    private final Map<Long, Long> workloadScores = Map.of();
 
     /**
      * The last user id the round-robin cursor handed out for this tenant (persisted), or {@code null}

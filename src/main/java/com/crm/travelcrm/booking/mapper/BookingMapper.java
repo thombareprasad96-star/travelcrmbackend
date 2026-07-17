@@ -1,5 +1,6 @@
 package com.crm.travelcrm.booking.mapper;
 
+import com.crm.travelcrm.booking.assignment.BookingAssigneeView;
 import com.crm.travelcrm.booking.dto.request.CreateBookingRequestDTO;
 import com.crm.travelcrm.booking.dto.request.UpdateBookingRequestDTO;
 import com.crm.travelcrm.booking.dto.response.BookingResponseDTO;
@@ -51,6 +52,8 @@ public interface BookingMapper {
     @Mapping(target = "deletedBy",              ignore = true)
     @Mapping(target = "version",                ignore = true)  // optimistic-lock version, DB owns this
     @Mapping(target = "ownerUserId",            ignore = true)  // stamped on persist by OwnershipEntityListener
+    @Mapping(target = "assignedUserId",         ignore = true)  // resolved by BookingAssigneeResolver
+                                                                // (dto carries a publicId, entity a Long id)
     Booking toEntity(CreateBookingRequestDTO dto);
 
     // ── UpdateBookingRequestDTO → Booking (partial patch) ─────────────────────
@@ -90,6 +93,8 @@ public interface BookingMapper {
     @Mapping(target = "deletedBy",              ignore = true)
     @Mapping(target = "version",                ignore = true)  // optimistic-lock version, DB owns this
     @Mapping(target = "ownerUserId",            ignore = true)  // owner never changes after creation
+    @Mapping(target = "assignedUserId",         ignore = true)  // set at create/convert; reassignment
+                                                                // is not part of the edit form yet
     void updateEntity(UpdateBookingRequestDTO dto, @MappingTarget Booking booking);
 
     // ── Booking → BookingResponseDTO (full detail) ────────────────────────────
@@ -99,9 +104,16 @@ public interface BookingMapper {
     //   - toResponse()        for ADMIN / MANAGER roles
     //   - toSummary()         for AGENT role
     // Never call toResponse() without a permission check in the service.
+    //
+    // `assignees` is a @Context, not a source: the entity holds only the assignee's internal Long
+    // id, and turning that into a publicId + name needs a user read this mapper must not do. The
+    // service builds the view ONCE per response (one query for a whole page) and passes it in, so
+    // there is no per-row lookup here — see BookingAssigneeViewFactory.
 
-    @Mapping(target = "pendingAmount", expression = "java(booking.getPendingAmount())")
-    BookingResponseDTO toResponse(Booking booking);
+    @Mapping(target = "pendingAmount",    expression = "java(booking.getPendingAmount())")
+    @Mapping(target = "assignedUserId",   expression = "java(assignees.publicIdOf(booking.getAssignedUserId()))")
+    @Mapping(target = "assignedUserName", expression = "java(assignees.nameOf(booking.getAssignedUserId()))")
+    BookingResponseDTO toResponse(Booking booking, @Context BookingAssigneeView assignees);
 
     // ── Booking → BookingSummaryDTO (restricted view) ─────────────────────────
     //

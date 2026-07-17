@@ -6,6 +6,8 @@ import com.crm.travelcrm.platform.audit.PlatformAuditRecorder;
 import com.crm.travelcrm.platform.audit.entity.PlatformAuditAction;
 import com.crm.travelcrm.platform.billing.enums.BillingStatus;
 import com.crm.travelcrm.platform.billing.repository.BillingRecordRepository;
+import com.crm.travelcrm.platform.notification.api.PlatformNotificationType;
+import com.crm.travelcrm.platform.notification.api.PlatformNotifyEvent;
 import com.crm.travelcrm.tenent.entity.Tenant;
 import com.crm.travelcrm.tenent.enums.TenantStatus;
 import com.crm.travelcrm.tenent.tenentsRepository.TenantRepository;
@@ -85,6 +87,18 @@ public class DunningService {
                 platformAuditRecorder.safeRecord(PlatformAuditAction.SUBSCRIPTION_EXPIRED, true,
                         t.getId(), t.getOrganizationCode(), "TENANT", t.getPublicId(),
                         "Dunning grace elapsed with an unpaid invoice — expired on " + today);
+                eventPublisher.publishEvent(PlatformNotifyEvent.builder()
+                        .type(PlatformNotificationType.TENANT_SUSPENDED)
+                        .title("Tenant suspended")
+                        .message(t.getOrganizationName() + " (" + t.getOrganizationCode()
+                                + ") was suspended on " + today + " — the " + graceDays
+                                + "-day dunning grace elapsed with an unpaid invoice. Login is blocked.")
+                        .referenceType(PlatformNotificationType.REF_TENANT)
+                        .referencePublicId(t.getPublicId())
+                        .tenantId(t.getId())
+                        .tenantName(t.getOrganizationName())
+                        .tenantPublicId(t.getPublicId())
+                        .build());
                 notify(t, "ACCOUNT_SUSPENDED", "Account suspended",
                         "Your account has been suspended for non-payment. Settle the outstanding "
                                 + "invoice to restore access.");
@@ -188,6 +202,16 @@ public class DunningService {
     private void auditPastDue(Tenant t, String detail) {
         platformAuditRecorder.safeRecord(PlatformAuditAction.TENANT_PAST_DUE, true,
                 t.getId(), t.getOrganizationCode(), "TENANT", t.getPublicId(), detail);
+        eventPublisher.publishEvent(PlatformNotifyEvent.builder()
+                .type(PlatformNotificationType.TENANT_PAST_DUE)
+                .title("Tenant past due")
+                .message(t.getOrganizationName() + " (" + t.getOrganizationCode() + ") is now PAST_DUE. " + detail)
+                .referenceType(PlatformNotificationType.REF_TENANT)
+                .referencePublicId(t.getPublicId())
+                .tenantId(t.getId())
+                .tenantName(t.getOrganizationName())
+                .tenantPublicId(t.getPublicId())
+                .build());
     }
 
     private void notify(Tenant t, String type, String title, String message) {

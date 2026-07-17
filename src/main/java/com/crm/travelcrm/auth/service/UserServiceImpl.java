@@ -79,10 +79,12 @@ public class UserServiceImpl implements UserService {
         // check and the stored value can never diverge by case/whitespace.
         String email = request.getEmail().trim().toLowerCase();
 
-        // Email is unique per tenant (uq_user_email_tenant) — scope the check to tenant.
-        if (userRepository.existsByEmailAndTenantId(email, tenantId)) {
+        // Email is unique platform-wide (uq_users_email_active) — an address identifies exactly one
+        // account, so the check spans every tenant. Deliberately does not say WHICH organization
+        // holds it: that would let any tenant admin probe for the existence of a user elsewhere.
+        if (userRepository.existsByEmail(email)) {
             throw new BusinessException(
-                    "A user with email " + email + " already exists in your organization.",
+                    "A user with email " + email + " already exists.",
                     HttpStatus.CONFLICT);
         }
 
@@ -221,11 +223,14 @@ public class UserServiceImpl implements UserService {
 
     @Override
     @Transactional(readOnly = true)
-    public boolean isEmailAvailable(String email, Long tenantId) {
+    public boolean isEmailAvailable(String email) {
         if (email == null || email.isBlank()) {
             return false;
         }
-        return !userRepository.existsByEmailAndTenantId(email.trim().toLowerCase(), tenantId);
+        // Platform-wide, matching the create-user check and the DB constraint. An address taken in
+        // another tenant reads as unavailable here — anything narrower would promise the caller a
+        // create that the uniqueness constraint then rejects.
+        return !userRepository.existsByEmail(email.trim().toLowerCase());
     }
 
     @Override

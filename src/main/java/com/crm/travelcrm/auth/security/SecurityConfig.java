@@ -91,11 +91,29 @@ public class SecurityConfig {
                         // Payment-gateway webhooks (server-to-server; no user). Authenticity is the
                         // HMAC-SHA256 signature verified in the service, not the filter chain.
                         .requestMatchers(HttpMethod.POST, "/api/webhooks/**").permitAll()
+                        // Lead-ingest provider HANDSHAKES (e.g. Meta's GET hub.challenge). The rule
+                        // above is POST-qualified, so a GET falls to anyRequest().authenticated() and
+                        // 401s the handshake.
+                        //
+                        // Scoped to /leads/** deliberately: do NOT relax the POST qualifier above to
+                        // fix this — that would open the Razorpay webhook to GET. The ingest path
+                        // authenticates on the opaque per-connection token in the URL, and rejects
+                        // every unknown token with a 401 before touching the database.
+                        .requestMatchers(HttpMethod.GET, "/api/webhooks/leads/**").permitAll()
                         // Public quotation share links (capability URL by publicId) — read-only PDF
                         .requestMatchers(HttpMethod.GET, "/api/public/**").permitAll()
-                        // SSE stream: EventSource cannot set Authorization headers,
-                        // so the JWT is passed as ?token= and validated in the controller
+                        // SSE streams: EventSource cannot set Authorization headers, so the JWT is
+                        // passed as ?token= and validated in the controller. Each stream also checks
+                        // the principal's realm there — permitAll means no @PreAuthorize gate runs,
+                        // so "authenticated" alone would let either realm onto the other's feed.
                         .requestMatchers(HttpMethod.GET, "/api/notifications/stream").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/super-admin/notifications/stream").permitAll()
+                        // Health probes for nginx / systemd / uptime monitoring, which cannot carry a
+                        // JWT. Safe to expose: management.endpoint.health.show-details=never in prod,
+                        // so an anonymous caller gets nothing but {"status":"UP"}. Only `health` is
+                        // exposed at all — every other actuator endpoint stays off (see
+                        // management.endpoints.web.exposure.include) AND unauthenticated here.
+                        .requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**").permitAll()
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(rateLimitFilter, UsernamePasswordAuthenticationFilter.class)

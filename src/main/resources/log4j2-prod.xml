@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PRODUCTION LOGGING  —  selected via `logging.config=
+  classpath:log4j2-prod.xml` in
+  application-prod.properties. The dev log4j2.xml is untouched.
+
+  Two things this fixes versus the dev config:
+
+  1. UNBOUNDED DISK. Dev uses a plain <File> appender for logs/otp.log with no rolling
+     policy, so it grows forever. On a VPS that is a slow, silent disk-fill that
+     eventually takes Postgres down with it. Every appender here is a <RollingFile>
+     with BOTH a per-file size cap and a total-size/age delete policy.
+
+  2. WRONG ROUTING. Dev attaches OtpFile to <Root>, so EVERY info line in the app is
+     written into otp.log as well as the console — the file is a duplicate of
+     everything, not an OTP audit trail. Here OtpFile is attached only to the otp
+     package logger, with additivity="false" so those lines do not double-write.
+
+  Console is kept: systemd captures it into the journal (`journalctl -u travelcrm`),
+  which is where an operator looks first and where startup failures surface. The
+  journal is separately capped via SystemMaxUse in journald.conf — see docs/DEPLOYMENT.md.
+
+  LOG_PATH is set by Spring Boot from `logging.file.path`; the env var and the literal
+  are fallbacks so this file also works if it is ever used outside Boot.
+-->
+<Configuration status="WARN">
+
+    <Properties>
+        <Property name="LOG_DIR">${sys:LOG_PATH:-${env:LOG_DIR:-/var/log/travelcrm}}</Property>
+        <!--
+          %X{traceId} prints the per-request correlation id that TraceIdFilter puts into the
+          ThreadContext. It is also returned to the client in the X-Trace-Id header and in the
+          ApiError body, so a support ticket quoting an id can be grepped straight to the stack
+          trace. Requests outside the filter (schedulers, startup) print an empty value.
+        -->
+        <Property name="PATTERN">%d{yyyy-MM-dd HH:mm:ss.SSS} [%t] %-5level [%X{traceId}] %c{1.} - %msg%n%throwable</Property>
+    </Properties>
+
+    <Appenders>
+
+        <Console name="Console" target="SYSTEM_OUT">
+            <PatternLayout pattern="${PATTERN}"/>
+        </Console>
+
+        <!-- Everything at INFO+. Daily rollover, or sooner at 50 MB. -->
+        <RollingFile name="AppFile"
+                     fileName="${LOG_DIR}/travelcrm.log"
+                     filePattern="${LOG_DIR}/archive/travelcrm-%d{yyyy-MM-dd}-%i.log.gz">
+            <PatternLayout pattern="${PATTERN}"/>
+            <Policies>
+                <TimeBasedTriggeringPolicy interval="1" modulate="true"/>
+                <SizeBasedTriggeringPolicy size="50 MB"/>
+            </Policies>
+            <!-- max=20 caps files per day; the Delete policy is the real ceiling. -->
+            <DefaultRolloverStrategy max="20">
+                <Delete basePath="${LOG_DIR}/archive" maxDepth="1">
+                    <IfFileName glob="travelcrm-*.log.gz">
+                        <!-- Whichever limit is hit first. 2 GB is the hard disk budget for logs. -->
+                        <IfLastModified age="30d"/>
+                        <IfAccumulatedFileSize exceeds="2 GB"/>
+                    </IfFileName>
+                </Delete>
+            </DefaultRolloverStrategy>
+        </RollingFile>
+
+        <!--
+          WARN+ only, kept longer. This is the file to read after an incident: it is small
+          enough to scan by eye, where travelcrm.log is mostly request noise.
+        -->
+        <RollingFile name="ErrorFile"
+                     fileName="${LOG_DIR}/travelcrm-error.log"
+                     filePattern="${LOG_DIR}/archive/travelcrm-error-%d{yyyy-MM-dd}-%i.log.gz">
+            <PatternLayout pattern="${PATTERN}"/>
+            <ThresholdFilter level="WARN" onMatch="ACCEPT" onMismatch="DENY"/>
+            <Policies>
+                <TimeBasedTriggeringPolicy interval="1" modulate="true"/>
+                <SizeBasedTriggeringPolicy size="20 MB"/>
+            </Policies>
+            <DefaultRolloverStrategy max="20">
+                <Delete basePath="${LOG_DIR}/archive" maxDepth="1">
+                    <IfFileName glob="travelcrm-error-*.log.gz">
+                        <IfLastModified age="90d"/>
+                        <IfAccumulatedFileSize exceeds="500 MB"/>
+                    </IfFileName>
+                </Delete>
+            </DefaultRolloverStrategy>
+        </RollingFile>
+
+        <!-- OTP delivery trail only (see the otp package logger below), not a copy of the app log. -->
+        <RollingFile name="OtpFile"
+                     fileName="${LOG_DIR}/otp.log"
+                     filePattern="${LOG_DIR}/archive/otp-%d{yyyy-MM-dd}-%i.log.gz">
+            <PatternLayout pattern="${PATTERN}"/>
+            <Policies>
+                <TimeBasedTriggeringPolicy interval="1" modulate="true"/>
+                <SizeBasedTriggeringPolicy size="10 MB"/>
+            </Policies>
+            <DefaultRolloverStrategy max="10">
+                <Delete basePath="${LOG_DIR}/archive" maxDepth="1">
+                    <IfFileName glob="otp-*.log.gz">
+                        <IfLastModified age="30d"/>
+                        <IfAccumulatedFileSize exceeds="200 MB"/>
+                    </IfFileName>
+                </Delete>
+            </DefaultRolloverStrategy>
+        </RollingFile>
+
+    </Appenders>
+
+    <Loggers>
+
+        <!--
+          additivity="false" — OTP lines go to otp.log (plus the console/app log via the
+          explicit refs below) exactly once, instead of being duplicated by <Root>.
+        -->
+        <Logger name="com.crm.travelcrm.otp" level="info" additivity="false">
+            <AppenderRef ref="OtpFile"/>
+            <AppenderRef ref="AppFile"/>
+            <AppenderRef ref="Console"/>
+        </Logger>
+
+        <!-- Third-party noise floors. Levels for com.crm.travelcrm.* come from
+             application-prod.properties so they can be changed without a rebuild. -->
+        <Logger name="org.hibernate" level="warn"/>
+        <Logger name="org.springframework" level="warn"/>
+        <Logger name="org.apache.catalina" level="warn"/>
+        <Logger name="com.zaxxer.hikari" level="warn"/>
+
+        <Root level="info">
+            <AppenderRef ref="Console"/>
+            <AppenderRef ref="AppFile"/>
+            <AppenderRef ref="ErrorFile"/>
+        </Root>
+
+    </Loggers>
+
+</Configuration>

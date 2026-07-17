@@ -9,29 +9,46 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 @Repository
 public interface UserRepository extends JpaRepository<User, Long> {
-    Optional<User> findByEmail(String email);
-    Optional<User> findByEmailAndTenantId(String email, Long tenantId);
-    // Soft-delete-aware variants — used by login + the JWT filter so a soft-deleted
-    // user is never authenticated (a deleted row must not resolve to a principal).
+    // ── Email finders ─────────────────────────────────────────────────────────
+    // Email is unique PLATFORM-WIDE among live rows (uq_users_email_active, db/indexes.sql), so an
+    // address needs no tenant to resolve — and must NOT be checked per-tenant: a tenant-scoped
+    // uniqueness check passes for a tenant that has not seen the address and then dies on the
+    // constraint. The per-tenant email finders were deliberately removed for that reason; if you
+    // are reaching for one, you want the global check below.
+    //
+    // Soft-delete-aware by design — a deleted row must never resolve to a principal, and the
+    // constraint only covers live rows, so a non-soft-delete-aware finder could match a deleted
+    // squatter. Every email lookup here filters deletedAt.
     Optional<User> findByEmailAndDeletedAtIsNull(String email);
     Optional<User> findByEmailAndTenantIdAndDeletedAtIsNull(String email, Long tenantId);
-    // Platform (cross-tenant) — SuperAdmin. Email may match multiple tenants, so the fail-safe login
-    // lookup returns a list; publicId is globally unique so its finder stays an Optional.
+    /** Returns a list purely so an ambiguous match fails closed instead of throwing a 500 — see
+     *  UserDetailsServiceImpl. Under an intact constraint this can never exceed one row. */
     List<User> findAllByEmailAndDeletedAtIsNull(String email);
     Optional<User> findByPublicIdAndDeletedAtIsNull(UUID publicId);
+    /** The uniqueness check for every user-creating path. Global, matching the DB constraint. */
     boolean existsByEmail(String email);
-    boolean existsByEmailAndTenantId(String email, Long tenantId);
     List<User> findByTenantIdAndRoleInAndIsActiveTrue(Long tenantId, List<String> roles);
     List<User> findAllByTenantId(Long tenantId);
     List<User> findAllByTenantIdAndDeletedAtIsNull(Long tenantId);
     Optional<User> findByPublicIdAndTenantIdAndDeletedAtIsNull(UUID publicId, Long tenantId);
     Optional<User> findByIdAndTenantIdAndDeletedAtIsNull(Long id, Long tenantId);
+
+    /**
+     * Batch id → user lookup, tenant-scoped. Exists so a paged response can resolve every row's
+     * assignee name in ONE query instead of one per row; ids belonging to another tenant simply
+     * do not come back, so a leaked id yields a blank name rather than a foreign user's.
+     * Soft-deleted users ARE included — a booking assigned to a since-deleted user must still be
+     * able to display who that was.
+     */
+    List<User> findByIdInAndTenantId(Collection<Long> ids, Long tenantId);
+
     void deleteByTenantId(Long tenantId);
     List<User> findByTenantIdAndIsActiveTrueAndDeletedAtIsNullOrderByNameAsc(Long tenantId);
 

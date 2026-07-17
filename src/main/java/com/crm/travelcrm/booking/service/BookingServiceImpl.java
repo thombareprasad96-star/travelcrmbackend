@@ -6,7 +6,11 @@ import com.crm.travelcrm.booking.dto.request.LeadConversionRequestDTO;
 import com.crm.travelcrm.booking.dto.request.PaymentUpdateRequestDTO;
 import com.crm.travelcrm.booking.dto.request.StatusUpdateRequestDTO;
 import com.crm.travelcrm.booking.dto.request.UpdateBookingRequestDTO;
+import com.crm.travelcrm.booking.assignment.BookingAssigneeResolver;
+import com.crm.travelcrm.booking.assignment.BookingAssigneeView;
+import com.crm.travelcrm.booking.assignment.BookingAssigneeViewFactory;
 import com.crm.travelcrm.booking.enums.CancelAction;
+import com.crm.travelcrm.booking.dto.response.BookingAssigneeDto;
 import com.crm.travelcrm.booking.dto.response.BookingPageSummaryResponseDTO;
 import com.crm.travelcrm.booking.dto.response.BookingResponseDTO;
 import com.crm.travelcrm.booking.dto.response.BookingStatsResponseDTO;
@@ -115,6 +119,8 @@ public class BookingServiceImpl implements BookingService {
     private final CancellationDocumentService cancellationDocumentService;
     private final SubAgentScope subAgentScope;
     private final SubAgentCommissionService commissionService;
+    private final BookingAssigneeResolver assigneeResolver;
+    private final BookingAssigneeViewFactory assigneeViewFactory;
 
     // ── Create ───────────────────────────────────────────────────────────────
 
@@ -143,6 +149,10 @@ public class BookingServiceImpl implements BookingService {
 
         // Destination is sent as a free-text name (no id); snapshot it so the NOT NULL holds.
         booking.setDestinationSnapshot(request.getDestination());
+
+        // Who services this booking: the explicit choice, else the current user. No lead to inherit
+        // from on this path.
+        booking.setAssignedUserId(assigneeResolver.resolveForCreate(request.getAssignedUserId(), tenantId));
 
         if (request.getLeadId() != null) {
             if (!leadRepository.existsByIdAndTenantIdAndDeletedAtIsNull(request.getLeadId(), tenantId)) {
@@ -173,7 +183,7 @@ public class BookingServiceImpl implements BookingService {
         publishBookingEvent(NotificationType.BOOKING_CREATED, saved,
                 "New Booking: " + saved.getBookingCode(),
                 "A new booking " + saved.getBookingCode() + " was created");
-        return bookingMapper.toResponse(saved);
+        return toResponse(saved);
     }
 
     /**
@@ -263,6 +273,10 @@ public class BookingServiceImpl implements BookingService {
                 .leadId(lead.getId())
                 .sourceLeadPublicId(lead.getPublicId())
                 .sourceQuotationPublicId(sourceQuotationPublicId)
+                // Default: the LEAD's assignee — the person who nurtured the deal keeps the
+                // customer, not whoever clicked Convert. Overridable via request.assignedUserId.
+                .assignedUserId(assigneeResolver.resolveForConvert(
+                        lead, request.getAssignedUserId(), tenantId))
                 .status(BookingStatus.PENDING)
                 .bookingDate(request.getBookingDate() != null ? request.getBookingDate() : LocalDate.now())
                 .travelDate(request.getTravelDate())
@@ -303,7 +317,7 @@ public class BookingServiceImpl implements BookingService {
                 "Lead converted: " + saved.getBookingCode(),
                 lead.getCustomerName() + " was converted to booking " + saved.getBookingCode());
 
-        return bookingMapper.toResponse(saved);
+        return toResponse(saved);
     }
 
     /**
@@ -367,7 +381,7 @@ public class BookingServiceImpl implements BookingService {
     @Override
     @Transactional(readOnly = true)
     public BookingResponseDTO getById(UUID publicId) {
-        return bookingMapper.toResponse(findActiveByPublicId(publicId));
+        return toResponse(findActiveByPublicId(publicId));
     }
 
     // ── Get by Code ──────────────────────────────────────────────────────────
@@ -378,7 +392,7 @@ public class BookingServiceImpl implements BookingService {
         Booking booking = bookingRepository.findByBookingCodeAndDeletedAtIsNull(code)
                 .orElseThrow(() -> new BookingNotFoundException(code));
         subAgentScope.assertVisible(booking, code);   // sub-agent may only fetch its own booking
-        return bookingMapper.toResponse(booking);
+        return toResponse(booking);
     }
 
     // ── Get All (Paginated) ──────────────────────────────────────────────────
@@ -396,10 +410,7 @@ public class BookingServiceImpl implements BookingService {
         if (ownerFilter != null) spec = spec.and(BookingSpecification.ownedBy(ownerFilter));
         Page<Booking> bookingPage = bookingRepository.findAll(spec, pageable);
 
-        List<BookingResponseDTO> content = bookingPage.getContent()
-                .stream()
-                .map(bookingMapper::toResponse)
-                .toList();
+        List<BookingResponseDTO> content = toResponses(bookingPage.getContent());
 
         return PagedApiResponse.of(
                 "Bookings fetched successfully",
@@ -452,7 +463,7 @@ public class BookingServiceImpl implements BookingService {
                     "Booking " + saved.getBookingCode() + " status changed to " + saved.getStatus());
         }
 
-        return bookingMapper.toResponse(saved);
+        return toResponse(saved);
     }
 
     /**
@@ -500,14 +511,14 @@ public class BookingServiceImpl implements BookingService {
         // un-cancel, or reopen a terminal booking through this endpoint.
         boolean statusChanged = applyStatusOnUpdate(booking, request.getStatus());
         if (!statusChanged) {
-            return bookingMapper.toResponse(booking);   // requested status == current: nothing to do
+            return toResponse(booking);   // requested status == current: nothing to do
         }
 
         Booking saved = bookingRepository.save(booking);
         publishBookingEvent(statusEventType(saved.getStatus()), saved,
                 "Booking " + saved.getStatus() + ": " + saved.getBookingCode(),
                 "Booking " + saved.getBookingCode() + " status changed to " + saved.getStatus());
-        return bookingMapper.toResponse(saved);
+        return toResponse(saved);
     }
 
     // ── Cancel (with explicit lead handling) ──────────────────────────────────
@@ -594,7 +605,7 @@ public class BookingServiceImpl implements BookingService {
         log.info("Booking {} cancelled (tenant {}) — retained {}, refundDue {} [{}]",
                 saved.getBookingCode(), tenantId, quote.getTotalRetained(),
                 quote.getRefundDue(), record.getRefundStatus());
-        return bookingMapper.toResponse(saved);
+        return toResponse(saved);
     }
 
     /**
@@ -782,7 +793,7 @@ public class BookingServiceImpl implements BookingService {
                 "Payment updated: " + saved.getBookingCode(),
                 "₹" + request.getAmount() + " received for booking " + saved.getBookingCode()
                         + " (" + saved.getPaymentStatus() + ")");
-        return bookingMapper.toResponse(saved);
+        return toResponse(saved);
     }
     // ── Soft Delete ──────────────────────────────────────────────────────────
 
@@ -811,11 +822,10 @@ public class BookingServiceImpl implements BookingService {
     @Transactional(readOnly = true)
     public List<BookingResponseDTO> getByCustomerId(Long customerId) {
         Long ownerFilter = subAgentScope.ownerFilter();
-        return bookingRepository.findAllByCustomerIdAndDeletedAtIsNull(customerId)
+        return toResponses(bookingRepository.findAllByCustomerIdAndDeletedAtIsNull(customerId)
                 .stream()
                 .filter(b -> ownerFilter == null || ownerFilter.equals(b.getOwnerUserId()))
-                .map(bookingMapper::toResponse)
-                .toList();
+                .toList());
     }
 
     // ── Search ───────────────────────────────────────────────────────────────
@@ -829,10 +839,7 @@ public class BookingServiceImpl implements BookingService {
         Long ownerFilter = subAgentScope.ownerFilter();
         if (ownerFilter != null) spec = spec.and(BookingSpecification.ownedBy(ownerFilter));
 
-        return bookingRepository.findAll(spec)
-                .stream()
-                .map(bookingMapper::toResponse)
-                .toList();
+        return toResponses(bookingRepository.findAll(spec));
     }
 
     // ── Filter ───────────────────────────────────────────────────────────────
@@ -857,10 +864,7 @@ public class BookingServiceImpl implements BookingService {
         Long ownerFilter = subAgentScope.ownerFilter();
         if (ownerFilter != null) spec = spec.and(BookingSpecification.ownedBy(ownerFilter));
 
-        return bookingRepository.findAll(spec)
-                .stream()
-                .map(bookingMapper::toResponse)
-                .toList();
+        return toResponses(bookingRepository.findAll(spec));
     }
 
     // ── Stats ────────────────────────────────────────────────────────────────
@@ -945,7 +949,39 @@ public class BookingServiceImpl implements BookingService {
         log.info("Voucher send requested for booking: {}", booking.getBookingCode());
     }
 
+    // ── Assignment ───────────────────────────────────────────────────────────
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<BookingAssigneeDto> eligibleAssignees() {
+        return assigneeResolver.eligibleUsers(requireTenantId()).stream()
+                .map(u -> new BookingAssigneeDto(
+                        u.getPublicId(), u.getName(), u.getEmail(),
+                        u.getRole() != null ? u.getRole().name() : null))
+                .toList();
+    }
+
     // ── Private Helpers ──────────────────────────────────────────────────────
+
+    /**
+     * The single place a Booking becomes a full response. Builds the assignee view for exactly the
+     * rows being rendered so nothing downstream has to remember to; every {@code toResponse} in this
+     * class goes through here or {@link #toResponses(List)}.
+     */
+    private BookingResponseDTO toResponse(Booking booking) {
+        return bookingMapper.toResponse(booking, assigneeViewFactory.of(booking));
+    }
+
+    /**
+     * List/page variant — resolves every assignee on the page in ONE query. Mapping the list with
+     * {@link #toResponse(Booking)} instead would be a query per row.
+     */
+    private List<BookingResponseDTO> toResponses(List<Booking> bookings) {
+        BookingAssigneeView assignees = assigneeViewFactory.of(bookings);
+        return bookings.stream()
+                .map(b -> bookingMapper.toResponse(b, assignees))
+                .toList();
+    }
 
     private Booking findActiveByPublicId(UUID publicId) {
         Booking booking = bookingRepository.findByPublicIdAndDeletedAtIsNull(publicId)

@@ -18,8 +18,10 @@ security/perf rather than per-field CRUD. Severity: 🔴 High · 🟠 Medium · 
 **Skipped intentionally:** H3 (per user — rotation is yours), L5 (Flyway forbidden by CLAUDE.md),
 L2 (vendor `getBookings`/email = feature work).
 
-**Needs frontend (not done):** H2 (tenant discriminator at login), M3 (`Long id`→`publicId` in URLs),
+**Needs frontend (not done):** M3 (`Long id`→`publicId` in URLs),
 H4 (notification `Long`→`publicId` — verify what the frontend sends first).
+(H2 was listed here — it turned out to need **no** frontend at all once email was made globally
+unique instead of tenant-discriminated at login. See H2 below.)
 
 New optional config (sensible defaults): `app.cors.allowed-origins`, `app.ratelimit.trusted-proxies`.
 
@@ -37,14 +39,38 @@ via `findByEmail`/`findByEmailAndTenantId` with **no `deletedAt IS NULL` filter*
 **Fix:** in `userLogin`, reject when `!isActive` or `deletedAt != null`; in `JwtAuthFilter`, reject
 `!userDetails.isEnabled()`; change loaders to `...AndDeletedAtIsNull`.
 
-### H2. Login is email-only → multi-tenant collision + no tenant selection
+### H2. Login is email-only → multi-tenant collision + no tenant selection  ✅ FIXED
 `AuthServiceImpl.userLogin` uses `userRepository.findByEmail(email)`. Users are unique per
 `(email, tenant_id)` (see `db/indexes.sql` note), so the **same email can exist in multiple tenants**.
 - Two tenants with the same email → `IncorrectResultSizeDataAccessException` (500), login broken.
 - There is no way to pick the tenant at login.
 Same ambiguity in `UserDetailsServiceImpl.loadUserByUsername` and the `JwtAuthFilter` fallback
 (role = tenant user butuh `tenantId == null` → `loadUserByUsername(email)`).
-**Fix:** add a tenant discriminator at login (org code / subdomain) and query by `(email, tenantId)`.
+~~**Fix:** add a tenant discriminator at login (org code / subdomain) and query by `(email, tenantId)`.~~
+
+**Resolved the other way round — the schema moved, not the login.** Email is now unique
+**platform-wide** (`uq_users_email_active` in `db/indexes.sql`, partial on `deleted_at IS NULL`);
+`uq_user_email_tenant` is dropped and the `@UniqueConstraint` is gone from `User.java`. One address
+= one account, so the email-only lookup is now a well-posed question and needs no discriminator.
+
+Why not the prescribed org-code/subdomain fix: `Tenant.organizationCode` is exposed on **no**
+tenant-facing endpoint (SuperAdmin console surfaces only), so a login field would have asked users
+to type a code they had no way to learn — which is why this sat "product-gated" rather than shipped.
+Global uniqueness needed no frontend change, and landed while the DB happened to hold zero
+duplicates, so the migration was free.
+
+Cost, accepted deliberately: one person can no longer hold accounts at two agencies under the same
+address (relevant to the sub-agent/franchise layer) — they need a second address.
+
+Also closed with it: all four writers now check globally and normalize to lowercase
+(`UserServiceImpl`, `SubAgentServiceImpl`, `TenantServiceImpl` — which previously had **no** user-email
+check at all — and `DevDataSeeder`); `changePassword` now re-loads by `id + tenantId` instead of by
+bare email; `DevDataSeeder.getOrCreateTenant()` resolves by code instead of `findAll().findFirst()`,
+which is what produced the duplicate in the first place.
+
+⚠ The constraint lives in `db/indexes.sql`, which runs with `continue-on-error=true` — a failed
+creation is silent. Verify with:
+`SELECT indexname FROM pg_indexes WHERE tablename='users' AND indexname='uq_users_email_active';`
 
 ### H3. Secrets committed to `application.properties`
 Real credentials are in the repo: `spring.datasource.password=Admin123`, Gmail app password

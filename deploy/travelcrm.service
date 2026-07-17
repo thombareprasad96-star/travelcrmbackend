@@ -1,0 +1,124 @@
+# ===================================================================
+# TravelCRM API — systemd unit
+# -------------------------------------------------------------------
+# Install:
+#   sudo cp deploy/travelcrm.service /etc/systemd/system/travelcrm.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now travelcrm
+# Logs:      journalctl -u travelcrm -f
+# Restart:   sudo systemctl restart travelcrm      (graceful — see TimeoutStopSec)
+# ===================================================================
+
+[Unit]
+Description=TravelCRM API (Spring Boot)
+Documentation=file:/opt/travelcrm/docs/DEPLOYMENT.md
+# Wants= not Requires=: if Postgres is briefly down we want the API to keep
+# retrying and come back on its own, not to be stopped along with it.
+After=network-online.target postgresql.service
+Wants=network-online.target postgresql.service
+
+# 5 failures in 5 min stops the retry loop. A crash-looping app that restarts
+# forever hides a config error and hammers Postgres; this surfaces it as `failed`.
+# These are [Unit] directives — systemd ignores them under [Service] ("Unknown key
+# name"), silently falling back to the 10s default, which RestartSec=10s plus JVM
+# start time can never trip. The rate limit then never fires and `systemctl is-failed`
+# stays green through an endless restart loop.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=travelcrm
+Group=travelcrm
+WorkingDirectory=/opt/travelcrm
+
+# The entire keyring. 640 root:travelcrm — see travelcrm.env.example.
+EnvironmentFile=/etc/travelcrm/travelcrm.env
+
+# ── Timezone ────────────────────────────────────────────────────────
+# A fresh VPS is almost always UTC. Every cron in this app is written in local
+# wall-clock terms ("daily at 02:30", the 08:00 document-expiry mail), and the
+# business is Indian — left on UTC they fire 5h30m early, so the "morning"
+# reminder mail lands at 2:30 AM for the tenant. Set it explicitly rather than
+# depending on the host's /etc/localtime.
+Environment=TZ=Asia/Kolkata
+
+# ── Active profile ──────────────────────────────────────────────────
+# Pinned HERE, not left to the env file. application.properties resolves
+# spring.profiles.active=${SPRING_PROFILES_ACTIVE:default}, and `default` does not
+# load application-prod.properties at all: the dev seeder runs against the production
+# database, the git-history JWT keys go live, and trash retention drops to 1 day —
+# hard-deleting real records after 24h. ProductionConfigValidator is itself
+# @Profile("prod"), so it cannot catch its own non-activation. EnvironmentFile=
+# tolerates one mistyped line in silence; this does not.
+Environment=SPRING_PROFILES_ACTIVE=prod
+
+# ── JVM sizing for a KVM2 box (2 vCPU / 8 GB), Postgres on the SAME host ──
+# Budget:  OS ~0.5 GB | Postgres ~2.5 GB | JVM ~3 GB | ~2 GB left as page cache,
+# which is what makes Postgres fast. Do not raise -Xmx without shrinking Postgres.
+#
+# -Xms512m/-Xmx2g          heap; this app is I/O-bound, a bigger heap just means
+#                          longer GC pauses and less page cache for Postgres.
+# -XX:MaxMetaspaceSize     Spring + Hibernate + Spring AI load a LOT of classes;
+#                          uncapped metaspace is a slow native-memory leak.
+# -XX:+ExitOnOutOfMemoryError  die on OOM so systemd restarts us cleanly, instead of
+#                          limping along half-broken serving 500s to a real tenant.
+# -XX:+HeapDumpOnOutOfMemoryError  one dump to diagnose it afterwards.
+#
+# The QUOTES are load-bearing. systemd parses Environment= as a whitespace-separated
+# list of NAME=VALUE pairs, so an unquoted value containing spaces is split: only
+# -Xms512m survives and every flag after it is dropped as an invalid assignment.
+# Nothing fails — the app boots, and -Xmx is simply never applied. Java 21's
+# UseContainerSupport then sizes the heap at 25% of MemoryMax=3800M (~950 MB),
+# metaspace is uncapped, and ExitOnOutOfMemoryError is gone, so an OOM leaves the
+# app limping and serving 500s instead of restarting cleanly.
+# ExecStart's $JAVA_OPTS stays UNQUOTED on purpose: systemd word-splits an unquoted
+# $VAR on expansion, which is exactly what turns the quoted value back into
+# separate argv entries.
+Environment="JAVA_OPTS=-Xms512m -Xmx2g -XX:MaxMetaspaceSize=512m -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/var/log/travelcrm -Djava.awt.headless=true -Dfile.encoding=UTF-8"
+
+ExecStart=/usr/bin/java $JAVA_OPTS -jar /opt/travelcrm/travelcrm.jar
+
+# ── Restart policy ──────────────────────────────────────────────────
+Restart=on-failure
+RestartSec=10s
+# StartLimitIntervalSec/StartLimitBurst live in [Unit] — see the top of this file.
+
+# server.shutdown=graceful gives in-flight requests up to 30s to finish
+# (spring.lifecycle.timeout-per-shutdown-phase). Allow more than that before SIGKILL,
+# or systemd would kill mid-transaction and defeat the graceful config.
+TimeoutStopSec=45s
+KillSignal=SIGTERM
+
+# ── Resource guards ─────────────────────────────────────────────────
+# Ceilings, not targets. The point is that a runaway JVM gets killed on its own
+# instead of driving the box into swap and taking Postgres down with it.
+MemoryHigh=3G
+MemoryMax=3800M
+# Default 1024 is too low once SSE streams + the DB pool + Tomcat threads all hold
+# sockets at once.
+LimitNOFILE=65536
+
+# ── Sandboxing ──────────────────────────────────────────────────────
+# This process is internet-facing (via nginx) and runs a big dependency tree.
+# These cost nothing and shrink what a deserialization/RCE bug could reach.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# ProtectSystem=strict makes the whole filesystem read-only, so name the only
+# paths the app legitimately writes: rolling logs + the OOM heap dump.
+ReadWritePaths=/var/log/travelcrm
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=travelcrm
+
+[Install]
+WantedBy=multi-user.target
