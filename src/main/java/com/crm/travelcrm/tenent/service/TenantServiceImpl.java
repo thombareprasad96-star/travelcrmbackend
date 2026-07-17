@@ -4,6 +4,7 @@ import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.auth.enums.Role;
 import com.crm.travelcrm.auth.repository.UserRepository;
 import com.crm.travelcrm.booking.cancellation.service.CancellationPolicySeeder;
+import com.crm.travelcrm.master.geography.service.CountrySeeder;
 import com.crm.travelcrm.common.context.PlatformActor;
 import com.crm.travelcrm.common.context.PlatformContext;
 import com.crm.travelcrm.common.exception.BusinessException;
@@ -58,6 +59,7 @@ public class TenantServiceImpl implements TenantService {
     private final PlanRepository planRepository;
     private final BillingRecordRepository billingRecordRepository;
     private final CancellationPolicySeeder cancellationPolicySeeder;
+    private final CountrySeeder countrySeeder;
     private final BillingService billingService;
     private final ProrationCalculator prorationCalculator;
 
@@ -135,6 +137,13 @@ public class TenantServiceImpl implements TenantService {
         // Seed the conservative tiered cancellation-charge default so the tenant can cancel/refund
         // from day one (without it, resolution would fall through to a zero charge). Same transaction.
         cancellationPolicySeeder.ensureCompanyDefault(saved.getId());
+
+        // Seed the ISO country list. Country is tenant-scoped and nothing else creates these rows in
+        // production, so without this the tenant opens to an empty Country dropdown — and since
+        // Destination carries a NOT NULL country FK, the whole Destination → City → Hotel cascade is
+        // unusable until someone types countries in by hand. Same transaction: a tenant that cannot be
+        // given its countries is not a tenant worth creating half-way.
+        countrySeeder.ensureCountries(saved.getId());
 
         audit(PlatformAuditAction.TENANT_CREATE, saved,
                 "Created tenant " + saved.getOrganizationName()

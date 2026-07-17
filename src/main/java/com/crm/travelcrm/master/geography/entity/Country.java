@@ -49,9 +49,27 @@ public class Country extends BaseTenantEntity {
     @Column(name = "name", nullable = false, length = 120)
     private String name;
 
-    /** 2-char ISO country code, upper-cased by the service. */
+    /** 2-char ISO 3166-1 alpha-2 code, upper-cased by the service. The seeding key — see CountrySeeder. */
     @Column(name = "code", nullable = false, length = 2)
     private String code;
+
+    /**
+     * ISO 3166-1 alpha-3 code (IND, NPL). NULLABLE on purpose: rows created by hand through the
+     * existing Country CRUD predate this column and only ever supplied a 2-char code, so requiring it
+     * would break every such row on the next update.
+     */
+    @Column(name = "iso_code3", length = 3)
+    private String isoCode3;
+
+    /**
+     * E.164 calling code including the plus ("+91").
+     *
+     * <p>Stored WITH the plus and as a String, not an int: "+1" is shared by the US, Canada and a
+     * dozen Caribbean states, and a numeric column would silently drop the plus that
+     * {@code PhoneCanonicalizer} keys on.
+     */
+    @Column(name = "dial_code", length = 8)
+    private String dialCode;
 
     @Column(name = "description", columnDefinition = "TEXT")
     private String description;
