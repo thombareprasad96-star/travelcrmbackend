@@ -6,6 +6,7 @@ import com.crm.travelcrm.master.geography.dto.request.UpdateDestinationRequest;
 import com.crm.travelcrm.master.geography.dto.response.DestinationDto;
 import com.crm.travelcrm.master.geography.dto.response.DestinationListResponseDTO;
 import org.springframework.data.domain.Page;
+import org.springframework.web.multipart.MultipartFile;
 
 public interface DestinationService {
 
@@ -37,4 +38,7 @@ public interface DestinationService {
 
     /** Hard delete — cascades to cities and their children. */
     void delete(Long destinationId);
+
+    /** Upload a destination image to Cloudinary (quota-enforced + metered); returns the secure URL. */
+    String uploadImage(MultipartFile file);
 }

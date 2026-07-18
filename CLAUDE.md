@@ -680,22 +680,22 @@ All pages live under `src/features/masters/pages/`, all services under `src/feat
 
 ### Image uploads
 
-**All master images upload browser-direct to Cloudinary** (unsigned preset via `XMLHttpRequest`, so progress is reportable). The backend never sees the file — only the resulting `secure_url`, stored as `imagePath`.
+**All image uploads are backend-proxied** — the browser POSTs multipart to a backend `/upload-image` endpoint, which forwards to Cloudinary via `CloudinaryService.uploadImage(file, folder)`. That chokepoint hard-enforces the tenant storage quota **before** upload (`storageQuota.enforceWithinQuota`, `CloudinaryService.java:27` — 403 on breach) and meters bytes **after** (`meterUpload` → `StorageMeter.recordUpload`, `:37`) for the SuperAdmin usage dashboard. The FE stores only the returned `secure_url` as `imagePath`. There is NO browser-direct Cloudinary upload anymore; `VITE_CLOUDINARY_*` env vars are dead.
 
-| Entity | Uploader | Called from |
-|---|---|---|
-| Hotel | `uploadHotelImageToCloudinary` — `api/HotelService.js:15` | `pages/Hotel.jsx:223`, `features/quotation/components/HotelTab.jsx:2126` |
-| Sightseeing | `uploadSightseeingImageToCloudinary` — `api/SightseeingService.js:23` (via `sightseeingService.uploadSightseeingImage`) | `pages/Sightseeing.jsx:203` |
-| Vehicle | `uploadImageToCloudinary` — `api/VehicleService.js:17` | `pages/Vehiclas.jsx:133` |
-| Destination | `uploadImageToCloudinary` — `api/DestinationService.js:33` | `pages/Destinations.jsx:881` |
+All four master uploaders delegate to one shared helper `uploadImageViaApi(endpoint, file, onProgress)` (`features/masters/api/imageUpload.js`) — axios via `@shared/api/http` (JWT attached), 120s per-request timeout, progress via `onUploadProgress`, response read from `res.data.data.imagePath`. The exported function names still say "ToCloudinary" — kept deliberately so no caller changed.
 
-**Company logo/favicon are the only backend-proxied uploads left** — multipart `POST /company/logo` | `/company/favicon` (`features/settings/api/companyService.js:73,88`) → `CloudinaryService.uploadImage(file, folder)`.
+| Entity | FE function (legacy name kept) | Backend endpoint | Called from |
+|---|---|---|---|
+| Hotel | `uploadHotelImageToCloudinary` — `api/HotelService.js` | `POST /api/hotels/upload-image` | `pages/Hotel.jsx`, `features/quotation/components/HotelTab.jsx` |
+| Sightseeing | `sightseeingService.uploadSightseeingImage` (wraps `uploadSightseeingImageToCloudinary`) — `api/SightseeingService.js` | `POST /api/sightseeings/upload-image` | `pages/Sightseeing.jsx`, `features/quotation/components/SightseeingTab.jsx` |
+| Vehicle | `uploadImageToCloudinary` — `api/VehicleService.js` | `POST /api/vehicles/upload-image` | `pages/Vehiclas.jsx` |
+| Destination | `uploadImageToCloudinary` — `api/DestinationService.js` | `POST /api/destinations/upload-image` | `pages/Destinations.jsx` |
 
-**Gotcha — direct uploads bypass the storage quota.** `CloudinaryService.uploadImage()` hard-enforces the tenant plan cap (`storageQuota.enforceWithinQuota`, `CloudinaryService.java:27`) and records bytes for the SuperAdmin usage dashboard (`meterUpload` → `StorageMeter.recordUpload`, `:37`). Browser-direct uploads hit neither, so master images are **neither quota-checked nor counted**. Route a new upload through the backend if it must be metered.
+Endpoint guards: hotels + sightseeings allow `PLATFORM_ADMIN | MASTER_MANAGE | QUOTATION_CREATE | QUOTATION_UPDATE` (the quotation-builder tabs upload too); vehicles, destinations and testimonials are `PLATFORM_ADMIN | MASTER_MANAGE` only. Company logo/favicon: multipart `POST /company/logo` | `/company/favicon` (`features/settings/api/companyService.js:73,88`), guard `SETTINGS_MANAGE`.
 
-**Never send PII or financial documents to Cloudinary.** Cloudinary URLs are public and unauthenticated. Traveler documents are Postgres `bytea` served only through the ownership-checked portal endpoint (`TravelerDocument.java:54-56`); booking invoices/vouchers/credit notes are rendered on the fly with no Cloudinary caching (`BookingPdfService.java:33`).
+**Never send PII or financial documents to Cloudinary.** Cloudinary URLs are public and unauthenticated. Traveler documents are Postgres `bytea` served only through the ownership-checked portal endpoint (`TravelerDocument.java:54-56`); booking invoices/vouchers/credit notes are rendered on the fly with no Cloudinary caching (`BookingPdfService.java:33`). Known violation to fix: offline payment proofs (`upgrade-proofs`, `subagent-license-proofs` folders) currently go to public Cloudinary URLs.
 
-Dead code — defined, zero callers: `hotelService.uploadHotelImage` (`HotelService.js:189`, marked LEGACY) and `hotelService.uploadRoomTypeImages` (`HotelService.js:227`). The backend `/upload-image` endpoints on `hotels`, `sightseeings`, `vehicles` and `testimonials` still exist and still return `{imagePath}` — but nothing in the FE calls them.
+Dead code — defined, zero callers: `hotelService.uploadHotelImage` (`HotelService.js`, marked LEGACY). `hotelService.uploadRoomImages` (note: NOT `uploadRoomTypeImages`) is **live** — called from `Hotel.jsx` after room-type save, POSTs to `/hotels/{hotelId}/room-types/{roomTypeId}/images`. `CloudinaryService.deleteImage` has zero callers — replaced images are never removed from Cloudinary and metered bytes only ever grow.
 
 ### Frontend env vars
 
@@ -703,11 +703,10 @@ Vite only exposes `VITE_*`.
 
 | Var | Read by | Notes |
 |---|---|---|
-| `VITE_API_URL` | `shared/api/http.js:20`, `console/api/consoleHttp.js:19`, `console/api/consoleNotificationService.js:18`, `features/portal/api/portalClient.js:19`, `features/assistant/api/assistantClient.js:14`, `features/quotation/pages/QuotationWebView.jsx:5`, `app/chrome/ImpersonationBanner.jsx:5`, `app/chrome/Navbar.jsx:1113`, `shared/lib/access.js:157` | **Not set in `.env`** — all 9 sites silently fall back to `http://localhost:8080/api` (Navbar falls back to `""`). **A deploy that forgets it points production at localhost instead of failing loudly** — and see the Navbar double-`/api` gotcha above. |
-| `VITE_CLOUDINARY_CLOUD_NAME` | `DestinationService.js:21`, `HotelService.js:8`, `VehicleService.js:6`, `SightseeingService.js:14` | Missing ⇒ uploaders reject with "Cloudinary not configured". |
-| `VITE_CLOUDINARY_UPLOAD_PRESET` | same four | Must be an **unsigned** preset — a signed one 401s from the browser. |
+| `VITE_API_URL` | `shared/api/http.js:20`, `console/api/consoleHttp.js:19`, `console/api/consoleNotificationService.js:18`, `features/portal/api/portalClient.js:19`, `features/assistant/api/assistantClient.js:14`, `features/quotation/pages/QuotationWebView.jsx:5`, `app/chrome/ImpersonationBanner.jsx:5`, `app/chrome/Navbar.jsx:1113`, `shared/lib/access.js:157` | Set in `.env.production` (`https://api.mytripsafar.com/api`); unset in dev (Vite proxy covers it). All 9 sites silently fall back to `http://localhost:8080/api` (Navbar falls back to `""`). **A deploy that forgets it points production at localhost instead of failing loudly** — and see the Navbar double-`/api` gotcha above. |
+| ~~`VITE_CLOUDINARY_*`~~ | nothing — dead since the backend-proxy migration | Uploads go through backend `/upload-image` endpoints; Cloudinary credentials are backend-only (`CLOUDINARY_CLOUD_NAME/API_KEY/API_SECRET` server env vars → `cloudinary.*` properties). Remove from any lingering `.env`. |
 
-`.env` is gitignored (`.gitignore:15-18`) and untracked — no credentials are committed. **There is no `.env.example`** despite the gitignore whitelisting one, so the table above is the only reference a fresh clone has.
+`.env` / `.env.production` are gitignored and untracked — no credentials committed at HEAD (**but real Cloudinary secrets exist in git history pre-`5eeed5c`; repo is public, rotate them**). `.env.example` IS tracked and is the env contract reference for a fresh clone.
 ---
 
 ## Common Patterns & Pitfalls

@@ -38,6 +38,12 @@ public class QuotationMapper {
         // version is NOT taken from the request — the service assigns it (per-lead auto
         // numbering on create: v1.0, v2.0, …) and leaves it unchanged on update.
         q.setStage(req.getQuotationStage() != null ? req.getQuotationStage() : QuotationStage.DRAFT);
+        // Merge, not replace: an omitted templateStyle KEEPS the stored one. applyRequest runs on
+        // update too, and a stale client that predates the field would otherwise silently revert a
+        // Modern quotation to Classic on its next save. Switching back is always explicit ("CLASSIC").
+        if (req.getTemplateStyle() != null) {
+            q.setTemplateStyle(req.getTemplateStyle());
+        }
         q.setCoverImageUrl(req.getCoverImageUrl());
         q.setNotes(req.getNotes());
 
@@ -72,6 +78,22 @@ public class QuotationMapper {
         }
     }
 
+    /**
+     * Money hygiene, applied on the WRITE path only: a section the customer is not being offered
+     * contributes NOTHING to the price.
+     *
+     * <p>{@code computeTotals} sums the six {@code *Amount} scalars unconditionally — it has no view
+     * of the included flags, and it must not gain one: it is a READ path, and teaching it to skip
+     * excluded sections would silently restate the grand total of every quotation already sent as a
+     * share link. So the zeroing happens here instead, once, at the moment the section is written.
+     *
+     * <p>Null counts as excluded, matching how the templates read the flag (Thymeleaf treats a null
+     * Boolean as false) and how the existing null-section branches below already behave.
+     */
+    private static BigDecimal amountIfIncluded(Boolean included, BigDecimal amount) {
+        return Boolean.TRUE.equals(included) ? amount : BigDecimal.ZERO;
+    }
+
     private void applyFlight(QuotationRequestDto.FlightSection f, Quotation q) {
         q.getFlightSegments().clear();
         if (f == null) {
@@ -81,7 +103,7 @@ public class QuotationMapper {
         }
         q.setFlightIncluded(f.getIncluded());
         q.setFlightTitle(f.getTitle());
-        q.setFlightAmount(f.getAmount());
+        q.setFlightAmount(amountIfIncluded(f.getIncluded(), f.getAmount()));
         q.setFlightJourney(f.getJourney());
         if (f.getSegments() != null) {
             for (QuotationRequestDto.Segment s : f.getSegments()) {
@@ -129,7 +151,7 @@ public class QuotationMapper {
         }
         q.setHotelIncluded(h.getIncluded());
         q.setHotelTitle(h.getTitle());
-        q.setHotelAmount(h.getAmount());
+        q.setHotelAmount(amountIfIncluded(h.getIncluded(), h.getAmount()));
         q.setHotelNotes(h.getNotes());
         if (h.getHotels() != null) {
             for (QuotationRequestDto.HotelItem hi : h.getHotels()) {
@@ -159,7 +181,7 @@ public class QuotationMapper {
         }
         q.setSightseeingIncluded(s.getIncluded());
         q.setSightseeingTitle(s.getTitle());
-        q.setSightseeingAmount(s.getAmount());
+        q.setSightseeingAmount(amountIfIncluded(s.getIncluded(), s.getAmount()));
         q.setSightseeingNotes(s.getNotes());
         if (s.getDays() != null) {
             for (QuotationRequestDto.DayItem d : s.getDays()) {
@@ -196,7 +218,7 @@ public class QuotationMapper {
         }
         q.setCruiseIncluded(c.getIncluded());
         q.setCruiseTitle(c.getTitle());
-        q.setCruiseAmount(c.getAmount());
+        q.setCruiseAmount(amountIfIncluded(c.getIncluded(), c.getAmount()));
         if (c.getCruises() != null) {
             for (QuotationRequestDto.CruiseItem ci : c.getCruises()) {
                 q.addCruise(QuotationCruise.builder()
@@ -224,7 +246,7 @@ public class QuotationMapper {
         }
         q.setVehicleIncluded(v.getIncluded());
         q.setVehicleTitle(v.getTitle());
-        q.setVehicleAmount(v.getAmount());
+        q.setVehicleAmount(amountIfIncluded(v.getIncluded(), v.getAmount()));
         if (v.getVehicles() != null) {
             for (QuotationRequestDto.VehicleItem vi : v.getVehicles()) {
                 q.addVehicle(QuotationVehicle.builder()
@@ -252,7 +274,7 @@ public class QuotationMapper {
         }
         q.setAddonIncluded(a.getIncluded());
         q.setAddonTitle(a.getTitle());
-        q.setAddonAmount(a.getAmount());
+        q.setAddonAmount(amountIfIncluded(a.getIncluded(), a.getAmount()));
         if (a.getItems() != null) {
             for (QuotationRequestDto.AddonItem it : a.getItems()) {
                 q.addAddon(QuotationAddon.builder()
@@ -296,6 +318,8 @@ public class QuotationMapper {
                 .days(days)
                 .rooms(rooms)
                 .pdfUrl(q.getPdfUrl())
+                // Null column (row predates the field) reads as CLASSIC — the zero-regression rule.
+                .templateStyle(com.crm.travelcrm.quotation.enums.TemplateStyle.orDefault(q.getTemplateStyle()))
                 .quotationStage(q.getStage())
                 .leadStage(q.getLeadStage())
                 .coverImageUrl(q.getCoverImageUrl())
@@ -349,6 +373,7 @@ public class QuotationMapper {
                         .amount(q.getAddonAmount())
                         .items(q.getAddons().stream().map(this::toAddon).toList())
                         .build())
+                .allowedServices(new ArrayList<>(q.getAllowedServices()))
                 .inclusions(new ArrayList<>(q.getInclusions()))
                 .exclusions(new ArrayList<>(q.getExclusions()))
                 .paymentPolicies(new ArrayList<>(q.getPaymentPolicies()))
@@ -490,6 +515,7 @@ public class QuotationMapper {
                 .version(q.getVersion())
                 .versionNumber(q.getVersionNumber())
                 .pdfUrl(q.getPdfUrl())
+                .templateStyle(com.crm.travelcrm.quotation.enums.TemplateStyle.orDefault(q.getTemplateStyle()))
                 .quotationStage(q.getStage())
                 .leadStage(q.getLeadStage())
                 .customerName(q.getCustomerName())
