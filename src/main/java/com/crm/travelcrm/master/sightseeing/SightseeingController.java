@@ -88,6 +88,9 @@ public class SightseeingController {
         return ResponseEntity.noContent().build();
     }
 
+    // Deliberately the same authority as create/update above: uploading is only useful as a step
+    // toward saving a sightseeing, so a QUOTATION_* holder who cannot save must fail here — before
+    // the bytes are irreversibly charged to the tenant's storage quota — rather than after.
     @PostMapping(value = "/upload-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<ApiResponse<Map<String, String>>> uploadImage(@RequestParam("file") MultipartFile file) {

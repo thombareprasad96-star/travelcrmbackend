@@ -1,6 +1,5 @@
 package com.crm.travelcrm.quotation.service;
 
-import com.crm.travelcrm.common.cloudinary.CloudinaryService;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.settings.service.EmailAuditService;
 import com.crm.travelcrm.settings.service.TenantMailSenderFactory;
@@ -19,6 +18,7 @@ import com.crm.travelcrm.quotation.dto.PublicQuotationResponseDto;
 import com.crm.travelcrm.quotation.dto.QuotationResponseDto;
 import com.crm.travelcrm.quotation.dto.QuotationSummaryDto;
 import com.crm.travelcrm.quotation.entity.*;
+import com.crm.travelcrm.quotation.enums.QuotationSection;
 import com.crm.travelcrm.quotation.enums.QuotationStage;
 import com.crm.travelcrm.quotation.mapper.QuotationMapper;
 import com.crm.travelcrm.quotation.repository.QuotationRepository;
@@ -56,7 +56,6 @@ public class QuotationServiceImpl implements QuotationService {
     private final QuotationRepository quotationRepository;
     private final QuotationMapper quotationMapper;
     private final QuotationPdfService quotationPdfService;
-    private final CloudinaryService cloudinaryService;
     private final LeadAccessGuard leadAccessGuard;
     private final TenantMailSenderFactory tenantMailSenderFactory;
     private final EmailAuditService emailAudit;
@@ -283,16 +282,18 @@ public class QuotationServiceImpl implements QuotationService {
         Quotation copy = buildNextVersion(loadOwned(publicId), tenantId);
         Quotation saved = quotationRepository.save(copy);
 
-        // Render + upload the PDF, then persist its URL. A failure here must NOT lose
-        // the new version — we leave pdfUrl null and fall back to on-the-fly rendering
-        // on GET /pdf.
-        try {
-            saved.setPdfUrl(generateAndStorePdf(saved));
-            quotationRepository.save(saved);
-        } catch (Exception ex) {
-            log.error("New version {} created, but PDF generation/upload failed: {}",
-                    saved.getPublicId(), ex.getMessage(), ex);
-        }
+        // NO PDF is uploaded anywhere. A quotation PDF carries the customer's name, phone, email,
+        // travel dates and pricing, and a Cloudinary raw asset is served from a PUBLIC, unauthenticated
+        // URL that outlives the quotation itself — soft-deleting the row could not take it down. That
+        // is the same reason BookingPdfService renders invoices/vouchers on the fly and caches nothing
+        // (see its javadoc); quotations were the one place that broke the rule.
+        //
+        // The cache also barely paid for itself: a new version is created as a DRAFT, so the first
+        // edit called update() and nulled pdfUrl anyway — leaving an orphaned public PDF that nothing
+        // referenced and nothing ever deleted.
+        //
+        // Both /pdf endpoints render on demand instead. That cost is already paid on v1 and on every
+        // edited quotation today.
 
         log.info("New version created | publicId: {} | v{} | root id: {}",
                 saved.getPublicId(), saved.getVersionNumber(), saved.getParentQuotationId());
@@ -312,13 +313,47 @@ public class QuotationServiceImpl implements QuotationService {
     @Override
     @Transactional(readOnly = true)
     public QuotationPdfResource getPdf(UUID publicId) {
+        return getPdf(publicId, null);
+    }
+
+    @Override
+    @Transactional
+    public QuotationResponseDto setTemplateStyle(UUID publicId,
+                                                 com.crm.travelcrm.quotation.enums.TemplateStyle style) {
+        Long tenantId = currentTenantId();
+        Quotation q = quotationRepository
+                .findByPublicIdAndTenantIdAndDeletedAtIsNull(publicId, tenantId)
+                .orElseThrow(() -> new ResourceNotFoundException("Quotation not found: " + publicId));
+        subAgentScope.assertVisible(q, publicId);   // a sub-agent may only restyle its own quotation
+
+        q.setTemplateStyle(com.crm.travelcrm.quotation.enums.TemplateStyle.orDefault(style));
+        Quotation saved = quotationRepository.save(q);
+        log.info("Quotation {} template style set to {}", publicId, saved.getTemplateStyle());
+        return quotationMapper.toResponse(saved);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public QuotationPdfResource getPdf(UUID publicId, com.crm.travelcrm.quotation.enums.TemplateStyle style) {
         Quotation q = loadOwned(publicId);
-        if (StringUtils.hasText(q.getPdfUrl())) {
-            log.debug("getPdf({}) -> serving cached Cloudinary PDF: {}", publicId, q.getPdfUrl());
-            return QuotationPdfResource.remote(q.getPdfUrl());
+        QuotationResponseDto dto = quotationMapper.toResponse(q);
+        if (style != null) {
+            // Overridden on the DTO only — the entity is untouched, so this render cannot change what
+            // the customer sees on the share link. readOnly transaction, nothing to flush.
+            log.debug("getPdf({}) -> one-off style override {} (saved style stays {})",
+                    publicId, style, dto.getTemplateStyle());
+            dto.setTemplateStyle(style);
         }
-        log.debug("getPdf({}) -> no cached URL, rendering PDF inline", publicId);
-        return QuotationPdfResource.inline(quotationPdfService.render(quotationMapper.toResponse(q)));
+        // ALWAYS rendered here — never a redirect to a stored copy. Rows created before the Cloudinary
+        // upload was removed still hold a pdf_url; serving it would keep handing clients a public,
+        // undeletable URL for a document full of customer PII. The column is left populated on purpose:
+        // it is the only record of which assets are still sitting in Cloudinary's quotations/ folder
+        // and therefore the shopping list for the one-time cleanup.
+        log.debug("getPdf({}) -> rendering PDF inline", publicId);
+        // `dto` — NOT a fresh toResponse(q). Re-mapping here would rebuild the DTO from the entity and
+        // silently discard the style override set above, so every download came out in the saved
+        // design however the dialog was answered.
+        return QuotationPdfResource.inline(quotationPdfService.render(dto));
     }
 
     @Override
@@ -329,11 +364,10 @@ public class QuotationServiceImpl implements QuotationService {
         // publicId only. Read-only — never mutates and never exposes anything but this one PDF.
         Quotation q = quotationRepository.findByPublicIdAndDeletedAtIsNull(publicId)
                 .orElseThrow(() -> new ResourceNotFoundException("Quotation not found: " + publicId));
-        if (StringUtils.hasText(q.getPdfUrl())) {
-            log.debug("getPublicPdf({}) -> serving cached Cloudinary PDF: {}", publicId, q.getPdfUrl());
-            return QuotationPdfResource.remote(q.getPdfUrl());
-        }
-        log.debug("getPublicPdf({}) -> no cached URL, rendering PDF inline", publicId);
+        // Rendered, never redirected — see getPdf. This path matters most: it is the link the customer
+        // opens from WhatsApp, and a 302 sent their browser to the raw Cloudinary URL, putting a
+        // permanent public link to their own PII in their address bar and history.
+        log.debug("getPublicPdf({}) -> rendering PDF inline", publicId);
         return QuotationPdfResource.inline(quotationPdfService.render(quotationMapper.toResponse(q)));
     }
 
@@ -375,8 +409,11 @@ public class QuotationServiceImpl implements QuotationService {
                 .title(d.getTitle())
                 .version(d.getVersion())
                 .versionNumber(d.getVersionNumber())
-                .pdfUrl(d.getPdfUrl())
+                // pdfUrl deliberately NOT projected: on a legacy row it is a public Cloudinary link to
+                // this customer's own PII, and this DTO is served unauthenticated. The FE never read it
+                // — it builds /api/public/quotations/{id}/pdf itself — so nothing downstream notices.
                 .coverImageUrl(d.getCoverImageUrl())
+                .templateStyle(d.getTemplateStyle())   // already orDefault'd in toResponse — never null
                 .quoteNo(d.getQuoteNo())
                 .nights(d.getNights())
                 .days(d.getDays())
@@ -540,6 +577,16 @@ public class QuotationServiceImpl implements QuotationService {
         q.setInfants(lead.getInfants());
         q.setTravelDate(lead.getTravelDate());
         q.setDestination(resolveDestination(lead));
+
+        // Snapshot the lead's chosen services. This is the anti-retroactivity guard as much as a
+        // convenience: LeadServiceImpl clears and rewrites lead_services on every lead save, so a
+        // quotation that read the lead live would silently re-shape itself — including already-sent
+        // ones — the next time somebody edited the lead. Lead.services is EAGER, so this is free.
+        // Unknown ids (visa/insurance/passport) drop out in normalize(); an empty result is the
+        // fail-open "no lead information" case, exactly like the null-leadId early return above.
+        q.getAllowedServices().clear();
+        q.getAllowedServices().addAll(QuotationSection.normalize(lead.getServices()));
+
         log.debug("Snapshotted lead {} -> customer='{}' | destination='{}' | pax(a/c/i)={}/{}/{} | travelDate={} | leadStage={}",
                 lead.getPublicId(), q.getCustomerName(), q.getDestination(),
                 q.getAdults(), q.getChildren(), q.getInfants(), q.getTravelDate(), q.getLeadStage());
@@ -579,16 +626,8 @@ public class QuotationServiceImpl implements QuotationService {
         return copy;
     }
 
-    /** Renders the quotation PDF and stores it on Cloudinary at quotations/{publicId}.pdf. */
-    private String generateAndStorePdf(Quotation q) {
-        byte[] pdf = quotationPdfService.render(quotationMapper.toResponse(q));
-        String quotationNo = q.getPublicId().toString();
-        log.debug("Uploading quotation {} PDF to Cloudinary ({} bytes) at quotations/{}.pdf",
-                q.getPublicId(), pdf.length, quotationNo);
-        String url = cloudinaryService.uploadRaw(pdf, "quotations/" + quotationNo + ".pdf");
-        log.debug("Uploaded quotation {} PDF -> {}", q.getPublicId(), url);
-        return url;
-    }
+    // generateAndStorePdf() removed with the Cloudinary upload — see newVersion(). Quotation PDFs are
+    // rendered on demand and never persisted to a public bucket.
 
 
     /** Deep-copies a quotation (sans id/publicId/audit) for the duplicate / new-version features. */
@@ -597,11 +636,18 @@ public class QuotationServiceImpl implements QuotationService {
         c.setLeadId(src.getLeadId());
         c.setLeadPublicId(src.getLeadPublicId());
         c.setLeadStage(src.getLeadStage());
+        // Same reason as templateStyle below — this copy block drops whatever it omits. Without this
+        // the snapshot is lost and every duplicate/new-version silently falls back to the canonical
+        // section order, reordering the PDF against the original it was copied from.
+        c.getAllowedServices().addAll(src.getAllowedServices());
         c.setQuoteNo(src.getQuoteNo());     // versions share the family's quote number
         c.setTitle(src.getTitle());
         c.setVersion(newVersion);
         c.setStage(QuotationStage.DRAFT);
         c.setCoverImageUrl(src.getCoverImageUrl());
+        // The design travels with the family: without this line a Modern quotation's v2 (and every
+        // duplicate) silently reverts to Classic — this copy block is manual and drops what it omits.
+        c.setTemplateStyle(src.getTemplateStyle());
         c.setNotes(src.getNotes());
 
         c.setCustomerName(src.getCustomerName());
@@ -689,6 +735,10 @@ public class QuotationServiceImpl implements QuotationService {
                     .type(v.getType()).pickup(v.getPickup()).drop(v.getDrop())
                     .startDate(v.getStartDate()).endDate(v.getEndDate()).price(v.getPrice())
                     .pricePerVehicle(v.getPricePerVehicle()).qty(v.getQty()).notes(v.getNotes())
+                    // imagePath was the ONE image field this copy block dropped (hotels :653 and
+                    // activities :669 both carry theirs) — every new version/duplicate silently lost
+                    // its vehicle photos.
+                    .imagePath(v.getImagePath())
                     .build());
         }
 

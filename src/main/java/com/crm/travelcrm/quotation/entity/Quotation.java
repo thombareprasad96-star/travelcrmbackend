@@ -5,6 +5,7 @@ import com.crm.travelcrm.common.entity.Ownable;
 import com.crm.travelcrm.lead.enums.LeadStage;
 import com.crm.travelcrm.quotation.enums.DiscountType;
 import com.crm.travelcrm.quotation.enums.QuotationStage;
+import com.crm.travelcrm.quotation.enums.TemplateStyle;
 import jakarta.persistence.*;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
@@ -80,9 +81,25 @@ public class Quotation extends BaseTenantEntity implements Ownable {
     @Column(name = "parent_quotation_id")
     private Long parentQuotationId;
 
-    /** Cloudinary URL of the rendered PDF, set when a version is generated. */
+    /**
+     * LEGACY. Holds a Cloudinary URL on rows created while new-version PDFs were uploaded there.
+     * <b>Nothing writes or serves it any more</b> — quotation PDFs are rendered on demand because the
+     * document carries customer PII and a Cloudinary raw asset is public and outlives the row.
+     * Kept populated deliberately: it is the only inventory of the assets still sitting in
+     * Cloudinary's {@code quotations/} folder, i.e. the list for the one-time cleanup.
+     */
     @Column(name = "pdf_url", length = 600)
     private String pdfUrl;
+
+    /**
+     * Which design the PDF and the public weblink render in. NULLABLE — every row that predates the
+     * column reads as null, and null MEANS {@link TemplateStyle#CLASSIC} (enforced via
+     * {@code TemplateStyle.orDefault} at every read). That null-tolerance is the zero-regression
+     * guarantee, not an accident; do not make this column NOT NULL.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "template_style", length = 20)
+    private TemplateStyle templateStyle;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "stage", nullable = false, length = 30)
@@ -228,6 +245,29 @@ public class Quotation extends BaseTenantEntity implements Ownable {
     @BatchSize(size = 50)
     @Builder.Default
     private List<QuotationAddon> addons = new ArrayList<>();
+
+    /**
+     * SNAPSHOT of the services the originating lead had selected, as {@code QuotationSection} keys in
+     * the order the lead listed them. Taken once when the lead is linked; a later edit to the lead
+     * cannot mutate an existing quotation (the lead's own service list is cleared and rewritten
+     * wholesale on every lead save, so reading it live would silently re-shape sent quotations).
+     *
+     * <p><b>Empty means "no lead information" and FAILS OPEN</b> — every section is allowed and the
+     * canonical order applies. That covers rows with no lead, legacy rows created before this
+     * collection existed, and ingested leads that carry no services.
+     *
+     * <p>This is an ORDERING/selection hint, never an authorization: the user can always tick
+     * "Include X in Quotation" on a service the lead did not ask for, and that choice is honoured.
+     * Persisted (rather than re-derived from the lead) because the public share-link has no auth and
+     * cannot read the lead at all.
+     */
+    @ElementCollection(fetch = FetchType.LAZY)
+    @CollectionTable(name = "quotation_allowed_services", joinColumns = @JoinColumn(name = "quotation_id"))
+    @Column(name = "service", length = 50)
+    @OrderColumn(name = "sort_order")
+    @BatchSize(size = 50)
+    @Builder.Default
+    private List<String> allowedServices = new ArrayList<>();
 
     // ── Inclusions / Exclusions / Policies / Terms ────────────────────────────
     @ElementCollection(fetch = FetchType.LAZY)

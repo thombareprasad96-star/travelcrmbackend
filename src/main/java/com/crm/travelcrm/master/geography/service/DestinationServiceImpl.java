@@ -1,5 +1,6 @@
 package com.crm.travelcrm.master.geography.service;
 
+import com.crm.travelcrm.common.cloudinary.CloudinaryService;
 import com.crm.travelcrm.common.dto.PagedApiResponse;
 import com.crm.travelcrm.common.dto.PaginationMeta;
 import com.crm.travelcrm.common.exception.BusinessException;
@@ -25,6 +26,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
+import org.springframework.web.multipart.MultipartFile;
 
 @Service
 @Slf4j
@@ -36,6 +38,7 @@ public class DestinationServiceImpl implements DestinationService {
     private final CityRepository        cityRepository;      // to detach cities on destination delete
     private final DestinationMapper     destinationMapper;   // injected Spring bean — NOT static
     private final MasterReferenceGuard  masterReferenceGuard;
+    private final CloudinaryService     cloudinaryService;
 
     // ── List ─────────────────────────────────────────────────────────────────
 
@@ -177,6 +180,13 @@ public class DestinationServiceImpl implements DestinationService {
         destinationRepository.save(destination);
         log.info("Destination moved to Trash | id={} | tenantId={} | citiesDetached={}",
                 destinationId, tenantId, detached);
+    }
+
+    // ── Image upload ─────────────────────────────────────────────────────────
+
+    @Override
+    public String uploadImage(MultipartFile file) {
+        return cloudinaryService.uploadImage(file, "destinations");
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────

@@ -34,6 +34,12 @@ public class QuotationRequestDto {
 
     private QuotationStage quotationStage;
 
+    /**
+     * CLASSIC / MODERN. Omitting it on an update KEEPS the stored value (a stale client that does not
+     * know the field yet must not silently revert a Modern quotation) — see the mapper.
+     */
+    private com.crm.travelcrm.quotation.enums.TemplateStyle templateStyle;
+
     @Size(max = 500)
     private String coverImageUrl;
 

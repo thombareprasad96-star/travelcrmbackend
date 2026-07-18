@@ -420,6 +420,28 @@ ALTER TABLE leads DROP CONSTRAINT IF EXISTS leads_origin_check;
 ALTER TABLE leads ADD CONSTRAINT leads_origin_check
         CHECK (origin IN ('MANUAL','INTEGRATION','SYSTEM'));
 
+-- ── Quotation TemplateStyle enum CHECK constraint ───────────────────────────
+-- New column (Quotation.templateStyle) — the Lead.origin shape exactly. ddl-auto=update adds the
+-- column as NULL on every existing row; every pre-existing quotation is, by definition, the original
+-- design. The column itself stays NULLABLE and code treats null as CLASSIC (TemplateStyle.orDefault),
+-- so this backfill is about honest data, not about making reads work — reads are already safe.
+-- The constraint deliberately allows NULL (a CHECK passes on NULL): rows born between the column
+-- arriving and this file running must not be rejected.
+UPDATE quotations SET template_style = 'CLASSIC' WHERE template_style IS NULL;
+ALTER TABLE quotations DROP CONSTRAINT IF EXISTS quotations_template_style_check;
+ALTER TABLE quotations ADD CONSTRAINT quotations_template_style_check
+        CHECK (template_style IN ('CLASSIC','MODERN','PREMIUM'));
+
+-- ── quotation_allowed_services: join-table FK index ─────────────────────────
+-- @ElementCollection table (the lead's chosen-services snapshot). Hibernate creates the table and its
+-- FK but no index on the owning column, and EVERY read of it is "all rows for one quotation" — the
+-- collection is loaded on any render of the PDF or the public weblink.
+-- Deliberately NO CHECK constraint on `service`: the lead service vocabulary is open by design
+-- (QuotationSection ignores what it doesn't know), so pinning it here would turn a harmless unknown
+-- id into a failed save.
+CREATE INDEX IF NOT EXISTS idx_quotation_allowed_services_quotation
+        ON quotation_allowed_services(quotation_id);
+
 -- ── leads.email: DROP NOT NULL ──────────────────────────────────────────────
 -- An inbound enquiry may have a phone and nothing else — an IVR call is the obvious case, and
 -- several marketplace payloads withhold the email until the lead is claimed. ddl-auto=update ADDS

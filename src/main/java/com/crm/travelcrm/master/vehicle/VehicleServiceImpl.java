@@ -69,8 +69,9 @@ public class VehicleServiceImpl implements VehicleService {
         vehicleRepository.save(entity);
     }
 
+    // No @Transactional: this does zero DB work, and the annotation pinned a pooled connection
+    // for the whole multi-second Cloudinary round-trip. Matches Hotel/Sightseeing/Destination.
     @Override
-    @Transactional
     public String uploadVehicleImage(MultipartFile file) {
         return cloudinaryService.uploadImage(file, "vehicles");
     }

@@ -68,6 +68,8 @@ public class SchemaEnumConstraintValidator implements ApplicationRunner {
             new GuardedColumn("leads", "lead_source", "leads_lead_source_check", LeadSource.class),
             new GuardedColumn("leads", "lead_stage", "leads_lead_stage_check", LeadStage.class),
             new GuardedColumn("leads", "origin", "leads_origin_check", LeadOrigin.class),
+            new GuardedColumn("quotations", "template_style", "quotations_template_style_check",
+                    com.crm.travelcrm.quotation.enums.TemplateStyle.class),
             new GuardedColumn("lead_ingest_events", "status", "lead_ingest_events_status_check",
                     LeadIngestStatus.class));
 
