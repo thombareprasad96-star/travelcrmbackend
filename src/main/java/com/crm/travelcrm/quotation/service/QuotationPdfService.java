@@ -5,6 +5,7 @@ import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.company.entity.Company;
 import com.crm.travelcrm.company.repository.CompanyRepository;
 import com.crm.travelcrm.quotation.dto.QuotationResponseDto;
+import com.crm.travelcrm.quotation.enums.QuotationSection;
 import com.crm.travelcrm.subagent.service.SubAgentBrandingService;
 import lombok.extern.slf4j.Slf4j;
 import org.openpdf.pdf.ITextRenderer;
@@ -22,10 +23,13 @@ import org.thymeleaf.templateresolver.ClassLoaderTemplateResolver;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.InputStream;
+import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.time.LocalDate;
 import java.time.Year;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Renders a quotation to a PDF byte array: Thymeleaf produces well-formed XHTML from
@@ -120,6 +124,10 @@ public class QuotationPdfService {
         ctx.setVariable("totals", dto.getTotals());
         ctx.setVariable("fmt", new PdfFormat());
         ctx.setVariable("generatedOn", LocalDate.now());
+        // Classic's bundled artwork, as real file URIs (see the field javadoc — this is the fix for
+        // the file:///C:/ dev-machine paths that left every production PDF without its art).
+        ctx.setVariable("travelBgUrl", toUriOrNull(travelBgFile));
+        ctx.setVariable("bannerUrl", toUriOrNull(bannerFile));
 
         // Branding is taken fresh from the tenant's editable Company profile (companies table),
         // resolved by the current tenant id — never from the request/DTO. Each field falls back to
@@ -185,13 +193,35 @@ public class QuotationPdfService {
         ctx.setVariable("companyGoogleReviews", cReviews);
         ctx.setVariable("companyYearsExperience", cYears);
 
-        String html = templateEngine.process("pdf/quotation", ctx);
-        log.debug("Thymeleaf produced XHTML for {} ({} chars); laying out PDF...",
-                dto.getPublicId(), html.length());
+        // Which sections render, and in what order — decided ONCE, here, in Java. Templates only ask
+        // "is my key in this list?", so the inclusion/emptiness rule can never drift between designs
+        // the way six hand-written th:if expressions per template did. Set before the style branch
+        // deliberately: it is style-agnostic, and CLASSIC simply never reads it (that template is
+        // byte-frozen, and its own included-flag guards already produce the same visible result).
+        ctx.setVariable("sectionOrder", orderedSectionKeys(dto));
+
+        // The design branch. CLASSIC keeps the exact hardcoded name it has always had — same string,
+        // same template file, same fonts — so a quotation that never opted in renders byte-identically.
+        // Null styles (rows predating the column) resolve to CLASSIC in the mapper, so dto is never null
+        // here; orDefault is belt-and-braces for callers that bypass the mapper.
+        com.crm.travelcrm.quotation.enums.TemplateStyle style =
+                com.crm.travelcrm.quotation.enums.TemplateStyle.orDefault(dto.getTemplateStyle());
+        String templateName = switch (style) {
+            case MODERN  -> "pdf/quotation-modern";
+            case PREMIUM -> "pdf/quotation-premium";
+            case CLASSIC -> "pdf/quotation";   // the exact hardcoded name Classic has always had
+        };
+
+        String html = templateEngine.process(templateName, ctx);
+        log.debug("Thymeleaf produced XHTML for {} ({} chars, style {}); laying out PDF...",
+                dto.getPublicId(), html.length(), style);
 
         try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
             ITextRenderer renderer = new ITextRenderer();
             registerStarFont(renderer);
+            // All styles embed 'ModernSans' (DejaVu) — Classic's Folio redesign prices in the real
+            // ₹ and uses ✓/✗ markers, so registration is unconditional across every template style.
+            registerModernFont(renderer);
             renderer.setDocumentFromString(html);
             renderer.layout();
             renderer.createPDF(out);
@@ -208,6 +238,95 @@ public class QuotationPdfService {
             throw new BusinessException("We couldn't generate the quotation PDF. Please try again.",
                     HttpStatus.INTERNAL_SERVER_ERROR);
         }
+    }
+
+    /**
+     * The section manifest handed to the templates as {@code sectionOrder}: which of the six sections
+     * actually render, in the order they render.
+     *
+     * <p><b>Order</b> — the originating lead's chosen sections first, in the order that lead listed
+     * them (mirroring how the builder puts the customer's chosen services in front), then everything
+     * else in {@link QuotationSection} declaration order. A quotation with no lead snapshot gets the
+     * pure canonical order.
+     *
+     * <p><b>Inclusion</b> — a section survives only if it was explicitly included AND has something
+     * to show. "Included but empty" is the case that produced a heading with nothing under it. ADDON
+     * needs one more check: its items carry their OWN {@code included} flag, and an add-on block whose
+     * every line is switched off is just as empty as one with no lines.
+     *
+     * <p>Derived purely from the DTO — no repository, no {@link TenantContext}. The public share-link
+     * path renders with neither, and this must behave identically there.
+     */
+    private static List<String> orderedSectionKeys(QuotationResponseDto dto) {
+        List<String> chosen = dto.getAllowedServices() != null ? dto.getAllowedServices() : List.of();
+
+        List<QuotationSection> ordered = new ArrayList<>();
+        for (String key : chosen) {
+            for (QuotationSection s : QuotationSection.values()) {
+                if (s.key().equals(key) && !ordered.contains(s)) ordered.add(s);
+            }
+        }
+        for (QuotationSection s : QuotationSection.values()) {
+            if (!ordered.contains(s)) ordered.add(s);
+        }
+
+        List<String> keys = new ArrayList<>();
+        for (QuotationSection s : ordered) {
+            if (rendersSomething(dto, s)) keys.add(s.key());
+        }
+        log.debug("sectionOrder for {} -> {} (lead snapshot: {})", dto.getPublicId(), keys, chosen);
+        return keys;
+    }
+
+    /**
+     * The one rule, written once: a section renders iff it is <b>included</b> AND it has something
+     * to show — either rows, or money.
+     *
+     * <p>The {@code || carries money} half is not a nicety, it keeps the document honest. Totals are
+     * summed from the six {@code *Amount} scalars ({@code QuotationMapper.computeTotals}), which do
+     * not consult the row lists. Hiding a section on emptiness alone would therefore drop a
+     * <em>lump-sum</em> section — "flights quoted separately, ₹50,000, no segments entered" is a real
+     * way agents use this — off the page while its money stayed in the grand total, handing the
+     * customer a total they cannot derive from anything printed. Excluded sections are already
+     * zeroed on the write path, so an included section carrying an amount is always intentional.
+     *
+     * @see #orderedSectionKeys
+     */
+    private static boolean rendersSomething(QuotationResponseDto dto, QuotationSection section) {
+        return switch (section) {
+            case FLIGHT -> dto.getFlight() != null
+                    && Boolean.TRUE.equals(dto.getFlight().getIncluded())
+                    && (notEmpty(dto.getFlight().getSegments()) || carriesMoney(dto.getFlight().getAmount()));
+            case HOTEL -> dto.getHotel() != null
+                    && Boolean.TRUE.equals(dto.getHotel().getIncluded())
+                    && (notEmpty(dto.getHotel().getHotels()) || carriesMoney(dto.getHotel().getAmount()));
+            case SIGHTSEEING -> dto.getSightseeing() != null
+                    && Boolean.TRUE.equals(dto.getSightseeing().getIncluded())
+                    && (notEmpty(dto.getSightseeing().getDays()) || carriesMoney(dto.getSightseeing().getAmount()));
+            case CRUISE -> dto.getCruise() != null
+                    && Boolean.TRUE.equals(dto.getCruise().getIncluded())
+                    && (notEmpty(dto.getCruise().getCruises()) || carriesMoney(dto.getCruise().getAmount()));
+            case VEHICLE -> dto.getVehicle() != null
+                    && Boolean.TRUE.equals(dto.getVehicle().getIncluded())
+                    && (notEmpty(dto.getVehicle().getVehicles()) || carriesMoney(dto.getVehicle().getAmount()));
+            // A null item-level flag means "included" (only an explicit false switches a line off),
+            // which is how the builder writes rows it never asked the user about.
+            case ADDON -> dto.getAddons() != null
+                    && Boolean.TRUE.equals(dto.getAddons().getIncluded())
+                    && (carriesMoney(dto.getAddons().getAmount())
+                        || (notEmpty(dto.getAddons().getItems())
+                            && dto.getAddons().getItems().stream()
+                                    .anyMatch(i -> !Boolean.FALSE.equals(i.getIncluded()))));
+        };
+    }
+
+    private static boolean notEmpty(List<?> list) {
+        return list != null && !list.isEmpty();
+    }
+
+    /** Non-null and non-zero — {@code signum()} so 0.00 and 0 both read as "no money". */
+    private static boolean carriesMoney(BigDecimal amount) {
+        return amount != null && amount.signum() != 0;
     }
 
     /**
@@ -245,6 +364,65 @@ public class QuotationPdfService {
                     BaseFont.IDENTITY_H, BaseFont.EMBEDDED, null);
         } catch (Exception ex) {
             log.warn("Could not register star font with the PDF renderer: {}", ex.getMessage());
+        }
+    }
+
+    /**
+     * The MODERN template's body font — the same bundled DejaVu Sans, registered under the family name
+     * the Modern stylesheet uses ({@code ModernSans}).
+     *
+     * <p>Why this matters beyond looks: DejaVu Sans carries U+20B9, so the Modern design can print a
+     * real ₹ where Classic must print "Rs." ({@code PdfFormat.inr}'s javadoc documents that base-14
+     * Helvetica lacks the glyph). Registered ONLY for Modern renders: Classic's stylesheet never
+     * references this family, but keeping the registration out of its path entirely means Classic's
+     * font resolution cannot change even in theory — that is the zero-regression stance.
+     *
+     * <p>To upgrade Modern to a premium editorial face later: drop the TTF into
+     * {@code src/main/resources/fonts/}, extract it exactly like {@link #extractStarFont()}, and
+     * register it here under the same family name. Nothing else changes.
+     */
+    /**
+     * The Classic template's bundled artwork (cover background + running-page banner), extracted from
+     * the classpath to temp files at construction — the same materialisation the star font needs, for
+     * the same reason: the renderer resolves {@code url(...)} against the filesystem, not the jar.
+     *
+     * <p><b>This replaces hardcoded {@code file:///C:/travelcrmbackend/...} paths that only ever
+     * existed on one dev machine.</b> In every packaged jar — i.e. production — those paths resolved to
+     * nothing and every customer-facing Classic PDF shipped without its cover art and header banner,
+     * silently, while the same render on that one machine looked perfect. The template now takes these
+     * as context variables ({@code travelBgUrl}/{@code bannerUrl}); null degrades to the template's
+     * solid-colour fallback, exactly the (broken) output prod produced before this fix.
+     */
+    private final File travelBgFile = extractPdfResource("templates/pdf/travel.png", ".png");
+    private final File bannerFile   = extractPdfResource("templates/pdf/banner.png", ".png");
+
+    /** Classpath → temp file, non-fatal. Null on failure — the render proceeds without the image. */
+    private static File extractPdfResource(String resource, String suffix) {
+        try (InputStream in = new ClassPathResource(resource).getInputStream()) {
+            File tmp = File.createTempFile("quotation-pdf-asset-", suffix);
+            tmp.deleteOnExit();
+            Files.copy(in, tmp.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            return tmp;
+        } catch (Exception ex) {
+            log.warn("Could not extract bundled PDF asset '{}' — rendering without it: {}",
+                    resource, ex.getMessage());
+            return null;
+        }
+    }
+
+    /** File → the {@code file:/} URI the template's url() needs, or null to trigger the CSS fallback. */
+    private static String toUriOrNull(File f) {
+        return f == null ? null : f.toURI().toString();
+    }
+
+    private void registerModernFont(ITextRenderer renderer) {
+        if (starFontFile == null) return;   // same extracted TTF; same non-fatal posture
+        try {
+            renderer.getFontResolver().addFont(
+                    starFontFile.getAbsolutePath(), "ModernSans",
+                    BaseFont.IDENTITY_H, BaseFont.EMBEDDED, null);
+        } catch (Exception ex) {
+            log.warn("Could not register the Modern body font with the PDF renderer: {}", ex.getMessage());
         }
     }
 }

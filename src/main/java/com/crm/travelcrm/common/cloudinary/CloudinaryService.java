@@ -2,6 +2,7 @@ package com.crm.travelcrm.common.cloudinary;
 
 import com.cloudinary.Cloudinary;
 import com.cloudinary.utils.ObjectUtils;
+import com.crm.travelcrm.common.exception.BadRequestException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -9,6 +10,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 @Service
@@ -21,7 +23,20 @@ public class CloudinaryService {
     /** Hard-enforces the tenant's storage cap before an upload (impl in the platform usage module). */
     private final StorageQuota storageQuota;
 
+    /**
+     * What every caller of {@link #uploadImage} is actually allowed to send. Deliberately the union of
+     * what the existing upload surfaces use — master/company images (incl. SVG logos and ICO favicons)
+     * and PDF payment proofs — so this is a hardening, not a behaviour change. Its job is to stop the
+     * endpoints being used as free file hosting for arbitrary binaries, not to police image formats.
+     */
+    private static final Set<String> ALLOWED_UPLOAD_TYPES = Set.of(
+            "image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif",
+            "image/svg+xml", "image/x-icon", "image/vnd.microsoft.icon", "image/ico",
+            "application/pdf");
+
     public String uploadImage(MultipartFile file, String folder) {
+        // A client-side accept="image/*" is a hint, not a control — anyone can POST here directly.
+        validateUpload(file);
         // Block user-driven uploads that would exceed the tenant's plan storage (403). System-generated
         // assets go through uploadRaw(), which is intentionally NOT gated.
         storageQuota.enforceWithinQuota(file.getSize());
@@ -39,6 +54,18 @@ public class CloudinaryService {
         } catch (IOException e) {
             log.error("Cloudinary upload failed for folder '{}': {}", folder, e.getMessage());
             throw new RuntimeException("Image upload failed: " + e.getMessage(), e);
+        }
+    }
+
+    private void validateUpload(MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            throw new BadRequestException("File is required.");
+        }
+        String contentType = file.getContentType() == null
+                ? ""
+                : file.getContentType().toLowerCase();
+        if (!ALLOWED_UPLOAD_TYPES.contains(contentType)) {
+            throw new BadRequestException("Only image files (JPG, PNG, WebP, GIF, SVG, ICO) or PDF are allowed.");
         }
     }
 

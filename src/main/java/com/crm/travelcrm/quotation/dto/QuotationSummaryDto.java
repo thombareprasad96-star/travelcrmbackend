@@ -26,6 +26,8 @@ public class QuotationSummaryDto {
     private String version;
     private Integer versionNumber;
     private String pdfUrl;
+    /** The design this quotation is saved as — the download dialog marks it "Saved". Never null. */
+    private com.crm.travelcrm.quotation.enums.TemplateStyle templateStyle;
     private QuotationStage quotationStage;   // this quotation's own lifecycle stage
     private LeadStage leadStage;             // read-only snapshot of the originating lead's pipeline stage
     private String customerName;

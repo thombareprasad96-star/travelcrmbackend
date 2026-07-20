@@ -32,6 +32,8 @@ public class PublicQuotationResponseDto {
     private Integer versionNumber;
     private String pdfUrl;
     private String coverImageUrl;
+    /** CLASSIC/MODERN — the public weblink page branches its whole design on this. Never null. */
+    private com.crm.travelcrm.quotation.enums.TemplateStyle templateStyle;
 
     private Integer quoteNo;
     private Integer nights;

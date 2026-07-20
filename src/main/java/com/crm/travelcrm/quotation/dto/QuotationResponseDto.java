@@ -33,6 +33,7 @@ public class QuotationResponseDto {
     private Integer versionNumber;
     private String pdfUrl;
     private QuotationStage quotationStage;   // this quotation's own lifecycle stage (Draft/Sent/Approved/Rejected)
+    private com.crm.travelcrm.quotation.enums.TemplateStyle templateStyle; // CLASSIC/MODERN; never null outward (orDefault in the mapper)
     private LeadStage leadStage;             // read-only snapshot of the originating lead's pipeline stage
     private String coverImageUrl;
     private String notes;
@@ -51,6 +52,16 @@ public class QuotationResponseDto {
     private CruiseSection cruise;
     private VehicleSection vehicle;
     private AddonSection addons;
+
+    /**
+     * The originating lead's chosen services, as {@code QuotationSection} keys in the lead's own
+     * order. Drives section ORDER in the rendered document (chosen services first) and lets the
+     * builder reload the same tab order it was created with.
+     *
+     * <p>Empty means "no lead information" — everything allowed, canonical order. It is never a
+     * permission: a section the user explicitly included renders regardless of what is listed here.
+     */
+    private List<String> allowedServices;
 
     private List<String> inclusions;
     private List<String> exclusions;

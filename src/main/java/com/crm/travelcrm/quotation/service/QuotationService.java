@@ -53,6 +53,30 @@ public interface QuotationService {
     /** Resolve the quotation PDF — the stored Cloudinary URL if present, else freshly rendered bytes. */
     QuotationPdfResource getPdf(UUID publicId);
 
+    /**
+     * Same PDF, rendered in a chosen design instead of the quotation's saved one.
+     *
+     * <p>A ONE-OFF override for the download dialog: it does not persist, so downloading a Premium
+     * copy of a Classic quotation leaves the quotation Classic — the customer's share link keeps
+     * showing what the agent actually chose in the builder. Null style ⇒ the saved one.
+     *
+     * <p>Only possible because quotation PDFs are rendered on demand; while a copy was cached on
+     * Cloudinary, "render this one differently" would have fought the cache.
+     */
+    QuotationPdfResource getPdf(UUID publicId, com.crm.travelcrm.quotation.enums.TemplateStyle style);
+
+    /**
+     * Persist the design this quotation is shown in — used by the SHARE dialog.
+     *
+     * <p>Unlike the download override, this one MUST stick: the customer opens the weblink later, and
+     * the server renders whatever is stored. A dedicated one-field endpoint rather than a full
+     * {@code update()} on purpose — update() re-maps every section from the request, so routing a
+     * design change through it would make "share as Premium" capable of rewriting the quotation's
+     * contents from a stale client payload.
+     */
+    QuotationResponseDto setTemplateStyle(UUID publicId,
+                                          com.crm.travelcrm.quotation.enums.TemplateStyle style);
+
     /** Public (unauthenticated) PDF for the share link — looked up by publicId only, no tenant scope. */
     QuotationPdfResource getPublicPdf(UUID publicId);
 

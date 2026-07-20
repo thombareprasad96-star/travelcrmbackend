@@ -1,6 +1,7 @@
 package com.crm.travelcrm.quotation.controller;
 
 import com.crm.travelcrm.common.dto.ApiResponse;
+import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.dto.PagedApiResponse;
 import com.crm.travelcrm.common.dto.PaginationMeta;
 import com.crm.travelcrm.quotation.dto.QuotationEmailRequestDto;
@@ -135,8 +136,7 @@ public class QuotationController {
     }
 
     // ── New version ───────────────────────────────────────────────────────────
-    // Copies the quotation (+ all items), increments the version (status -> DRAFT),
-    // renders the PDF and stores it on Cloudinary.
+    // Copies the quotation (+ all items) and increments the version (status -> DRAFT).
     @PostMapping("/{publicId}/new-version")
     @PreAuthorize("hasAuthority('QUOTATION_CREATE')")
     public ResponseEntity<ApiResponse<QuotationResponseDto>> newVersion(@PathVariable UUID publicId) {
@@ -147,12 +147,26 @@ public class QuotationController {
     }
 
     // ── PDF ─────────────────────────────────────────────────────────────────--
-    // Returns the stored Cloudinary PDF (302 redirect) if one exists, otherwise
-    // renders it on-the-fly and streams the bytes.
+    // Always renders on the fly and streams the bytes — quotation PDFs are never stored in a public
+    // bucket (they carry customer PII). The isRemote() branch below is now unreachable for quotations
+    // and kept only because QuotationPdfResource still models both shapes.
     @GetMapping("/{publicId}/pdf")
-    public ResponseEntity<byte[]> getPdf(@PathVariable UUID publicId) {
-        log.info("GET /api/quotations/{}/pdf", publicId);
-        QuotationPdfResource pdf = quotationService.getPdf(publicId);
+    public ResponseEntity<byte[]> getPdf(@PathVariable UUID publicId,
+                                         @RequestParam(required = false) String style) {
+        log.info("GET /api/quotations/{}/pdf | style={}", publicId, style);
+        // Optional ONE-OFF design override for the download dialog — never persisted. Unparseable or
+        // absent ⇒ null ⇒ the quotation's saved style. Parsed by whitelist rather than
+        // valueOf(): a junk query param must not 400 a download the user is entitled to.
+        com.crm.travelcrm.quotation.enums.TemplateStyle override = null;
+        if (style != null) {
+            for (var candidate : com.crm.travelcrm.quotation.enums.TemplateStyle.values()) {
+                if (candidate.name().equalsIgnoreCase(style.trim())) {
+                    override = candidate;
+                    break;
+                }
+            }
+        }
+        QuotationPdfResource pdf = quotationService.getPdf(publicId, override);
         if (pdf.isRemote()) {
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(pdf.url()))
@@ -162,6 +176,31 @@ public class QuotationController {
                 .header("Content-Disposition", "inline; filename=quotation-" + publicId + ".pdf")
                 .contentType(MediaType.APPLICATION_PDF)
                 .body(pdf.content());
+    }
+
+    // ── Template style ────────────────────────────────────────────────────────
+    // Persists the design the WEBLINK shows. Separate from ?style= on /pdf, which is a one-off
+    // download override and saves nothing — sharing has to stick because the customer opens the link
+    // later. Unknown value ⇒ 400 here (unlike the download path): silently sharing the wrong design
+    // is worse than an error, because the agent has already sent the link by then.
+    @PatchMapping("/{publicId}/template-style")
+    @PreAuthorize("hasAuthority('QUOTATION_UPDATE')")
+    public ResponseEntity<ApiResponse<QuotationResponseDto>> setTemplateStyle(
+            @PathVariable UUID publicId,
+            @RequestParam String style) {
+        log.info("PATCH /api/quotations/{}/template-style | style={}", publicId, style);
+        com.crm.travelcrm.quotation.enums.TemplateStyle parsed = null;
+        for (var candidate : com.crm.travelcrm.quotation.enums.TemplateStyle.values()) {
+            if (candidate.name().equalsIgnoreCase(style == null ? "" : style.trim())) {
+                parsed = candidate;
+                break;
+            }
+        }
+        if (parsed == null) {
+            throw new BusinessException("Unknown template style: " + style, HttpStatus.BAD_REQUEST);
+        }
+        return ResponseEntity.ok(ApiResponse.success(
+                "Template style updated", quotationService.setTemplateStyle(publicId, parsed)));
     }
 
     // ── Send email ────────────────────────────────────────────────────────────
