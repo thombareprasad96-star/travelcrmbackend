@@ -202,11 +202,14 @@ public class LeadServiceImpl implements LeadService {
                     tenantId, visibleIds, pageable);
         }
 
-        List<LeadResponseDto> dtos = leadPage.getContent().stream()
+        List<Lead> leads = leadPage.getContent();
+
+        List<LeadResponseDto> dtos = leads.stream()
                 .map(leadMapper::toResponse)
                 .collect(Collectors.toList());
         // One batch query for the latest quotation of every lead on this page (no N+1).
         enrichWithLatestQuotation(dtos);
+        enrichWithLogCounts(dtos, leads);
 
         return new PageImpl<>(dtos, pageable, leadPage.getTotalElements());
     }
@@ -219,6 +222,7 @@ public class LeadServiceImpl implements LeadService {
 
         LeadResponseDto dto = leadMapper.toResponse(lead);
         dto.setLatestQuotation(quotationService.getLatestRefByLead(dto.getId()));
+        enrichWithLogCounts(List.of(dto), List.of(lead));
         return dto;
     }
 
@@ -248,7 +252,9 @@ public class LeadServiceImpl implements LeadService {
             throw new ResourceNotFoundException("Lead not found: " + keyword);
         }
 
-        return leadMapper.toResponse(lead);
+        LeadResponseDto dto = leadMapper.toResponse(lead);
+        enrichWithLogCounts(List.of(dto), List.of(lead));
+        return dto;
     }
 
     // ── Update ────────────────────────────────────────────────────────────────
@@ -397,9 +403,11 @@ public class LeadServiceImpl implements LeadService {
                 .toList();
 
         // One batch quotation query for every lead across all columns (no N+1).
-        enrichWithLatestQuotation(columns.stream()
+        List<LeadResponseDto> boardDtos = columns.stream()
                 .flatMap(c -> c.getLeads().stream())
-                .toList());
+                .toList();
+        enrichWithLatestQuotation(boardDtos);
+        enrichWithLogCounts(boardDtos, leads);
 
         return columns;
     }
@@ -415,6 +423,36 @@ public class LeadServiceImpl implements LeadService {
         Map<UUID, QuotationRefDto> latest = quotationService.getLatestRefsByLeads(leadIds);
         if (latest.isEmpty()) return;
         dtos.forEach(dto -> dto.setLatestQuotation(latest.get(dto.getId())));
+    }
+
+    /**
+     * Batch-populate logCount on lead DTOs using one grouped count query.
+     * Counts are matched through the public id exposed on the DTO.
+     */
+    private void enrichWithLogCounts(List<LeadResponseDto> dtos, List<Lead> leads) {
+        if (dtos.isEmpty()) return;
+
+        List<Long> leadIds = leads.stream()
+                .map(Lead::getId)
+                .filter(Objects::nonNull)
+                .toList();
+
+        Map<Long, Long> countsByLeadId = leadIds.isEmpty()
+                ? Map.of()
+                : leadRepository.countLogsByLeadIds(leadIds).stream()
+                .collect(Collectors.toMap(
+                        row -> ((Number) row[0]).longValue(),
+                        row -> ((Number) row[1]).longValue()));
+
+        Map<UUID, Long> countsByPublicId = leads.stream()
+                .filter(lead -> lead.getPublicId() != null)
+                .collect(Collectors.toMap(
+                        Lead::getPublicId,
+                        lead -> countsByLeadId.getOrDefault(lead.getId(), 0L),
+                        (first, second) -> first));
+
+        dtos.forEach(dto -> dto.setLogCount(
+                countsByPublicId.getOrDefault(dto.getId(), 0L)));
     }
 
     @Override

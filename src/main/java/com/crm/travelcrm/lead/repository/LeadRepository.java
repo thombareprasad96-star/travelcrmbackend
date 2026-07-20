@@ -251,4 +251,13 @@ public interface LeadRepository extends JpaRepository<Lead, Long> {
             """)
     List<UserLeadStageCountDto> countLeadsByStagePerUserForUsers(@Param("tenantId") Long tenantId,
                                                                  @Param("userIds") Collection<Long> userIds);
+
+    @Query("""
+            SELECT l.lead.id, COUNT(l)
+            FROM LeadLog l
+            WHERE l.lead.id IN :leadIds
+              AND l.deletedAt IS NULL
+            GROUP BY l.lead.id
+            """)
+    List<Object[]> countLogsByLeadIds(@Param("leadIds") Collection<Long> leadIds);
 }

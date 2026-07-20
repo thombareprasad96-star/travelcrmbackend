@@ -29,6 +29,7 @@ public class LeadResponseDto {
     private LocalDate birthDate;
     private LocalDate travelDate;
     private BigDecimal budget;
+    private Long logCount;
     private String departCountry;
     private String departCity;
     private Integer rooms;
