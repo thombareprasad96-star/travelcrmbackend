@@ -10,6 +10,7 @@ import org.springframework.stereotype.Repository;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 /** Tenant-scoped data access for {@link Destination}. */
 @Repository
@@ -71,6 +72,27 @@ public interface DestinationRepository extends JpaRepository<Destination, Long> 
             """)
     Optional<Destination> findByIdVisibleTo(
             @Param("id") Long id,
+            @Param("tenantId") Long tenantId);
+
+    /** Used by client/API flows that pass Destination.publicId instead of the internal Long id. */
+    @Query("""
+            SELECT d FROM Destination d
+            WHERE d.publicId = :publicId
+              AND (d.global = true OR d.tenantId = :tenantId)
+            """)
+    Optional<Destination> findByPublicIdVisibleTo(
+            @Param("publicId") UUID publicId,
+            @Param("tenantId") Long tenantId);
+
+    /** Fallback for lead itinerary rows, which currently store destination name instead of an FK. */
+    @Query("""
+            SELECT d FROM Destination d
+            WHERE LOWER(d.name) = LOWER(:name)
+              AND (d.global = true OR d.tenantId = :tenantId)
+            ORDER BY d.global ASC, d.createdAt DESC
+            """)
+    List<Destination> findByNameIgnoreCaseVisibleTo(
+            @Param("name") String name,
             @Param("tenantId") Long tenantId);
 
     // ── Referential guard: any (non-trashed, via softDeleteFilter) destination under a country ──

@@ -12,6 +12,7 @@ import com.crm.travelcrm.booking.repository.BookingRepository;
 import com.crm.travelcrm.booking.repository.BookingServiceItemRepository;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
+import com.crm.travelcrm.permission.service.SubAgentScope;
 import com.crm.travelcrm.vendor.entity.Vendor;
 import com.crm.travelcrm.vendor.repository.VendorRepository;
 import lombok.RequiredArgsConstructor;
@@ -32,6 +33,7 @@ public class BookingServiceItemServiceImpl implements BookingServiceItemService 
     private final BookingRepository            bookingRepository;
     private final BookingServiceItemRepository serviceItemRepository;
     private final VendorRepository             vendorRepository;
+    private final SubAgentScope                subAgentScope;
 
     @Override
     @Transactional(readOnly = true)
@@ -130,8 +132,10 @@ public class BookingServiceItemServiceImpl implements BookingServiceItemService 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private Booking findActiveBooking(UUID bookingPublicId) {
-        return bookingRepository.findByPublicIdAndDeletedAtIsNull(bookingPublicId)
+        Booking booking = bookingRepository.findByPublicIdAndDeletedAtIsNull(bookingPublicId)
                 .orElseThrow(() -> new BookingNotFoundException(bookingPublicId));
+        subAgentScope.assertVisible(booking, bookingPublicId);
+        return booking;
     }
 
     private BookingServiceItem findItem(Booking booking, UUID itemPublicId) {

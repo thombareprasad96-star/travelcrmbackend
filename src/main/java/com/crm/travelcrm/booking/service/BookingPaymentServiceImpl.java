@@ -12,6 +12,7 @@ import com.crm.travelcrm.booking.repository.BookingRepository;
 import com.crm.travelcrm.booking.repository.BookingServiceItemRepository;
 import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
+import com.crm.travelcrm.permission.service.SubAgentScope;
 import com.crm.travelcrm.subagent.service.SubAgentCommissionService;
 import lombok.RequiredArgsConstructor;
 import org.apache.logging.log4j.LogManager;
@@ -41,6 +42,7 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
     private final BookingPaymentRepository     paymentRepository;
     private final BookingServiceItemRepository serviceItemRepository;
     private final SubAgentCommissionService    commissionService;
+    private final SubAgentScope                subAgentScope;
 
     @Override
     @Transactional(readOnly = true)
@@ -145,8 +147,10 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private Booking findActiveBooking(UUID bookingPublicId) {
-        return bookingRepository.findByPublicIdAndDeletedAtIsNull(bookingPublicId)
+        Booking booking = bookingRepository.findByPublicIdAndDeletedAtIsNull(bookingPublicId)
                 .orElseThrow(() -> new BookingNotFoundException(bookingPublicId));
+        subAgentScope.assertVisible(booking, bookingPublicId);
+        return booking;
     }
 
     /** Resolve the attributed service line's publicId (for the response), or null. */

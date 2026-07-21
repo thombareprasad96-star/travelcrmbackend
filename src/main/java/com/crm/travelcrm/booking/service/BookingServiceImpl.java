@@ -90,6 +90,11 @@ import java.util.UUID;
 public class BookingServiceImpl implements BookingService {
 
     private static final Logger log = LogManager.getLogger(BookingServiceImpl.class);
+    private static final Set<BookingStatus> TERMINAL_STATUSES = Set.of(
+            BookingStatus.COMPLETED,
+            BookingStatus.CANCELLED,
+            BookingStatus.REFUNDED
+    );
 
     // Tax rates are externalised so they can be tuned per environment without a redeploy.
     // NOTE: these are still flat rates applied to every booking. Correct Indian TCS is
@@ -427,6 +432,9 @@ public class BookingServiceImpl implements BookingService {
         log.info("Updating booking publicId: {}", publicId);
 
         Booking booking = findActiveByPublicId(publicId);
+        assertEditableBooking(booking);
+        boolean amountsChanged = request.getCustomerAmount() != null || request.getVendorCost() != null;
+
         bookingMapper.updateEntity(request, booking);   // applies non-null DTO fields → entity
 
         // Destination is a free-text snapshot (mapper ignores it) — apply it explicitly.
@@ -438,23 +446,25 @@ public class BookingServiceImpl implements BookingService {
         // edit can never silently skip the cancel() flow or mutate a locked booking.
         boolean statusChanged = applyStatusOnUpdate(booking, request.getStatus());
 
-        // paidAmount is owned by the payment ledger (POST/DELETE /payments, PATCH /payment), NOT by
-        // this edit form — recording payments here as an absolute set is what let paidAmount diverge
-        // from the itemised ledger rows. A booking edit only recomputes the DERIVED money fields: when
-        // the amounts change, refresh gst / tcs / totalPayable / netProfit and re-derive paymentStatus
-        // from the current (ledger-owned) paidAmount. Any paidAmount sent by the client is ignored.
-        if (request.getCustomerAmount() != null || request.getVendorCost() != null) {
+        // Amount changes refresh derived totals first, so any paidAmount target below is validated
+        // against the new total payable from this same edit request.
+        if (amountsChanged) {
             recomputeTotals(booking, booking.getCustomerAmount(), booking.getVendorCost());
 
             // Reducing the amount below what has already been paid is inconsistent. Throwing rolls back.
             if (booking.getPaidAmount().compareTo(booking.getTotalPayable()) > 0) {
                 throw new BusinessException(
                         "Paid amount ₹" + booking.getPaidAmount()
-                                + " exceeds total payable ₹" + booking.getTotalPayable());
+                            + " exceeds total payable ₹" + booking.getTotalPayable());
             }
         }
 
+        boolean paidAmountChanged = applyPaidAmountOnUpdate(booking, request.getPaidAmount());
+
         Booking saved = bookingRepository.save(booking);
+        if (amountsChanged || paidAmountChanged) {
+            commissionService.syncForBooking(saved);
+        }
 
         // Mirror updateStatus(): notify on a real status change so the bell/feed stays in sync.
         if (statusChanged) {
@@ -485,14 +495,31 @@ public class BookingServiceImpl implements BookingService {
                             + "cleans up a conversion-created customer. Setting CANCELLED here would skip that.",
                     HttpStatus.CONFLICT);
         }
-        if (booking.getStatus() == BookingStatus.COMPLETED
-                || booking.getStatus() == BookingStatus.CANCELLED) {
+        if (newStatus == BookingStatus.REFUNDED) {
+            throw new BusinessException(
+                    "To mark a booking refunded, use the refund flow so the refund ledger, voucher, "
+                            + "and commission reversal are recorded.",
+                    HttpStatus.CONFLICT);
+        }
+        if (isTerminalStatus(booking.getStatus())) {
             throw new BusinessException(
                     "A " + booking.getStatus() + " booking is locked; its status can no longer be changed.",
                     HttpStatus.CONFLICT);
         }
         booking.setStatus(newStatus);
         return true;
+    }
+
+    private void assertEditableBooking(Booking booking) {
+        if (isTerminalStatus(booking.getStatus())) {
+            throw new BusinessException(
+                    "A " + booking.getStatus() + " booking is locked; it can no longer be edited.",
+                    HttpStatus.CONFLICT);
+        }
+    }
+
+    private static boolean isTerminalStatus(BookingStatus status) {
+        return status != null && TERMINAL_STATUSES.contains(status);
     }
 
     // ── Update Status ────────────────────────────────────────────────────────
@@ -1074,6 +1101,48 @@ public class BookingServiceImpl implements BookingService {
         booking.setNetProfit(netProfit);
         booking.setPaymentStatus(
                 derivePaymentStatus(booking.getPaidAmount(), totalPayable, booking.getPaymentStatus()));
+    }
+
+    /**
+     * Legacy booking edit sends paidAmount as an absolute target. Increasing it is recorded as a
+     * receipt adjustment so the booking total and itemised payment ledger stay reconciled. Decreases
+     * must delete the incorrect receipt row through the payment ledger endpoint.
+     */
+    private boolean applyPaidAmountOnUpdate(Booking booking, BigDecimal requestedPaidAmount) {
+        if (requestedPaidAmount == null) {
+            return false;
+        }
+
+        BigDecimal currentPaidAmount = booking.getPaidAmount() != null
+                ? booking.getPaidAmount()
+                : BigDecimal.ZERO;
+        BigDecimal totalPayable = booking.getTotalPayable() != null
+                ? booking.getTotalPayable()
+                : BigDecimal.ZERO;
+
+        if (requestedPaidAmount.compareTo(totalPayable) > 0) {
+            throw new BusinessException(
+                    "Paid amount ₹" + requestedPaidAmount
+                            + " exceeds total payable ₹" + totalPayable);
+        }
+
+        BigDecimal delta = requestedPaidAmount.subtract(currentPaidAmount);
+        if (delta.signum() == 0) {
+            return false;
+        }
+
+        if (delta.signum() < 0) {
+            throw new BusinessException(
+                    "To reduce paid amount, delete the incorrect payment ledger row.",
+                    HttpStatus.CONFLICT);
+        }
+
+        booking.setPaidAmount(requestedPaidAmount);
+        booking.setPaymentStatus(
+                derivePaymentStatus(requestedPaidAmount, totalPayable, booking.getPaymentStatus()));
+        recordPaymentLedgerRow(booking, delta, "Payment adjustment", LocalDate.now(), null,
+                "Paid amount adjusted from booking edit");
+        return true;
     }
 
     /**

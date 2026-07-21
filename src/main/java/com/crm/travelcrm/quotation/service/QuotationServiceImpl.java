@@ -9,6 +9,8 @@ import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.lead.entity.Lead;
 import com.crm.travelcrm.lead.entity.LeadItinerary;
 import com.crm.travelcrm.lead.service.LeadAccessGuard;
+import com.crm.travelcrm.master.geography.entity.Destination;
+import com.crm.travelcrm.master.geography.repository.DestinationRepository;
 import com.crm.travelcrm.quotation.dto.QuotationEmailRequestDto;
 import com.crm.travelcrm.quotation.dto.QuotationWhatsAppRequestDto;
 import com.crm.travelcrm.quotation.dto.QuotationPdfResource;
@@ -45,6 +47,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -61,6 +64,7 @@ public class QuotationServiceImpl implements QuotationService {
     private final EmailAuditService emailAudit;
     private final WhatsAppMessagingService whatsAppMessaging;
     private final SubAgentScope subAgentScope;
+    private final DestinationRepository destinationRepository;
 
     @Value("${app.public-base-url:http://localhost:8080}")
     private String publicBaseUrl;
@@ -97,7 +101,8 @@ public class QuotationServiceImpl implements QuotationService {
 
         q.setQuoteNo((int) (quotationRepository.countByTenantIdAndParentQuotationIdIsNull(tenantId) + 1));
         log.debug("Assigned quoteNo={} | version={}", q.getQuoteNo(), q.getVersion());
-        linkLeadAndSnapshot(q, request.getLeadId());
+        Lead lead = linkLeadAndSnapshot(q, request.getLeadId());
+        applyDestinationCoverImage(q, request.getDestinationId(), tenantId, lead);
 
         Quotation saved = quotationRepository.save(q);
         log.info("Quotation created | publicId: {} | tenantId: {}", saved.getPublicId(), tenantId);
@@ -553,14 +558,67 @@ public class QuotationServiceImpl implements QuotationService {
         return q;
     }
 
+    private void applyDestinationCoverImage(Quotation q, UUID destinationId, Long tenantId, Lead lead) {
+        if (StringUtils.hasText(q.getCoverImageUrl())) {
+            return;
+        }
+
+        resolveDestinationForCover(destinationId, tenantId, lead, q.getDestination())
+                .map(Destination::getImagePath)
+                .filter(StringUtils::hasText)
+                .ifPresent(q::setCoverImageUrl);
+    }
+
+    private Optional<Destination> resolveDestinationForCover(
+            UUID destinationId, Long tenantId, Lead lead, String snapshotDestination) {
+
+        if (destinationId != null) {
+            Optional<Destination> byDestinationPublicId =
+                    destinationRepository.findByPublicIdVisibleTo(destinationId, tenantId);
+            if (byDestinationPublicId.isPresent()) {
+                return byDestinationPublicId;
+            }
+
+            Optional<String> itineraryDestination = firstItineraryDestination(lead, destinationId);
+            if (itineraryDestination.isPresent()) {
+                return firstDestinationByName(itineraryDestination.get(), tenantId);
+            }
+        }
+
+        return firstDestinationByName(snapshotDestination, tenantId);
+    }
+
+    private Optional<String> firstItineraryDestination(Lead lead, UUID itineraryPublicId) {
+        if (lead == null || lead.getItinerary() == null || itineraryPublicId == null) {
+            return Optional.empty();
+        }
+
+        return lead.getItinerary().stream()
+                .filter(item -> itineraryPublicId.equals(item.getPublicId()))
+                .map(LeadItinerary::getDestination)
+                .filter(StringUtils::hasText)
+                .findFirst();
+    }
+
+    private Optional<Destination> firstDestinationByName(String destinationName, Long tenantId) {
+        if (!StringUtils.hasText(destinationName)) {
+            return Optional.empty();
+        }
+
+        return destinationRepository
+                .findByNameIgnoreCaseVisibleTo(destinationName.trim(), tenantId)
+                .stream()
+                .findFirst();
+    }
+
     /**
      * Resolve the lead by its publicId (tenant-scoped) and snapshot the customer
      * details onto the quotation so the PDF is stable.
      */
-    private void linkLeadAndSnapshot(Quotation q, UUID leadPublicId) {
+    private Lead linkLeadAndSnapshot(Quotation q, UUID leadPublicId) {
         if (leadPublicId == null) {
             log.debug("linkLeadAndSnapshot: no leadId on request — skipping lead snapshot");
-            return;
+            return null;
         }
         // Resolve through the central guard so the Lead module's tenant + row-level scope is
         // enforced here too — a user must not snapshot a lead they aren't allowed to see.
@@ -590,6 +648,7 @@ public class QuotationServiceImpl implements QuotationService {
         log.debug("Snapshotted lead {} -> customer='{}' | destination='{}' | pax(a/c/i)={}/{}/{} | travelDate={} | leadStage={}",
                 lead.getPublicId(), q.getCustomerName(), q.getDestination(),
                 q.getAdults(), q.getChildren(), q.getInfants(), q.getTravelDate(), q.getLeadStage());
+        return lead;
     }
 
     private String resolveDestination(Lead lead) {

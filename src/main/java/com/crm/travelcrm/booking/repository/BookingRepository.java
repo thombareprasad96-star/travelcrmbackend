@@ -62,6 +62,18 @@ public interface BookingRepository extends JpaRepository<Booking, Long>,
 
     // ── Stats queries ────────────────────────────────────────────────────────
 
+    @Query("""
+            SELECT b
+            FROM Booking b
+            WHERE b.tenantId = :tenantId
+              AND b.deletedAt IS NULL
+              AND b.bookingDate BETWEEN :from AND :to
+            ORDER BY b.bookingDate DESC, b.id DESC
+            """)
+    List<Booking> findDashboardBookings(@Param("tenantId") Long tenantId,
+                                        @Param("from") LocalDate from,
+                                        @Param("to") LocalDate to);
+
     long countByDeletedAtIsNull();
 
     long countByStatusAndDeletedAtIsNull(BookingStatus status);

@@ -13,6 +13,7 @@ import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.customer.entity.Customer;
 import com.crm.travelcrm.customer.repository.CustomerRepository;
+import com.crm.travelcrm.permission.service.SubAgentScope;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -38,6 +39,7 @@ public class BookingDocumentServiceImpl implements BookingDocumentService {
     private final BookingServiceItemRepository serviceItemRepository;
     private final BookingPaymentRepository     paymentRepository;
     private final BookingPdfService            bookingPdfService;
+    private final SubAgentScope                subAgentScope;
 
     @Override
     @Transactional(readOnly = true)
@@ -153,8 +155,10 @@ public class BookingDocumentServiceImpl implements BookingDocumentService {
     }
 
     private Booking findActiveBooking(UUID bookingPublicId) {
-        return bookingRepository.findByPublicIdAndDeletedAtIsNull(bookingPublicId)
+        Booking booking = bookingRepository.findByPublicIdAndDeletedAtIsNull(bookingPublicId)
                 .orElseThrow(() -> new BookingNotFoundException(bookingPublicId));
+        subAgentScope.assertVisible(booking, bookingPublicId);
+        return booking;
     }
 
     /** "0.05" → "5" (strips trailing zeros so 0.05→5, 0.18→18, 0.125→12.5). */

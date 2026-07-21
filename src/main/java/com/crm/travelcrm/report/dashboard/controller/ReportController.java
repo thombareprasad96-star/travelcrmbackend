@@ -17,7 +17,8 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/reports")
 @RequiredArgsConstructor
 @PreAuthorize("hasAuthority('CRM_FULL')")
-public class ReportController {
+public class
+ReportController {
 
     private final ReportService reportService;
 

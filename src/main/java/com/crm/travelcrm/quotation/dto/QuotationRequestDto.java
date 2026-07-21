@@ -26,6 +26,9 @@ public class QuotationRequestDto {
     /** Lead.publicId (UUID) the quotation is being prepared for. */
     private UUID leadId;
 
+    /** Destination.publicId used only to prefill the quotation cover image. */
+    private UUID destinationId;
+
     @Size(max = 200, message = "Title must not exceed 200 characters")
     private String title;
 

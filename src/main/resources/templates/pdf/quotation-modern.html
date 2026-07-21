@@ -21,9 +21,9 @@
     • Fonts: 'ModernSans' = embedded DejaVu Sans, registered ONLY for Modern renders — it carries a
       real ₹ (U+20B9) and ✓/★ glyphs, which is why this design can price in ₹ where Classic prints
       "Rs.". Display face = base-14 'Times New Roman' (no registration needed). Nothing else resolves.
-    • Images: NEVER file:/// paths (Classic's known bug — its cover art is missing in every deployed
-      jar because of it). Only ${...imagePath}/${q.coverImageUrl}/${companyLogoUrl} URLs, always
-      th:if-guarded, sized via the Cloudinary c_fill transform because object-fit does not exist here.
+    • Images: user-supplied URLs are th:if-guarded and sized via the Cloudinary c_fill transform
+      because object-fit does not exist here. travelBgUrl is a bundled fallback extracted by the PDF
+      service, so Modern still has cover art when q.coverImageUrl is blank.
     • body background paints on EVERY page — that is what keeps the warm paper tone under content
       that flows onto auto-created pages.
 -->
@@ -197,15 +197,17 @@
        th:text="${customer.destination}">Pokhara &amp; Kathmandu</div>
   <div class="cover-rule"></div>
 
-  <div class="cover-img-frame" th:if="${!#strings.isEmpty(q.coverImageUrl)}">
+  <div class="cover-img-frame" th:if="${!#strings.isEmpty(q.coverImageUrl) or !#strings.isEmpty(travelBgUrl)}">
     <img class="cover-img"
-         th:src="${#strings.contains(q.coverImageUrl,'/upload/')
-                  ? #strings.replace(q.coverImageUrl,'/upload/','/upload/c_fill,w_1000,h_460,g_auto,f_jpg/')
-                  : q.coverImageUrl}" alt="cover"/>
+         th:src="${!#strings.isEmpty(q.coverImageUrl)
+                  ? (#strings.contains(q.coverImageUrl,'/upload/')
+                     ? #strings.replace(q.coverImageUrl,'/upload/','/upload/c_fill,w_1000,h_460,g_auto,f_jpg/')
+                     : q.coverImageUrl)
+                  : travelBgUrl}" alt="cover"/>
   </div>
 
-  <!-- no cover photo: a quiet serif ornament holds the frame's place in the rhythm -->
-  <div class="cover-orn" th:if="${#strings.isEmpty(q.coverImageUrl)}">
+  <!-- no usable cover art: a quiet serif ornament holds the frame's place in the rhythm -->
+  <div class="cover-orn" th:if="${#strings.isEmpty(q.coverImageUrl) and #strings.isEmpty(travelBgUrl)}">
     <div class="orn-stars">&#9733; &#160; &#9733; &#160; &#9733;</div>
     <div class="orn-line">A journey composed in every detail</div>
     <div class="orn-rule"></div>

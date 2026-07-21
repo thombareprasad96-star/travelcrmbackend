@@ -12,6 +12,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -31,6 +33,32 @@ public interface LeadRepository extends JpaRepository<Lead, Long> {
      */
     @EntityGraph(attributePaths = "assignedUser")
     List<Lead> findAllByTenantIdAndDeletedAtIsNullOrderByCreatedAtDesc(Long tenantId);
+
+    @EntityGraph(attributePaths = "assignedUser")
+    @Query("""
+            SELECT l
+            FROM Lead l
+            WHERE l.tenantId = :tenantId
+              AND l.deletedAt IS NULL
+              AND l.createdAt BETWEEN :from AND :to
+            ORDER BY l.createdAt DESC
+            """)
+    List<Lead> findDashboardLeads(@Param("tenantId") Long tenantId,
+                                  @Param("from") LocalDateTime from,
+                                  @Param("to") LocalDateTime to);
+
+    @EntityGraph(attributePaths = "assignedUser")
+    @Query("""
+            SELECT l
+            FROM Lead l
+            WHERE l.tenantId = :tenantId
+              AND l.deletedAt IS NULL
+              AND l.travelDate BETWEEN :from AND :to
+            ORDER BY l.travelDate ASC
+            """)
+    List<Lead> findUpcomingTravelLeads(@Param("tenantId") Long tenantId,
+                                       @Param("from") LocalDate from,
+                                       @Param("to") LocalDate to);
 
     // ── Scope-filtered variants (own / team): owner_id IN (:assignedUserIds) ──
     @EntityGraph(attributePaths = "assignedUser")

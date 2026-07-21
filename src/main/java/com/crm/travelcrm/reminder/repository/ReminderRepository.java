@@ -39,6 +39,9 @@ public interface ReminderRepository
     List<Reminder> findByTenantIdAndStatusAndDueDateBetweenAndDeletedAtIsNullOrderByDueDateAsc(
             Long tenantId, ReminderStatus status, Instant start, Instant end);
 
+    List<Reminder> findTop5ByTenantIdAndStatusInAndDueDateLessThanEqualAndDeletedAtIsNullOrderByDueDateAsc(
+            Long tenantId, Collection<ReminderStatus> statuses, Instant dueDate);
+
     long countByTenantIdAndDeletedAtIsNull(Long tenantId);
 
     long countByTenantIdAndStatusAndDeletedAtIsNull(Long tenantId, ReminderStatus status);
