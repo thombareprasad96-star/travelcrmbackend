@@ -50,6 +50,42 @@ validate_env_file() {
   done < "${file}"
 }
 
+env_value() {
+  local file="$1"
+  local expected_key="$2"
+  local line key
+
+  while IFS= read -r line || [ -n "${line}" ]; do
+    line="${line%$'\r'}"
+    if [ -z "${line}" ] || [[ "${line}" == \#* ]] || [[ "${line}" != *=* ]]; then
+      continue
+    fi
+
+    key="${line%%=*}"
+    if [ "${key}" = "${expected_key}" ]; then
+      printf '%s' "${line#*=}"
+      return 0
+    fi
+  done < "${file}"
+
+  return 1
+}
+
+reject_placeholder_secret() {
+  local file="$1"
+  local label="$2"
+  local key="$3"
+  local value
+
+  value="$(env_value "${file}" "${key}" || true)"
+  case "${value}" in
+    ""|"CHANGE_ME"|"Admin123")
+      echo "${label}: ${key} must be set to a fresh production value, not a placeholder or public dev default." >&2
+      exit 1
+      ;;
+  esac
+}
+
 cd "${APP_DIR}"
 
 if [ -z "${TRAVELCRM_IMAGE}" ]; then
@@ -80,6 +116,8 @@ fi
 
 validate_env_file "${COMPOSE_ENV_FILE}" "${APP_DIR}/${COMPOSE_ENV_FILE}"
 validate_env_file "${app_env_file}" "${app_env_file}"
+reject_placeholder_secret "${COMPOSE_ENV_FILE}" "${APP_DIR}/${COMPOSE_ENV_FILE}" "POSTGRES_PASSWORD"
+reject_placeholder_secret "${app_env_file}" "${app_env_file}" "DB_PASSWORD"
 
 if ! docker compose version >/dev/null 2>&1; then
   echo "Docker Compose v2 is required. Install the docker-compose-plugin package on the VPS." >&2
