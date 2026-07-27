@@ -10,7 +10,7 @@ on:
 env:
   IMAGE_NAME: travelcrm-backend
   HOSTINGER_PORT: ${{ secrets.HOSTINGER_PORT || vars.HOSTINGER_PORT || '22' }}
-  HOSTINGER_APP_DIR: ${{ vars.HOSTINGER_APP_DIR || '/opt/travelcrm' }}
+  HOSTINGER_APP_DIR: ${{ vars.HOSTINGER_APP_DIR || '/opt/travelcrm-be' }}
 
 jobs:
   validate-schema:
