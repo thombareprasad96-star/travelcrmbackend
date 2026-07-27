@@ -8,15 +8,16 @@ import com.crm.travelcrm.platform.audit.repository.PlatformAuditLogRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.UUID;
 
 /**
  * Writes {@link PlatformAuditLog} rows for god-mode operations. Mirrors the tenant-side
  * {@code ActivityLogRecorder}: every persist runs in its <b>own</b> transaction
- * ({@link Propagation#REQUIRES_NEW}) so the audit write commits independently of — and never
+ * ({@link TransactionDefinition#PROPAGATION_REQUIRES_NEW}) so the audit write commits independently of — and never
  * rolls back — the operation that triggered it.
  *
  * <p>Callers use {@code safeRecord(...)} (best-effort, swallows failures) so an audit-write
@@ -30,11 +31,13 @@ import java.util.UUID;
 public class PlatformAuditRecorder {
 
     private final PlatformAuditLogRepository repository;
+    private final PlatformTransactionManager transactionManager;
 
     /** Persist one audit row in a fresh transaction. */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void record(PlatformAuditLog entry) {
-        repository.save(entry);
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        tx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        tx.executeWithoutResult(status -> repository.save(entry));
     }
 
     /**

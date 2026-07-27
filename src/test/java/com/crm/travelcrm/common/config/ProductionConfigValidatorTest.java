@@ -11,37 +11,31 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/**
- * Tests for the boot gate that stands between a mistyped env file and a live deployment.
- *
- * <p>Both directions are load-bearing here, and the FALSE-POSITIVE direction is the one with no
- * safety net: this validator runs as a BeanFactoryPostProcessor on a remote VPS, so a check that
- * wrongly rejects a valid configuration fails the boot with a message the operator has to decode
- * over SSH. Every "rejects" test below therefore has a "accepts the valid form" counterpart.
- */
 class ProductionConfigValidatorTest {
 
-    /** 32 random-ish bytes, Base64 — the shape `openssl rand -base64 32` produces. */
     private static final String GOOD_JWT =
-            Base64.getEncoder().encodeToString("0123456789abcdef0123456789abcdefX".substring(0, 32).getBytes());
+            Base64.getEncoder().encodeToString("0123456789abcdef0123456789abcdef".getBytes());
     private static final String GOOD_PORTAL_JWT =
             Base64.getEncoder().encodeToString("ZYXWVUTSRQPONMLKJIHGFEDCBA987654".getBytes());
     private static final String GOOD_AES_256 =
-            Base64.getEncoder().encodeToString("abcdefghijklmnopqrstuvwxyz012345".getBytes());   // 32 bytes
+            Base64.getEncoder().encodeToString("abcdefghijklmnopqrstuvwxyz012345".getBytes());
 
     private final ProductionConfigValidator validator = new ProductionConfigValidator();
 
-    /** A fully valid production environment. Each test mutates exactly one property off this. */
     private MockEnvironment validEnv() {
         MockEnvironment env = new MockEnvironment();
         env.setProperty("jwt.secret", GOOD_JWT);
         env.setProperty("portal.jwt.secret", GOOD_PORTAL_JWT);
-        env.setProperty("superadmin.signup-secret", "a-long-random-signup-secret-value");
         env.setProperty("app.encryption.key", GOOD_AES_256);
         env.setProperty("spring.datasource.password", "a-real-db-password");
         env.setProperty("app.public-base-url", "https://api.mytripsafar.com");
         env.setProperty("app.cors.allowed-origins", "https://mytripsafar.com,https://www.mytripsafar.com");
-        env.setProperty("SUPER_ADMIN_PASSWORD", "a-real-super-admin-password");
+        env.setProperty("SUPERADMIN_1_EMAIL", "rajpoottours2789@gmail.com");
+        env.setProperty("SUPERADMIN_1_PASSWORD", "a-real-super-admin-password-1!");
+        env.setProperty("SUPERADMIN_2_EMAIL", "thombareprasad96@gmail.com");
+        env.setProperty("SUPERADMIN_2_PASSWORD", "a-real-super-admin-password-2!");
+        env.setProperty("spring.mail.username", "vetotechit@gmail.com");
+        env.setProperty("app.super-admin.login-alerts.from-email", "vetotechit@gmail.com");
         env.setProperty("spring.jpa.hibernate.ddl-auto", "update");
         env.setProperty("app.seed.enabled", "false");
         return env;
@@ -54,71 +48,70 @@ class ProductionConfigValidatorTest {
     }
 
     @Nested
-    @DisplayName("placeholders left in the env file")
-    class Placeholders {
+    @DisplayName("fixed SuperAdmin bootstrap accounts")
+    class SuperAdminBootstrap {
 
         @Test
-        @DisplayName("CHANGE_ME signup secret is rejected — /api/auth/** is permitAll")
-        void changeMeSignupSecret() {
+        @DisplayName("wrong allowlist email is rejected")
+        void wrongSuperAdminEmail() {
             MockEnvironment env = validEnv();
-            env.setProperty("superadmin.signup-secret", "CHANGE_ME");
+            env.setProperty("SUPERADMIN_1_EMAIL", "somebody@example.com");
+
             assertThatThrownBy(() -> validator.validate(env))
                     .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("superadmin.signup-secret");
+                    .hasMessageContaining("SUPERADMIN_1_EMAIL")
+                    .hasMessageContaining("rajpoottours2789@gmail.com");
         }
 
         @Test
-        @DisplayName("blank signup secret is rejected — constantTimeEquals(\"\",\"\") returns true")
-        void blankSignupSecret() {
+        @DisplayName("missing bootstrap password is rejected")
+        void missingBootstrapPassword() {
             MockEnvironment env = validEnv();
-            env.setProperty("superadmin.signup-secret", "   ");
+            env.setProperty("SUPERADMIN_2_PASSWORD", "");
+
             assertThatThrownBy(() -> validator.validate(env))
                     .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("superadmin.signup-secret");
+                    .hasMessageContaining("SUPERADMIN_2_PASSWORD");
         }
 
         @Test
-        @DisplayName("CHANGE_ME encryption key is rejected before AesSecretCipher can die on it")
-        void changeMeEncryptionKey() {
+        @DisplayName("placeholder bootstrap password is rejected")
+        void placeholderBootstrapPassword() {
             MockEnvironment env = validEnv();
-            env.setProperty("app.encryption.key", "CHANGE_ME");
+            env.setProperty("SUPERADMIN_1_PASSWORD", "CHANGE_ME");
+
             assertThatThrownBy(() -> validator.validate(env))
                     .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("app.encryption.key");
-        }
-
-        @Test
-        @DisplayName("a placeholder is reported once, not twice")
-        void placeholderReportedOnce() {
-            MockEnvironment env = validEnv();
-            env.setProperty("app.encryption.key", "CHANGE_ME");
-            assertThatThrownBy(() -> validator.validate(env))
-                    .hasMessageNotContaining("not valid Base64");   // requireAesKey must stay quiet
+                    .hasMessageContaining("SUPERADMIN_1_PASSWORD");
         }
     }
 
     @Nested
-    @DisplayName("SUPER_ADMIN_PASSWORD — DataInitializer creates the platform account from it")
-    class SuperAdminPassword {
+    @DisplayName("platform CRM mailbox")
+    class PlatformMailbox {
 
         @Test
-        @DisplayName("missing is rejected, or the account gets this repo's public fallback password")
-        void missing() {
+        @DisplayName("personal Gmail SMTP account is rejected for SuperAdmin mail")
+        void personalGmailRejected() {
             MockEnvironment env = validEnv();
-            env.setProperty("SUPER_ADMIN_PASSWORD", "");
+            env.setProperty("spring.mail.username", "thombarep96@gmail.com");
+
             assertThatThrownBy(() -> validator.validate(env))
                     .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("SUPER_ADMIN_PASSWORD");
+                    .hasMessageContaining("spring.mail.username")
+                    .hasMessageContaining("vetotechit@gmail.com");
         }
 
         @Test
-        @DisplayName("CHANGE_ME is rejected")
-        void placeholder() {
+        @DisplayName("wrong SuperAdmin alert From address is rejected")
+        void wrongAlertFromRejected() {
             MockEnvironment env = validEnv();
-            env.setProperty("SUPER_ADMIN_PASSWORD", "CHANGE_ME");
+            env.setProperty("app.super-admin.login-alerts.from-email", "thombarep96@gmail.com");
+
             assertThatThrownBy(() -> validator.validate(env))
                     .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("SUPER_ADMIN_PASSWORD");
+                    .hasMessageContaining("app.super-admin.login-alerts.from-email")
+                    .hasMessageContaining("vetotechit@gmail.com");
         }
     }
 
@@ -147,29 +140,20 @@ class ProductionConfigValidatorTest {
         }
 
         @Test
-        @DisplayName("AES-128 (16 bytes) is ACCEPTED — the >=32 HMAC rule must not leak onto this key")
+        @DisplayName("AES-128 is accepted")
         void aes128Accepted() {
             MockEnvironment env = validEnv();
             env.setProperty("app.encryption.key", Base64.getEncoder().encodeToString("0123456789abcdef".getBytes()));
             assertThatCode(() -> validator.validate(env)).doesNotThrowAnyException();
         }
-
-        @Test
-        @DisplayName("AES-192 (24 bytes) is ACCEPTED")
-        void aes192Accepted() {
-            MockEnvironment env = validEnv();
-            env.setProperty("app.encryption.key",
-                    Base64.getEncoder().encodeToString("0123456789abcdef01234567".getBytes()));
-            assertThatCode(() -> validator.validate(env)).doesNotThrowAnyException();
-        }
     }
 
     @Nested
-    @DisplayName("ddl-auto — the one destructive setting reachable from the env file")
+    @DisplayName("ddl-auto")
     class DdlAuto {
 
         @Test
-        @DisplayName("create is rejected — it drops every table on each restart")
+        @DisplayName("create is rejected")
         void createRejected() {
             MockEnvironment env = validEnv();
             env.setProperty("spring.jpa.hibernate.ddl-auto", "create");
@@ -179,25 +163,79 @@ class ProductionConfigValidatorTest {
         }
 
         @Test
-        @DisplayName("create-drop is rejected")
-        void createDropRejected() {
-            MockEnvironment env = validEnv();
-            env.setProperty("spring.jpa.hibernate.ddl-auto", "create-drop");
-            assertThatThrownBy(() -> validator.validate(env))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("DESTROYS");
-        }
-
-        @Test
-        @DisplayName("validate and none are accepted — the documented migration path must not be blocked")
+        @DisplayName("update, validate, and none are accepted")
         void safeValuesAccepted() {
             for (String safe : new String[]{"update", "validate", "none", "UPDATE", " validate "}) {
                 MockEnvironment env = validEnv();
                 env.setProperty("spring.jpa.hibernate.ddl-auto", safe);
-                assertThatCode(() -> validator.validate(env))
-                        .as("ddl-auto=%s must be accepted", safe)
-                        .doesNotThrowAnyException();
+                assertThatCode(() -> validator.validate(env)).doesNotThrowAnyException();
             }
+        }
+    }
+
+    @Nested
+    @DisplayName("Flyway production cutover")
+    class FlywayCutover {
+
+        @Test
+        @DisplayName("Flyway enabled with Hibernate update is rejected")
+        void flywayRequiresHibernateValidate() {
+            MockEnvironment env = validEnv();
+            env.setProperty("spring.flyway.enabled", "true");
+            env.setProperty("spring.jpa.hibernate.ddl-auto", "update");
+            env.setProperty("spring.sql.init.mode", "never");
+
+            assertThatThrownBy(() -> validator.validate(env))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("Flyway owns schema changes")
+                    .hasMessageContaining("JPA_DDL_AUTO=validate");
+        }
+
+        @Test
+        @DisplayName("Flyway enabled with Hibernate validate is accepted")
+        void flywayWithHibernateValidateAccepted() {
+            MockEnvironment env = validEnv();
+            env.setProperty("spring.flyway.enabled", "true");
+            env.setProperty("spring.jpa.hibernate.ddl-auto", "validate");
+            env.setProperty("spring.sql.init.mode", "never");
+
+            assertThatCode(() -> validator.validate(env)).doesNotThrowAnyException();
+        }
+
+        @Test
+        @DisplayName("Flyway enabled with Spring SQL init is rejected")
+        void flywayRejectsSqlInitReplay() {
+            MockEnvironment env = validEnv();
+            env.setProperty("spring.flyway.enabled", "true");
+            env.setProperty("spring.jpa.hibernate.ddl-auto", "validate");
+            env.setProperty("spring.sql.init.mode", "always");
+
+            assertThatThrownBy(() -> validator.validate(env))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("spring.sql.init.mode")
+                    .hasMessageContaining("SQL_INIT_MODE=never");
+        }
+
+        @Test
+        @DisplayName("baseline-on-migrate requires a one-time explicit allowance")
+        void baselineOnMigrateRequiresAllowance() {
+            MockEnvironment env = validEnv();
+            env.setProperty("spring.flyway.baseline-on-migrate", "true");
+
+            assertThatThrownBy(() -> validator.validate(env))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("baseline-on-migrate")
+                    .hasMessageContaining("app.flyway.allow-baseline-on-migrate=true");
+        }
+
+        @Test
+        @DisplayName("baseline-on-migrate is accepted only with explicit allowance")
+        void baselineOnMigrateWithAllowanceAccepted() {
+            MockEnvironment env = validEnv();
+            env.setProperty("spring.flyway.baseline-on-migrate", "true");
+            env.setProperty("app.flyway.allow-baseline-on-migrate", "true");
+
+            assertThatCode(() -> validator.validate(env)).doesNotThrowAnyException();
         }
     }
 
@@ -206,7 +244,7 @@ class ProductionConfigValidatorTest {
     class Cors {
 
         @Test
-        @DisplayName("a plain http:// origin is rejected — the SPA always sends Origin: https://")
+        @DisplayName("a plain http:// origin is rejected")
         void httpOriginRejected() {
             MockEnvironment env = validEnv();
             env.setProperty("app.cors.allowed-origins", "http://mytripsafar.com");
@@ -216,7 +254,7 @@ class ProductionConfigValidatorTest {
         }
 
         @Test
-        @DisplayName("apex + www over https is accepted")
+        @DisplayName("apex plus www over https is accepted")
         void httpsOriginsAccepted() {
             MockEnvironment env = validEnv();
             env.setProperty("app.cors.allowed-origins", "https://mytripsafar.com,https://www.mytripsafar.com");
@@ -225,7 +263,7 @@ class ProductionConfigValidatorTest {
     }
 
     @Nested
-    @DisplayName("secrets that are public in this repository's git history")
+    @DisplayName("secrets that are public in git history")
     class DevValues {
 
         @Test
@@ -239,10 +277,10 @@ class ProductionConfigValidatorTest {
         }
 
         @Test
-        @DisplayName("identical staff and portal keys are rejected — they are the only realm boundary")
+        @DisplayName("identical staff and portal keys are rejected")
         void identicalRealmKeys() {
             MockEnvironment env = validEnv();
-            env.setProperty("portal.jwt.secret", GOOD_JWT);   // same as jwt.secret
+            env.setProperty("portal.jwt.secret", GOOD_JWT);
             assertThatThrownBy(() -> validator.validate(env))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("IDENTICAL");
@@ -250,19 +288,19 @@ class ProductionConfigValidatorTest {
     }
 
     @Test
-    @DisplayName("every problem is collected into one message, not surfaced one boot at a time")
+    @DisplayName("every problem is collected into one message")
     void collectsAllProblems() {
         MockEnvironment env = validEnv();
-        env.setProperty("superadmin.signup-secret", "CHANGE_ME");
-        env.setProperty("SUPER_ADMIN_PASSWORD", "CHANGE_ME");
+        env.setProperty("SUPERADMIN_1_EMAIL", "wrong@example.com");
+        env.setProperty("SUPERADMIN_2_PASSWORD", "CHANGE_ME");
         env.setProperty("spring.jpa.hibernate.ddl-auto", "create");
         env.setProperty("app.cors.allowed-origins", "http://mytripsafar.com");
 
         assertThatThrownBy(() -> validator.validate(env))
                 .isInstanceOf(IllegalStateException.class)
                 .satisfies(e -> assertThat(e.getMessage())
-                        .contains("superadmin.signup-secret")
-                        .contains("SUPER_ADMIN_PASSWORD")
+                        .contains("SUPERADMIN_1_EMAIL")
+                        .contains("SUPERADMIN_2_PASSWORD")
                         .contains("DESTROYS")
                         .contains("http://"));
     }

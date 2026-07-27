@@ -1,0 +1,210 @@
+name: Deploy Backend to Hostinger VPS
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: travelcrm-backend
+  HOSTINGER_PORT: ${{ secrets.HOSTINGER_PORT || '22' }}
+  HOSTINGER_APP_DIR: ${{ vars.HOSTINGER_APP_DIR || '/opt/travelcrm' }}
+
+jobs:
+  validate-schema:
+    name: Build and validate schema
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: travelcrm_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d travelcrm_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Compile
+        run: ./mvnw -B -DskipTests compile
+
+      - name: Check active Flyway migration directory
+        id: migrations
+        shell: bash
+        run: |
+          if compgen -G "src/main/resources/db/migration/V*__*.sql" > /dev/null || \
+             compgen -G "src/main/resources/db/migration/R__*.sql" > /dev/null; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No active Flyway migrations found. V1 baseline is expected to stay under db/proposed until reviewed."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Flyway migrate
+        if: steps.migrations.outputs.present == 'true'
+        run: >
+          ./mvnw -B
+          org.flywaydb:flyway-maven-plugin:11.7.2:migrate
+          -Dflyway.url=jdbc:postgresql://localhost:5432/travelcrm_ci
+          -Dflyway.user=postgres
+          -Dflyway.password=postgres
+          -Dflyway.locations=filesystem:src/main/resources/db/migration
+          -Dflyway.validateOnMigrate=true
+          -Dflyway.outOfOrder=false
+          -Dflyway.cleanDisabled=true
+          -Dflyway.validateMigrationNaming=true
+
+      - name: Flyway validate
+        if: steps.migrations.outputs.present == 'true'
+        run: >
+          ./mvnw -B
+          org.flywaydb:flyway-maven-plugin:11.7.2:validate
+          -Dflyway.url=jdbc:postgresql://localhost:5432/travelcrm_ci
+          -Dflyway.user=postgres
+          -Dflyway.password=postgres
+          -Dflyway.locations=filesystem:src/main/resources/db/migration
+          -Dflyway.outOfOrder=false
+          -Dflyway.cleanDisabled=true
+          -Dflyway.validateMigrationNaming=true
+
+      - name: Hibernate schema validation
+        if: steps.migrations.outputs.present == 'true'
+        shell: bash
+        run: |
+          ./mvnw -q dependency:build-classpath -Dmdep.outputFile=target/classpath.txt
+          mkdir -p target/schema-validation
+          CP="target/classes:$(cat target/classpath.txt)"
+          javac -proc:none -encoding UTF-8 -cp "$CP" -d target/schema-validation scripts/schema/ValidateHibernateSchema.java
+          java -cp "target/schema-validation:$CP" ValidateHibernateSchema \
+            target/classes \
+            jdbc:postgresql://localhost:5432/travelcrm_ci \
+            postgres \
+            postgres
+
+  build-and-push:
+    name: Build and push Docker image
+    runs-on: ubuntu-latest
+    needs: validate-schema
+    outputs:
+      image_uri: ${{ steps.image.outputs.image_uri }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set image tags
+        id: image
+        shell: bash
+        run: |
+          image_uri="docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${IMAGE_NAME}:${GITHUB_SHA}"
+          latest_uri="docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${IMAGE_NAME}:latest"
+          echo "image_uri=${image_uri}" >> "$GITHUB_OUTPUT"
+          echo "latest_uri=${latest_uri}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.image.outputs.image_uri }}
+            ${{ steps.image.outputs.latest_uri }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy on Hostinger VPS
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    environment: production
+
+    steps:
+      - name: Checkout deploy files
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        shell: bash
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+          HOSTINGER_KNOWN_HOSTS: ${{ secrets.HOSTINGER_KNOWN_HOSTS }}
+        run: |
+          : "${HOSTINGER_HOST:?Missing HOSTINGER_HOST secret}"
+          : "${HOSTINGER_USER:?Missing HOSTINGER_USER secret}"
+          : "${HOSTINGER_SSH_KEY:?Missing HOSTINGER_SSH_KEY secret}"
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" > ~/.ssh/hostinger_key
+          chmod 600 ~/.ssh/hostinger_key
+          if [ -n "${HOSTINGER_KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "$HOSTINGER_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$HOSTINGER_PORT" "$HOSTINGER_HOST" >> ~/.ssh/known_hosts
+          fi
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Upload compose files
+        shell: bash
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+        run: |
+          remote="${HOSTINGER_USER}@${HOSTINGER_HOST}"
+          ssh_opts=(-i ~/.ssh/hostinger_key -p "$HOSTINGER_PORT" -o StrictHostKeyChecking=yes)
+          scp_opts=(-i ~/.ssh/hostinger_key -P "$HOSTINGER_PORT" -o StrictHostKeyChecking=yes)
+          ssh "${ssh_opts[@]}" "$remote" "mkdir -p '$HOSTINGER_APP_DIR'"
+          scp "${scp_opts[@]}" \
+            deploy/docker-compose.hostinger.yml \
+            deploy/deploy-hostinger.sh \
+            "$remote:$HOSTINGER_APP_DIR/"
+
+      - name: Run remote deployment
+        shell: bash
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          TRAVELCRM_IMAGE: ${{ needs.build-and-push.outputs.image_uri }}
+        run: |
+          remote="${HOSTINGER_USER}@${HOSTINGER_HOST}"
+          ssh_opts=(-i ~/.ssh/hostinger_key -p "$HOSTINGER_PORT" -o StrictHostKeyChecking=yes)
+          app_dir_q="$(printf '%q' "$HOSTINGER_APP_DIR")"
+          image_q="$(printf '%q' "$TRAVELCRM_IMAGE")"
+          docker_user_q="$(printf '%q' "$DOCKERHUB_USERNAME")"
+          docker_token_q="$(printf '%q' "$DOCKERHUB_TOKEN")"
+          ssh "${ssh_opts[@]}" "$remote" \
+            "APP_DIR=$app_dir_q TRAVELCRM_IMAGE=$image_q DOCKERHUB_USERNAME=$docker_user_q DOCKERHUB_TOKEN=$docker_token_q bash -s" <<'REMOTE_DEPLOY'
+          set -euo pipefail
+          cd "$APP_DIR"
+          chmod +x deploy-hostinger.sh
+          ./deploy-hostinger.sh
+          REMOTE_DEPLOY

@@ -1,0 +1,95 @@
+name: Flyway Schema Validation
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  flyway-validate:
+    name: Flyway migrate and validate
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: travelcrm_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d travelcrm_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Compile
+        run: ./mvnw -B -DskipTests compile
+
+      - name: Check active Flyway migration directory
+        id: migrations
+        shell: bash
+        run: |
+          if compgen -G "src/main/resources/db/migration/V*__*.sql" > /dev/null || \
+             compgen -G "src/main/resources/db/migration/R__*.sql" > /dev/null; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No active Flyway migrations found. V1 baseline is expected to stay under db/proposed until reviewed."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Flyway migrate
+        if: steps.migrations.outputs.present == 'true'
+        run: >
+          ./mvnw -B
+          org.flywaydb:flyway-maven-plugin:11.7.2:migrate
+          -Dflyway.url=jdbc:postgresql://localhost:5432/travelcrm_ci
+          -Dflyway.user=postgres
+          -Dflyway.password=postgres
+          -Dflyway.locations=filesystem:src/main/resources/db/migration
+          -Dflyway.validateOnMigrate=true
+          -Dflyway.outOfOrder=false
+          -Dflyway.cleanDisabled=true
+          -Dflyway.validateMigrationNaming=true
+
+      - name: Flyway validate
+        if: steps.migrations.outputs.present == 'true'
+        run: >
+          ./mvnw -B
+          org.flywaydb:flyway-maven-plugin:11.7.2:validate
+          -Dflyway.url=jdbc:postgresql://localhost:5432/travelcrm_ci
+          -Dflyway.user=postgres
+          -Dflyway.password=postgres
+          -Dflyway.locations=filesystem:src/main/resources/db/migration
+          -Dflyway.outOfOrder=false
+          -Dflyway.cleanDisabled=true
+          -Dflyway.validateMigrationNaming=true
+
+      - name: Hibernate schema validation
+        if: steps.migrations.outputs.present == 'true'
+        shell: bash
+        run: |
+          ./mvnw -q dependency:build-classpath -Dmdep.outputFile=target/classpath.txt
+          mkdir -p target/schema-validation
+          CP="target/classes:$(cat target/classpath.txt)"
+          javac -proc:none -encoding UTF-8 -cp "$CP" -d target/schema-validation scripts/schema/ValidateHibernateSchema.java
+          java -cp "target/schema-validation:$CP" ValidateHibernateSchema \
+            target/classes \
+            jdbc:postgresql://localhost:5432/travelcrm_ci \
+            postgres \
+            postgres

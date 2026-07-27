@@ -44,9 +44,9 @@ public class ProductionConfigValidator implements BeanFactoryPostProcessor {
     /** The public dev values from application.properties. Present in prod ⇒ hard stop. */
     private static final String DEV_JWT_SECRET = "4Y7bN9vR+KzX2pQW5mE9JtGvC3sX8zK1rN6xP4vM1bA=";
     private static final String DEV_PORTAL_JWT_SECRET = "A474IqgP7X82N9xh/cOLKZgwoEHlSMsuOCRHAW50Jmk=";
-    private static final String DEV_SIGNUP_SECRET = "mySecretKey123";
     private static final String DEV_ENCRYPTION_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
     private static final String DEV_DB_PASSWORD = "Admin123";
+    private static final String CRM_MAILBOX = "vetotechit@gmail.com";
 
     /** HS256 needs a key at least as long as its output; jjwt rejects anything shorter anyway. */
     private static final int MIN_HMAC_KEY_BYTES = 32;
@@ -69,20 +69,28 @@ public class ProductionConfigValidator implements BeanFactoryPostProcessor {
     void validate(Environment env) {
         String jwtSecret = env.getProperty("jwt.secret");
         String portalJwtSecret = env.getProperty("portal.jwt.secret");
-        String signupSecret = env.getProperty("superadmin.signup-secret");
         String encryptionKey = env.getProperty("app.encryption.key");
         String dbPassword = env.getProperty("spring.datasource.password");
         String publicBaseUrl = env.getProperty("app.public-base-url");
         String corsOrigins = env.getProperty("app.cors.allowed-origins");
-        String superAdminPassword = env.getProperty("SUPER_ADMIN_PASSWORD");
+        String superAdmin1Email = env.getProperty("SUPERADMIN_1_EMAIL");
+        String superAdmin1Password = env.getProperty("SUPERADMIN_1_PASSWORD");
+        String superAdmin2Email = env.getProperty("SUPERADMIN_2_EMAIL");
+        String superAdmin2Password = env.getProperty("SUPERADMIN_2_PASSWORD");
+        String mailUsername = env.getProperty("spring.mail.username");
+        String superAdminAlertFrom = env.getProperty("app.super-admin.login-alerts.from-email");
         String ddlAuto = env.getProperty("spring.jpa.hibernate.ddl-auto");
+        String sqlInitMode = env.getProperty("spring.sql.init.mode");
+        boolean flywayEnabled = env.getProperty("spring.flyway.enabled", Boolean.class, false);
+        boolean flywayBaselineOnMigrate = env.getProperty("spring.flyway.baseline-on-migrate", Boolean.class, false);
+        boolean allowFlywayBaselineOnMigrate = env.getProperty(
+                "app.flyway.allow-baseline-on-migrate", Boolean.class, false);
         boolean seedEnabled = env.getProperty("app.seed.enabled", Boolean.class, false);
 
         List<String> problems = new ArrayList<>();
 
         rejectDevValue(problems, jwtSecret, DEV_JWT_SECRET, "jwt.secret", "JWT_SECRET");
         rejectDevValue(problems, portalJwtSecret, DEV_PORTAL_JWT_SECRET, "portal.jwt.secret", "PORTAL_JWT_SECRET");
-        rejectDevValue(problems, signupSecret, DEV_SIGNUP_SECRET, "superadmin.signup-secret", "SUPERADMIN_SIGNUP_SECRET");
         rejectDevValue(problems, encryptionKey, DEV_ENCRYPTION_KEY, "app.encryption.key", "APP_ENCRYPTION_KEY");
         rejectDevValue(problems, dbPassword, DEV_DB_PASSWORD, "spring.datasource.password", "DB_PASSWORD");
 
@@ -94,7 +102,6 @@ public class ProductionConfigValidator implements BeanFactoryPostProcessor {
         // missed a line actually has. That matters most for the signup secret: /api/auth/** is
         // permitAll, and constantTimeEquals("", "") is MessageDigest.isEqual(byte[0], byte[0]),
         // which returns TRUE — so a blank secret authorizes a request that sends no header at all.
-        requireConfigured(problems, signupSecret, "superadmin.signup-secret", "SUPERADMIN_SIGNUP_SECRET");
         requireConfigured(problems, encryptionKey, "app.encryption.key", "APP_ENCRYPTION_KEY");
         requireConfigured(problems, dbPassword, "spring.datasource.password", "DB_PASSWORD");
 
@@ -102,7 +109,16 @@ public class ProductionConfigValidator implements BeanFactoryPostProcessor {
         // database. Without this the account is created with the repository's public fallback
         // password and sits on the internet-facing login form. DataInitializer throws on its own
         // too, but that happens after the context is up; caught here it joins the one problem block.
-        requireConfigured(problems, superAdminPassword, "SUPER_ADMIN_PASSWORD", "SUPER_ADMIN_PASSWORD");
+        requireExact(problems, superAdmin1Email, "SUPERADMIN_1_EMAIL", "rajpoottours2789@gmail.com");
+        requireExact(problems, superAdmin2Email, "SUPERADMIN_2_EMAIL", "thombareprasad96@gmail.com");
+        requireConfigured(problems, superAdmin1Password, "SUPERADMIN_1_PASSWORD", "SUPERADMIN_1_PASSWORD");
+        requireConfigured(problems, superAdmin2Password, "SUPERADMIN_2_PASSWORD", "SUPERADMIN_2_PASSWORD");
+
+        requireExactValue(problems, mailUsername, "spring.mail.username", "MAIL_USERNAME", CRM_MAILBOX,
+                "SuperAdmin/security email must authenticate as the CRM mailbox, not a personal Gmail account.");
+        requireExactValue(problems, superAdminAlertFrom, "app.super-admin.login-alerts.from-email",
+                "APP_SUPER_ADMIN_LOGIN_ALERTS_FROM_EMAIL", CRM_MAILBOX,
+                "SuperAdmin/security email must stamp the same CRM From address.");
 
         // AesSecretCipher decodes this as Base64 and hands it to SecretKeySpec, so a non-Base64 or
         // wrong-length value boots past every check above and then dies at first use with
@@ -161,6 +177,20 @@ public class ProductionConfigValidator implements BeanFactoryPostProcessor {
             problems.add("spring.jpa.hibernate.ddl-auto is '" + ddlAuto + "' — 'create'/'create-drop' DESTROYS "
                     + "the production schema on every restart. JPA_DDL_AUTO must be update, validate or none.");
         }
+        if (flywayEnabled && ddlAuto != null
+                && !Set.of("validate", "none").contains(ddlAuto.trim().toLowerCase())) {
+            problems.add("spring.flyway.enabled is TRUE while spring.jpa.hibernate.ddl-auto is '" + ddlAuto
+                    + "'. When Flyway owns schema changes, Hibernate must only validate it. Set JPA_DDL_AUTO=validate.");
+        }
+        if (flywayEnabled && (sqlInitMode == null || !"never".equalsIgnoreCase(sqlInitMode.trim()))) {
+            problems.add("spring.flyway.enabled is TRUE while spring.sql.init.mode is '" + sqlInitMode
+                    + "'. Once Flyway owns schema changes, db/indexes.sql must not replay at boot. Set SQL_INIT_MODE=never.");
+        }
+        if (flywayBaselineOnMigrate && !allowFlywayBaselineOnMigrate) {
+            problems.add("spring.flyway.baseline-on-migrate is TRUE. That setting is only for the one-time adoption "
+                    + "of an existing schema and must not remain enabled for normal deploys. If this is the planned "
+                    + "baseline-stamp run, set app.flyway.allow-baseline-on-migrate=true for that run only.");
+        }
 
         if (!problems.isEmpty()) {
             String detail = String.join(System.lineSeparator() + "  - ", problems);
@@ -199,6 +229,23 @@ public class ProductionConfigValidator implements BeanFactoryPostProcessor {
         } else if (PLACEHOLDERS.contains(value.trim())) {
             problems.add(property + " is still the placeholder '" + value.trim() + "' — set " + envVar
                     + " to a real value (openssl rand -base64 32).");
+        }
+    }
+
+    private void requireExact(List<String> problems, String value, String envVar, String expected) {
+        requireConfigured(problems, value, envVar, envVar);
+        if (value != null && !value.isBlank() && !PLACEHOLDERS.contains(value.trim())
+                && !expected.equalsIgnoreCase(value.trim())) {
+            problems.add(envVar + " must be " + expected + " for the fixed SuperAdmin allowlist.");
+        }
+    }
+
+    private void requireExactValue(List<String> problems, String value, String property,
+                                   String envVar, String expected, String reason) {
+        requireConfigured(problems, value, property, envVar);
+        if (value != null && !value.isBlank() && !PLACEHOLDERS.contains(value.trim())
+                && !expected.equalsIgnoreCase(value.trim())) {
+            problems.add(property + " must be " + expected + ". " + reason);
         }
     }
 

@@ -1,6 +1,7 @@
 package com.crm.travelcrm.platform.user.dto;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
@@ -9,6 +10,10 @@ import lombok.Data;
 public class PlatformResetPasswordRequest {
 
     @NotBlank(message = "New password is required")
-    @Size(min = 8, message = "Password must be at least 8 characters")
+    @Size(min = 12, max = 128, message = "Password must be 12-128 characters")
+    @Pattern(
+            regexp = "^(?=\\S+$)(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[^A-Za-z0-9]).*$",
+            message = "Password must contain uppercase, lowercase, number, and symbol"
+    )
     private String newPassword;
 }

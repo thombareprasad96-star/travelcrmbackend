@@ -121,8 +121,13 @@ public class PlatformNotificationController {
         // realm check is what keeps it out of the platform feed, and it must happen here because the
         // permitAll rule means no @PreAuthorize gate ran.
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth == null || !(auth.getPrincipal() instanceof SuperAdmin)) {
+        if (auth == null || !(auth.getPrincipal() instanceof SuperAdmin superAdmin)) {
             log.warn("Console SSE connection rejected: non-platform principal on the platform stream");
+            response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+            return null;
+        }
+        if (!superAdmin.isSetupComplete()) {
+            log.warn("Console SSE connection rejected: SuperAdmin setup incomplete");
             response.setStatus(HttpServletResponse.SC_FORBIDDEN);
             return null;
         }

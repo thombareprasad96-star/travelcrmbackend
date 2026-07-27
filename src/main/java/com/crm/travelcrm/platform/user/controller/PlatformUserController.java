@@ -1,11 +1,15 @@
 package com.crm.travelcrm.platform.user.controller;
 
+import com.crm.travelcrm.auth.mfa.SuperAdminStepUpService;
 import com.crm.travelcrm.common.dto.ApiResponse;
 import com.crm.travelcrm.common.dto.PagedApiResponse;
 import com.crm.travelcrm.common.dto.PaginationMeta;
+import com.crm.travelcrm.common.entity.SuperAdmin;
+import com.crm.travelcrm.common.util.ClientIp;
 import com.crm.travelcrm.platform.user.dto.PlatformResetPasswordRequest;
 import com.crm.travelcrm.platform.user.dto.PlatformUserResponse;
 import com.crm.travelcrm.platform.user.service.PlatformUserService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -14,6 +18,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
@@ -29,6 +34,7 @@ import java.util.UUID;
 public class PlatformUserController {
 
     private final PlatformUserService platformUserService;
+    private final SuperAdminStepUpService superAdminStepUpService;
 
     @GetMapping
     public ResponseEntity<PagedApiResponse<PlatformUserResponse>> list(
@@ -48,19 +54,41 @@ public class PlatformUserController {
     }
 
     @PostMapping("/{publicId}/lock")
-    public ResponseEntity<ApiResponse<PlatformUserResponse>> lock(@PathVariable UUID publicId) {
+    public ResponseEntity<ApiResponse<PlatformUserResponse>> lock(
+            @PathVariable UUID publicId,
+            @AuthenticationPrincipal SuperAdmin superAdmin,
+            @RequestHeader(value = SuperAdminStepUpService.MFA_CODE_HEADER, required = false) String mfaCode,
+            HttpServletRequest request) {
+        requireStepUp(superAdmin, mfaCode, "lock tenant user", request);
         return ResponseEntity.ok(ApiResponse.success("User locked", platformUserService.lock(publicId)));
     }
 
     @PostMapping("/{publicId}/unlock")
-    public ResponseEntity<ApiResponse<PlatformUserResponse>> unlock(@PathVariable UUID publicId) {
+    public ResponseEntity<ApiResponse<PlatformUserResponse>> unlock(
+            @PathVariable UUID publicId,
+            @AuthenticationPrincipal SuperAdmin superAdmin,
+            @RequestHeader(value = SuperAdminStepUpService.MFA_CODE_HEADER, required = false) String mfaCode,
+            HttpServletRequest request) {
+        requireStepUp(superAdmin, mfaCode, "unlock tenant user", request);
         return ResponseEntity.ok(ApiResponse.success("User unlocked", platformUserService.unlock(publicId)));
     }
 
     @PostMapping("/{publicId}/reset-password")
     public ResponseEntity<ApiResponse<PlatformUserResponse>> resetPassword(
-            @PathVariable UUID publicId, @Valid @RequestBody PlatformResetPasswordRequest request) {
+            @PathVariable UUID publicId,
+            @Valid @RequestBody PlatformResetPasswordRequest request,
+            @AuthenticationPrincipal SuperAdmin superAdmin,
+            @RequestHeader(value = SuperAdminStepUpService.MFA_CODE_HEADER, required = false) String mfaCode,
+            HttpServletRequest httpRequest) {
+        requireStepUp(superAdmin, mfaCode, "force-reset tenant user password", httpRequest);
         return ResponseEntity.ok(ApiResponse.success(
                 "Password reset", platformUserService.resetPassword(publicId, request.getNewPassword())));
+    }
+
+    private void requireStepUp(SuperAdmin superAdmin, String mfaCode, String action,
+                               HttpServletRequest request) {
+        superAdminStepUpService.requireCode(
+                superAdmin, mfaCode, action,
+                ClientIp.resolve(request), request.getHeader("User-Agent"));
     }
 }

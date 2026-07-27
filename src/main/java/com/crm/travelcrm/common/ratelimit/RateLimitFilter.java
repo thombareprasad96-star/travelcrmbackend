@@ -21,9 +21,15 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
     private static final Logger log = LogManager.getLogger(RateLimitFilter.class);
 
-    // 3 login attempts per IP per minute
+    // General auth endpoints per IP.
     private static final int      LOGIN_MAX   = 50;
     private static final Duration LOGIN_WIN   = Duration.ofMinutes(1);
+
+    // SuperAdmin password/MFA endpoints carry platform-wide authority; throttle harder.
+    private static final int      SUPERADMIN_AUTH_MAX = 10;
+    private static final Duration SUPERADMIN_AUTH_WIN = Duration.ofMinutes(5);
+    private static final String   SUPERADMIN_LOGIN_PATH = "/api/auth/superadmin/login";
+    private static final String   SUPERADMIN_MFA_PATH = "/api/auth/superadmin/mfa/verify";
 
     // 3 signup attempts per IP per 10 minutes
     private static final int      SIGNUP_MAX  = 3;
@@ -93,8 +99,9 @@ public class RateLimitFilter extends OncePerRequestFilter {
         }
 
         boolean isSignup = path.endsWith("/signup");
-        int      limit   = isSignup ? SIGNUP_MAX  : LOGIN_MAX;
-        Duration window  = isSignup ? SIGNUP_WIN  : LOGIN_WIN;
+        boolean isSuperAdminAuth = SUPERADMIN_LOGIN_PATH.equals(path) || SUPERADMIN_MFA_PATH.equals(path);
+        int      limit   = isSignup ? SIGNUP_MAX : isSuperAdminAuth ? SUPERADMIN_AUTH_MAX : LOGIN_MAX;
+        Duration window  = isSignup ? SIGNUP_WIN : isSuperAdminAuth ? SUPERADMIN_AUTH_WIN : LOGIN_WIN;
 
         // Key format: rate_limit:api:auth:superadmin:login:<ip>
         String key = "rate_limit:" + path.replace('/', ':') + ":" + ip;

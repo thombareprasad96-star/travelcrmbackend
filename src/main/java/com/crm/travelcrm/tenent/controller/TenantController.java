@@ -1,8 +1,11 @@
 package com.crm.travelcrm.tenent.controller;
 
+import com.crm.travelcrm.auth.mfa.SuperAdminStepUpService;
 import com.crm.travelcrm.common.dto.ApiResponse;
 import com.crm.travelcrm.common.dto.PagedApiResponse;
 import com.crm.travelcrm.common.dto.PaginationMeta;
+import com.crm.travelcrm.common.entity.SuperAdmin;
+import com.crm.travelcrm.common.util.ClientIp;
 import com.crm.travelcrm.tenent.dto.ChangePlanRequest;
 import com.crm.travelcrm.tenent.dto.CreateTenantRequest;
 import com.crm.travelcrm.tenent.dto.HardDeleteTenantRequest;
@@ -11,6 +14,7 @@ import com.crm.travelcrm.tenent.dto.TenantSummaryResponse;
 import com.crm.travelcrm.tenent.dto.UpdateTenantRequest;
 import com.crm.travelcrm.tenent.enums.TenantStatus;
 import com.crm.travelcrm.tenent.service.TenantService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -21,6 +25,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
@@ -37,6 +42,7 @@ import java.util.UUID;
 public class TenantController {
 
     private final TenantService tenantService;
+    private final SuperAdminStepUpService superAdminStepUpService;
 
     @PostMapping
     public ResponseEntity<ApiResponse<TenantResponse>> create(
@@ -82,7 +88,12 @@ public class TenantController {
 
     @PostMapping("/{publicId}/plan")
     public ResponseEntity<ApiResponse<TenantResponse>> changePlan(
-            @PathVariable UUID publicId, @Valid @RequestBody ChangePlanRequest request) {
+            @PathVariable UUID publicId,
+            @Valid @RequestBody ChangePlanRequest request,
+            @AuthenticationPrincipal SuperAdmin superAdmin,
+            @RequestHeader(value = SuperAdminStepUpService.MFA_CODE_HEADER, required = false) String mfaCode,
+            HttpServletRequest httpRequest) {
+        requireStepUp(superAdmin, mfaCode, "tenant plan change", httpRequest);
         return ResponseEntity.ok(ApiResponse.success(
                 "Plan changed", tenantService.changePlan(publicId, request.getPlan())));
     }
@@ -100,7 +111,12 @@ public class TenantController {
     }
 
     @DeleteMapping("/{publicId}")
-    public ResponseEntity<ApiResponse<Void>> softDelete(@PathVariable UUID publicId) {
+    public ResponseEntity<ApiResponse<Void>> softDelete(
+            @PathVariable UUID publicId,
+            @AuthenticationPrincipal SuperAdmin superAdmin,
+            @RequestHeader(value = SuperAdminStepUpService.MFA_CODE_HEADER, required = false) String mfaCode,
+            HttpServletRequest request) {
+        requireStepUp(superAdmin, mfaCode, "tenant soft-delete", request);
         tenantService.softDelete(publicId);
         return ResponseEntity.ok(ApiResponse.success("Tenant deleted", null));
     }
@@ -114,8 +130,20 @@ public class TenantController {
     /** DANGER ZONE — irreversible. Requires the tenant to be soft-deleted and the org code echoed. */
     @PostMapping("/{publicId}/hard-delete")
     public ResponseEntity<ApiResponse<Void>> hardDelete(
-            @PathVariable UUID publicId, @RequestBody HardDeleteTenantRequest request) {
+            @PathVariable UUID publicId,
+            @RequestBody HardDeleteTenantRequest request,
+            @AuthenticationPrincipal SuperAdmin superAdmin,
+            @RequestHeader(value = SuperAdminStepUpService.MFA_CODE_HEADER, required = false) String mfaCode,
+            HttpServletRequest httpRequest) {
+        requireStepUp(superAdmin, mfaCode, "tenant hard-delete", httpRequest);
         tenantService.hardDelete(publicId, request.getOrganizationCode());
         return ResponseEntity.ok(ApiResponse.success("Tenant permanently deleted", null));
+    }
+
+    private void requireStepUp(SuperAdmin superAdmin, String mfaCode, String action,
+                               HttpServletRequest request) {
+        superAdminStepUpService.requireCode(
+                superAdmin, mfaCode, action,
+                ClientIp.resolve(request), request.getHeader("User-Agent"));
     }
 }

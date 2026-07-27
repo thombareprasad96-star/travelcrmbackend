@@ -4,6 +4,7 @@ import com.crm.travelcrm.lead.enums.LeadOrigin;
 import com.crm.travelcrm.lead.enums.LeadSource;
 import com.crm.travelcrm.lead.enums.LeadStage;
 import com.crm.travelcrm.leadsource.entity.LeadIngestStatus;
+import com.crm.travelcrm.platform.audit.entity.PlatformAuditAction;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.boot.ApplicationArguments;
@@ -65,6 +66,8 @@ public class SchemaEnumConstraintValidator implements ApplicationRunner {
      * pre-existing breakage elsewhere does not land as "the lead work broke the boot".
      */
     private static final List<GuardedColumn> GUARDED = List.of(
+            new GuardedColumn("platform_audit_logs", "action", "platform_audit_logs_action_check",
+                    PlatformAuditAction.class),
             new GuardedColumn("leads", "lead_source", "leads_lead_source_check", LeadSource.class),
             new GuardedColumn("leads", "lead_stage", "leads_lead_stage_check", LeadStage.class),
             new GuardedColumn("leads", "origin", "leads_origin_check", LeadOrigin.class),

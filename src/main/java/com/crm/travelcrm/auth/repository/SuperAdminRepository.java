@@ -6,6 +6,7 @@ import org.springframework.stereotype.Repository;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 @Repository
 public interface SuperAdminRepository extends JpaRepository<SuperAdmin, Long> {
@@ -14,7 +15,19 @@ public interface SuperAdminRepository extends JpaRepository<SuperAdmin, Long> {
     /** H1 — a soft-deleted platform account must never authenticate. Use this on every auth path. */
     Optional<SuperAdmin> findByEmailAndDeletedAtIsNull(String email);
 
+    Optional<SuperAdmin> findByIdAndDeletedAtIsNull(Long id);
+
+    Optional<SuperAdmin> findByPublicIdAndDeletedAtIsNull(UUID publicId);
+
+    long countByDeletedAtIsNull();
+
     boolean existsByEmail(String email);
+
+    boolean existsByEmailAndDeletedAtIsNull(String email);
+
+    List<SuperAdmin> findAllByDeletedAtIsNull();
+
+    List<SuperAdmin> findAllByDeletedAtIsNullOrderByCreatedAtAsc();
 
     /**
      * Every platform account that should receive notifications. Mirrors the auth path's acceptance

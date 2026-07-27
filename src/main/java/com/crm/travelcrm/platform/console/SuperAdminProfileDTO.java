@@ -7,5 +7,11 @@ import java.util.UUID;
  * {@code GET /api/super-admin/me} so the console can verify the session and render identity.
  * Externalises {@code publicId} only — never the internal Long PK.
  */
-public record SuperAdminProfileDTO(UUID publicId, String name, String email) {
+public record SuperAdminProfileDTO(
+        UUID publicId,
+        String name,
+        String email,
+        boolean mfaEnabled,
+        boolean mustChangePassword,
+        boolean setupComplete) {
 }

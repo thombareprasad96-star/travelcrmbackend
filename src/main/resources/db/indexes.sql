@@ -120,6 +120,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_users_email_active
         ON users (email)
         WHERE deleted_at IS NULL;
 
+-- SuperAdmin MFA / token-version backfill. Hibernate adds these nullable columns on old
+-- databases. Null token_version means a pre-MFA row; set it to 1 so older SuperAdmin
+-- JWTs with no 'tv' claim (treated as 0) are rejected immediately after deployment.
+UPDATE super_admins SET mfa_enabled = FALSE WHERE mfa_enabled IS NULL;
+UPDATE super_admins SET token_version = 1 WHERE token_version IS NULL;
+UPDATE super_admins SET failed_login_attempts = 0 WHERE failed_login_attempts IS NULL;
+UPDATE super_admins SET must_change_password = FALSE WHERE must_change_password IS NULL;
+UPDATE super_admins SET created_via_invite = FALSE WHERE created_via_invite IS NULL;
+
 -- NOTE: tenants(organization_code) is intentionally left on its existing absolute
 -- UNIQUE constraint. Converting it to a partial index would require dropping a
 -- Hibernate-managed constraint on the table backing the protected Create-Organization
@@ -174,6 +183,12 @@ ALTER TABLE billing_records ADD CONSTRAINT billing_records_status_check
 ALTER TABLE platform_audit_logs DROP CONSTRAINT IF EXISTS platform_audit_logs_action_check;
 ALTER TABLE platform_audit_logs ADD CONSTRAINT platform_audit_logs_action_check
         CHECK (action IN ('LOGIN','LOGIN_FAILED','LOGOUT',
+                'MFA_SETUP','MFA_CHALLENGE','MFA_VERIFY','MFA_VERIFY_FAILED',
+                'MFA_ENABLE_FAILED','MFA_ENABLED','MFA_DISABLE_FAILED','MFA_DISABLED',
+                'SUPER_ADMIN_MFA_RESET',
+                'SUPER_ADMIN_PASSWORD_CHANGE',
+                'SUPER_ADMIN_INVITE_CREATE','SUPER_ADMIN_INVITE_ACCEPT',
+                'LOGIN_NOTIFICATION','LOGIN_NOTIFICATION_FAILED',
                 'TENANT_CREATE','TENANT_UPDATE','TENANT_SUSPEND','TENANT_REACTIVATE',
                 'TENANT_SOFT_DELETE','TENANT_RESTORE','TENANT_HARD_DELETE',
                 'PLAN_ASSIGN','PLAN_CHANGE','PLAN_UPDATE','SUBSCRIPTION_EXPIRED',

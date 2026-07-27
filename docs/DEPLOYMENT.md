@@ -48,6 +48,9 @@ that is an accepted trade for a pilot, not a shape to grow into (§12).
 | File | Goes to |
 |---|---|
 | `deploy/travelcrm.env.example` | `/etc/travelcrm/travelcrm.env` (**640 root:travelcrm**) |
+| `deploy/hostinger.compose.env.example` | `/opt/travelcrm/.env` (**600 root/root or deploy user**) |
+| `deploy/docker-compose.hostinger.yml` | `/opt/travelcrm/docker-compose.hostinger.yml` |
+| `deploy/deploy-hostinger.sh` | `/opt/travelcrm/deploy-hostinger.sh` |
 | `deploy/travelcrm.service` | `/etc/systemd/system/travelcrm.service` |
 | `deploy/nginx-travelcrm.conf` | `/etc/nginx/sites-available/travelcrm` |
 | `deploy/backup-db.sh` | `/usr/local/bin/travelcrm-backup` |
@@ -200,6 +203,120 @@ scp deploy/travelcrm.env.example root@VPS_IP:/etc/travelcrm/travelcrm.env
 The JAR never contains a secret: `application-local.properties` lives at the project root and is
 excluded from packaging by the `<resources>` block in `pom.xml`.
 
+### Automated Docker Compose deployment on Hostinger
+
+This is the CI/CD path that matches the current Docker workflow:
+
+`git push` -> GitHub Actions -> Maven compile/schema validation -> Docker image build -> Docker Hub
+push -> SSH into Hostinger VPS -> `docker compose pull` -> `docker compose up -d`.
+
+One-time VPS setup:
+
+```bash
+sudo apt update
+sudo apt install -y docker.io docker-compose-plugin nginx
+sudo systemctl enable --now docker
+
+sudo mkdir -p /opt/travelcrm /etc/travelcrm
+sudo cp deploy/travelcrm.env.example /etc/travelcrm/travelcrm.env
+sudo cp deploy/hostinger.compose.env.example /opt/travelcrm/.env
+sudo nano /etc/travelcrm/travelcrm.env      # app secrets
+sudo nano /opt/travelcrm/.env               # POSTGRES_PASSWORD + optional image/defaults
+sudo chmod 640 /etc/travelcrm/travelcrm.env
+sudo chmod 600 /opt/travelcrm/.env
+```
+
+The Compose app service overrides the database connection to
+`jdbc:postgresql://postgres:5432/<POSTGRES_DB>`, so Postgres is private to the Docker network.
+nginx should still proxy to `http://127.0.0.1:8080`; Compose publishes the app only on loopback.
+
+GitHub repository secrets required for `.github/workflows/deploy-hostinger.yml`:
+
+| Secret | Meaning |
+|---|---|
+| `DOCKERHUB_USERNAME` | Docker Hub account/organization |
+| `DOCKERHUB_TOKEN` | Docker Hub access token |
+| `HOSTINGER_HOST` | VPS IP or DNS name |
+| `HOSTINGER_USER` | SSH user allowed to run Docker on the VPS |
+| `HOSTINGER_SSH_KEY` | Private key for that SSH user |
+| `HOSTINGER_PORT` | Optional, defaults to `22` |
+| `HOSTINGER_KNOWN_HOSTS` | Optional pinned host key; if omitted, CI uses `ssh-keyscan` |
+
+Optional GitHub repository variable: `HOSTINGER_APP_DIR` (defaults to `/opt/travelcrm`).
+
+The deploy workflow uploads `docker-compose.hostinger.yml` and `deploy-hostinger.sh` on every run,
+then deploys the exact image tag for the commit SHA. The VPS keeps persistent data in Docker volumes:
+`travelcrm_postgres_data` and `travelcrm_app_logs`.
+
+### Flyway baseline and migration validation
+
+Current state: the reviewed baseline candidate is staged at
+`src/main/resources/db/proposed/V1_PROPOSED__baseline_schema.sql`. It is deliberately outside
+`src/main/resources/db/migration/`, so Flyway will not run it until it is manually reviewed and
+renamed to `V1__baseline_schema.sql`.
+
+Fresh database cutover:
+
+1. Review `db/proposed/V1_PROPOSED__baseline_schema.sql` against the entity model and `db/indexes.sql`.
+2. Rename/copy the reviewed file to `src/main/resources/db/migration/V1__baseline_schema.sql`.
+3. Deploy with `FLYWAY_ENABLED=true`, `FLYWAY_BASELINE_ON_MIGRATE=false`,
+   `JPA_DDL_AUTO=validate`, and `SQL_INIT_MODE=never`.
+4. Let Flyway create `flyway_schema_history` and apply V1 on the empty database.
+
+Existing pilot database adoption:
+
+1. Take a fresh `pg_dump` backup and restore-test it.
+2. Run the shadow check against a schema-only clone:
+   ```powershell
+   .\scripts\predeploy-flyway-shadow-check.ps1 `
+     -CloneTargetSchema `
+     -TargetJdbcUrl $env:DB_URL `
+     -TargetUsername $env:DB_USERNAME `
+     -TargetPassword $env:DB_PASSWORD `
+     -BaselineExistingSchema
+   ```
+3. For the one adoption deployment only, set `FLYWAY_ENABLED=true`,
+   `FLYWAY_BASELINE_ON_MIGRATE=true`, `APP_FLYWAY_ALLOW_BASELINE_ON_MIGRATE=true`,
+   `FLYWAY_BASELINE_VERSION=1`, `JPA_DDL_AUTO=validate`, and `SQL_INIT_MODE=never`.
+4. After that deployment succeeds, remove `FLYWAY_BASELINE_ON_MIGRATE` and
+   `APP_FLYWAY_ALLOW_BASELINE_ON_MIGRATE`; both must stay false for normal deploys.
+
+Before every deploy after Flyway is active, run:
+
+```powershell
+.\scripts\predeploy-flyway-shadow-check.ps1 `
+  -CloneTargetSchema `
+  -TargetJdbcUrl $env:DB_URL `
+  -TargetUsername $env:DB_USERNAME `
+  -TargetPassword $env:DB_PASSWORD
+```
+
+The script imports schema-only DDL plus `flyway_schema_history` metadata into a disposable Postgres
+container, runs pending Flyway migrations with `outOfOrder=false`, runs Flyway `validate`, then runs
+Hibernate schema validation against the migrated shadow schema. It writes the final schema dump to
+`target/flyway/shadow-schema.sql`. It never copies tenant/customer data.
+
+Adding a new migration:
+
+1. Never edit a migration that has been applied anywhere shared. Add a new
+   `V<N>__short_description.sql`; use `R__...sql` only for genuinely repeatable objects such as
+   views/functions.
+2. Keep data backfills in versioned migrations, not in `db/indexes.sql`.
+3. When enum values change, update the named CHECK constraints in the same migration.
+4. Run the GitHub Actions Flyway workflow and the shadow script before deployment.
+
+What validation catches: Flyway checksum/history mismatches, failed migrations, bad migration
+ordering, SQL that cannot run on Postgres, and JPA drift that Hibernate can validate
+(missing tables, columns and sequences). It does not prove destructive data migrations are safe on
+real tenant data unless the shadow check is run from a recent production clone, and it does not
+replace manual review of indexes, partial unique predicates and business constraints.
+
+Rollback: if validation fails before deployment, do not deploy and do not edit an already-applied
+migration to "fix" the checksum. Add a corrective migration or restore the intended file. If a
+deployment fails after a migration already ran, roll the JAR back only for app-code regressions; for
+destructive or data-shaping DDL, restore from the predeploy database backup or apply a reviewed
+forward-fix migration. Use `flyway repair` only after the root cause is understood and approved.
+
 On the VPS:
 
 ```bash
@@ -219,6 +336,11 @@ journalctl -u travelcrm -f
 every problem at once. Fix the env file and restart.
 
 ### The React SPA
+
+If the frontend repository's Docker CI/CD workflow is active, do not deploy the SPA with `rsync`
+from this section. Use `travelcrmfrontend/.github/workflows/deploy-hostinger.yml`; it builds the
+bundle with `VITE_API_URL`, pushes `travelcrm-frontend`, and runs the frontend Compose project on
+`127.0.0.1:5173`. nginx then proxies the SPA domain to that local port.
 
 The nginx conf serves **two** vhosts: the API on `api.mytripsafar.com` and the SPA on
 `mytripsafar.com` / `www.mytripsafar.com` from `/var/www/travelcrm`. Deploy the SPA before nginx goes
@@ -466,6 +588,9 @@ actually matters.
 
 ## 10. Deploying a new version
 
+Run `scripts/predeploy-flyway-shadow-check.ps1` first once Flyway is active. A failed shadow check
+means the deploy stops before the VPS sees the new JAR.
+
 ```bash
 sudo systemctl stop travelcrm          # graceful: in-flight requests get 30s
 sudo cp travelcrm.jar /opt/travelcrm/travelcrm.jar.bak    # rollback copy
@@ -474,9 +599,9 @@ sudo systemctl start travelcrm
 journalctl -u travelcrm -f
 ```
 
-Rollback = restore the `.bak` and restart. **Caveat:** `ddl-auto=update` may have already added
-columns for the new version. Additive DDL is harmless to the old JAR, but if a release ever needs
-a destructive change, take a backup first and don't rely on JAR rollback alone.
+Rollback = restore the `.bak` and restart only when the database schema is still compatible. After
+Flyway is active, a migration may already have changed the database; destructive or data-shaping
+changes require a database restore or a reviewed forward-fix migration, not just a JAR rollback.
 
 ---
 
@@ -503,6 +628,9 @@ a destructive change, take a backup first and don't rely on JAR rollback alone.
 - [ ] Tenant created
 - [ ] Backup cron installed **and restore-tested once**; off-host copy working
 - [ ] Provider snapshots enabled
+- [ ] Flyway baseline reviewed; after cutover, `FLYWAY_ENABLED=true`, `JPA_DDL_AUTO=validate`,
+      `SQL_INIT_MODE=never`, and `FLYWAY_BASELINE_ON_MIGRATE=false` except for the one adoption run
+- [ ] `scripts/predeploy-flyway-shadow-check.ps1` passes against the target schema before deploying
 - [ ] `timedatectl` → `Asia/Kolkata`
 - [ ] Login, create a lead → quotation → booking, download a PDF, check the notification bell (SSE)
 - [ ] `/ai/chat` returns 404 and the FE chat widget is hidden (AI is off this sprint)
@@ -538,9 +666,10 @@ creates rows, so these are not optional once it is live.
 
 Ranked by what will bite first.
 
-1. **`ddl-auto=update` is not schema management.** It cannot migrate data, cannot be reviewed
-   before it runs, and two instances starting together can race on DDL. → Add Flyway, baseline
-   the current schema, set `JPA_DDL_AUTO=validate` (the env var exists so it needs no code change).
+1. **Flyway baseline is staged, not active yet.** `db/proposed/V1_PROPOSED__baseline_schema.sql`
+   must be manually reviewed, renamed into `db/migration/`, and deployed with
+   `JPA_DDL_AUTO=validate` and `SQL_INIT_MODE=never`. Until then, `ddl-auto=update` is still a
+   pilot-only risk.
 2. **Single node, single point of failure.** No redundancy: the VPS is the app, the DB, and the
    backup target. A restore is manual and measured in hours.
 3. **In-memory OTP store.** `InMemoryOtpStore` is correct for exactly one node. The moment a
@@ -571,6 +700,8 @@ development password that is public in this repository's git history.
 Optional: `SUPER_ADMIN_EMAIL` (defaults to `superadmin@travelcrm.com`), `MAIL_*`, `CLOUDINARY_*`,
 `WHATSAPP_TEMPLATE_*` (read by the live Interakt sender — unset means each flow falls back to the
 tenant's own default template), `RAZORPAY_*`, `TOMCAT_MAX_THREADS`, `DB_POOL_MAX_SIZE`,
-`TRASH_RETENTION_DAYS`, `LOG_DIR`, `JPA_DDL_AUTO`, `HOURLY_RETENTION_HOURS`, `DAILY_RETENTION_DAYS`.
+`TRASH_RETENTION_DAYS`, `LOG_DIR`, `JPA_DDL_AUTO`, `SQL_INIT_MODE`, `FLYWAY_ENABLED`,
+`FLYWAY_BASELINE_ON_MIGRATE`, `FLYWAY_BASELINE_VERSION`, `APP_FLYWAY_ALLOW_BASELINE_ON_MIGRATE`,
+`HOURLY_RETENTION_HOURS`, `DAILY_RETENTION_DAYS`.
 
 Not used this sprint: `GROQ_API_KEY` (AI is off).

@@ -40,6 +40,7 @@ public class SecurityConfig {
     private final SuperAdminDetailsService superAdminDetailsService;
     private final UserDetailsServiceImpl userDetailsService;
     private final RateLimitFilter rateLimitFilter;
+    private final SuperAdminSetupCompletionFilter superAdminSetupCompletionFilter;
     private final MaintenanceModeFilter maintenanceModeFilter;
     private final ModuleAccessFilter moduleAccessFilter;
     private final ApiAuthenticationEntryPoint apiAuthenticationEntryPoint;
@@ -118,8 +119,9 @@ public class SecurityConfig {
                 )
                 .addFilterBefore(rateLimitFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(superAdminSetupCompletionFilter, JwtAuthFilter.class)
                 // Maintenance gate runs AFTER auth so it can distinguish tenant vs platform traffic.
-                .addFilterAfter(maintenanceModeFilter, JwtAuthFilter.class)
+                .addFilterAfter(maintenanceModeFilter, SuperAdminSetupCompletionFilter.class)
                 // Module entitlement gate — 403s a tenant hitting a module its plan/flags exclude.
                 .addFilterAfter(moduleAccessFilter, MaintenanceModeFilter.class)
                 // Both render the standard ApiError envelope. The entry point previously wrote an
@@ -171,6 +173,14 @@ public class SecurityConfig {
     public FilterRegistrationBean<MaintenanceModeFilter> maintenanceModeRegistration(MaintenanceModeFilter filter) {
         // Disable auto-registration so it runs ONLY inside the staff chain (never globally / on portal).
         FilterRegistrationBean<MaintenanceModeFilter> registration = new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
+    }
+
+    @Bean
+    public FilterRegistrationBean<SuperAdminSetupCompletionFilter> superAdminSetupCompletionRegistration(
+            SuperAdminSetupCompletionFilter filter) {
+        FilterRegistrationBean<SuperAdminSetupCompletionFilter> registration = new FilterRegistrationBean<>(filter);
         registration.setEnabled(false);
         return registration;
     }

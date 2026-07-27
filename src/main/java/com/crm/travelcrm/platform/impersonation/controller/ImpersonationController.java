@@ -1,5 +1,7 @@
 package com.crm.travelcrm.platform.impersonation.controller;
 
+import com.crm.travelcrm.auth.mfa.SuperAdminStepUpService;
+import com.crm.travelcrm.common.entity.SuperAdmin;
 import com.crm.travelcrm.common.dto.ApiResponse;
 import com.crm.travelcrm.common.util.ClientIp;
 import com.crm.travelcrm.platform.impersonation.dto.ImpersonationResponse;
@@ -8,6 +10,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
@@ -23,11 +26,18 @@ import java.util.UUID;
 public class ImpersonationController {
 
     private final ImpersonationService impersonationService;
+    private final SuperAdminStepUpService superAdminStepUpService;
 
     @PostMapping("/api/super-admin/users/{publicId}/impersonate")
     @PreAuthorize("hasRole('SUPER_ADMIN')")
     public ResponseEntity<ApiResponse<ImpersonationResponse>> start(
-            @PathVariable UUID publicId, HttpServletRequest request) {
+            @PathVariable UUID publicId,
+            @AuthenticationPrincipal SuperAdmin superAdmin,
+            @RequestHeader(value = SuperAdminStepUpService.MFA_CODE_HEADER, required = false) String mfaCode,
+            HttpServletRequest request) {
+        superAdminStepUpService.requireCode(
+                superAdmin, mfaCode, "impersonation start",
+                ClientIp.resolve(request), request.getHeader("User-Agent"));
         return ResponseEntity.ok(ApiResponse.success(
                 "Impersonation session created",
                 impersonationService.start(publicId,

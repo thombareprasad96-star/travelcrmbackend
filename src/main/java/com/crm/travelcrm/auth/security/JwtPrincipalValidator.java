@@ -1,6 +1,7 @@
 package com.crm.travelcrm.auth.security;
 
 import com.crm.travelcrm.auth.entity.User;
+import com.crm.travelcrm.common.entity.SuperAdmin;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Component;
@@ -45,10 +46,13 @@ public class JwtPrincipalValidator {
      * versioned, so they are never considered stale.
      */
     private boolean isStaleToken(UserDetails userDetails, String token) {
+        Integer claimTv = jwtUtil.extractTokenVersion(token);
+        int tokenTv = claimTv != null ? claimTv : 0;
         if (userDetails instanceof User user) {
-            Integer claimTv = jwtUtil.extractTokenVersion(token);
-            int tokenTv = claimTv != null ? claimTv : 0;
             return tokenTv != user.getTokenVersionOrZero();
+        }
+        if (userDetails instanceof SuperAdmin superAdmin) {
+            return tokenTv != superAdmin.getTokenVersionOrZero();
         }
         return false;
     }

@@ -1,101 +1,137 @@
 package com.crm.travelcrm.common.config;
 
 import com.crm.travelcrm.auth.repository.SuperAdminRepository;
+import com.crm.travelcrm.auth.security.SuperAdminPasswordPolicy;
 import com.crm.travelcrm.common.entity.SuperAdmin;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.env.Environment;
-import org.springframework.core.env.Profiles;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
- * Bootstraps the platform SuperAdmin on first startup.
+ * Bootstraps the fixed platform SuperAdmin allowlist.
  *
- * <p>Runs after Hibernate schema creation (ApplicationRunner executes once the
- * context is fully started). If the super_admins table already has a row, this
- * is a no-op.
- *
- * <p>The password comes from the SUPER_ADMIN_PASSWORD environment variable. Under the
- * {@code prod} profile that variable is MANDATORY and a missing one fails the boot.
- * This class is deliberately ungated by {@code app.seed.enabled} — it is not demo data,
- * it is the only way to obtain a platform login — so the dev fallback below would
- * otherwise run on a production first boot and publish a known password on the public
- * login form. The account is also unrecoverable-by-signup afterwards: AuthServiceImpl
- * refuses to register a second SuperAdmin once this row exists.
+ * <p>This runner is deliberately idempotent: it creates a required account only when no row with
+ * that email exists, and it never overwrites an existing password or setup state. Legacy active rows
+ * outside the allowlist are soft-deleted unless they were created through the approved invite flow.
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class DataInitializer implements ApplicationRunner {
 
-    private static final String DEFAULT_EMAIL     = "superadmin@travelcrm.com";
-    private static final String SUPER_ADMIN_NAME  = "Platform Super Admin";
-    private static final String EMAIL_ENV_VAR     = "SUPER_ADMIN_EMAIL";
-    private static final String PASSWORD_ENV_VAR  = "SUPER_ADMIN_PASSWORD";
-    private static final String FALLBACK_PASSWORD = "Test@123";
+    private static final List<BootstrapAccount> REQUIRED_ACCOUNTS = List.of(
+            new BootstrapAccount(
+                    "Platform Super Admin 1",
+                    "rajpoottours2789@gmail.com",
+                    "SUPERADMIN_1_EMAIL",
+                    "SUPERADMIN_1_PASSWORD"),
+            new BootstrapAccount(
+                    "Platform Super Admin 2",
+                    "thombareprasad96@gmail.com",
+                    "SUPERADMIN_2_EMAIL",
+                    "SUPERADMIN_2_PASSWORD")
+    );
 
     private final SuperAdminRepository superAdminRepository;
     private final PasswordEncoder passwordEncoder;
     private final Environment environment;
+    private final SuperAdminPasswordPolicy superAdminPasswordPolicy;
 
     @Override
+    @Transactional
     public void run(ApplicationArguments args) {
-        if (superAdminRepository.count() > 0) {
-            log.debug("SuperAdmin already exists — skipping bootstrap.");
-            return;
-        }
+        Set<String> allowedEmails = REQUIRED_ACCOUNTS.stream()
+                .map(BootstrapAccount::email)
+                .collect(Collectors.toUnmodifiableSet());
 
-        String email = environment.getProperty(EMAIL_ENV_VAR);
-        if (email == null || email.isBlank()) {
-            email = DEFAULT_EMAIL;
-        }
-        // trim() only — deliberately NOT toLowerCase(). SuperAdmin login resolves the account by an
-        // exact, case-sensitive match, so lowercasing here while the operator types the address as
-        // they wrote it in the env file would leave the console unable to authenticate the only
-        // platform account, on a first boot, with no signup route left to recover through.
-        // Store it exactly as configured and the two sides agree by construction.
-        email = email.trim();
+        softDeleteUnexpectedActiveAccounts(allowedEmails);
+        REQUIRED_ACCOUNTS.forEach(this::ensureAccountExists);
+    }
 
-        String password = environment.getProperty(PASSWORD_ENV_VAR);
-        if (password == null || password.isBlank()) {
-            if (environment.acceptsProfiles(Profiles.of("prod"))) {
-                throw new IllegalStateException(
-                        PASSWORD_ENV_VAR + " is not set. It is required under the 'prod' profile: this "
-                        + "runner creates " + email + " on the first boot against an empty "
-                        + "database, and without it the account would be created with a password that is "
-                        + "public in this repository. Add " + PASSWORD_ENV_VAR + " to "
-                        + "/etc/travelcrm/travelcrm.env (openssl rand -base64 24) and restart.");
+    private void softDeleteUnexpectedActiveAccounts(Set<String> allowedEmails) {
+        for (SuperAdmin admin : superAdminRepository.findAllByDeletedAtIsNull()) {
+            String email = normalize(admin.getEmail());
+            if (allowedEmails.contains(email) || admin.isCreatedViaInvite()) {
+                continue;
             }
-            password = FALLBACK_PASSWORD;
-            log.warn("Environment variable {} is not set — falling back to the default "
-                    + "development password. Set {} before running outside local dev.",
-                    PASSWORD_ENV_VAR, PASSWORD_ENV_VAR);
+            admin.setEnabled(false);
+            admin.softDelete("system-bootstrap");
+            admin.bumpTokenVersion();
+            superAdminRepository.save(admin);
+            log.warn("Soft-deleted non-allowlisted SuperAdmin during bootstrap: {}", admin.getEmail());
         }
+    }
+
+    private void ensureAccountExists(BootstrapAccount account) {
+        String email = configuredEmail(account);
+        superAdminRepository.findByEmail(email).ifPresentOrElse(existing ->
+                log.debug("Required SuperAdmin {} already exists; bootstrap will not overwrite it.", email),
+                () -> createRequiredAccount(account, email));
+    }
+
+    private void createRequiredAccount(BootstrapAccount account, String email) {
+        String password = requiredPassword(account.passwordEnv(), email);
+        superAdminPasswordPolicy.validate(password);
 
         SuperAdmin superAdmin = SuperAdmin.builder()
-                .name(SUPER_ADMIN_NAME)
+                .name(account.name())
                 .email(email)
                 .password(passwordEncoder.encode(password))
                 .enabled(true)
+                .mfaEnabled(false)
+                .mustChangePassword(true)
+                .tokenVersion(1)
+                .failedLoginAttempts(0)
                 .build();
         superAdminRepository.save(superAdmin);
 
-        // Reached only when the table was empty, i.e. the true first run.
-        // The password is deliberately NOT logged: log4j2-prod.xml routes WARN to both
-        // travelcrm.log and travelcrm-error.log with 90-day retention, and to the journal —
-        // so printing it here would persist the live platform credential in three places
-        // that outlive the operator reading it.
         log.warn("""
 
                 ============================================================
-                  SUPER ADMIN CREATED  (first run only)
+                  REQUIRED SUPER ADMIN CREATED
                     Email    : {}
-                    Password : the value of {} from the environment
-                  Log in and change this password immediately.
+                    Password : value of {}
+                  Login requires TOTP enrollment, then password change.
                 ============================================================
-                """, email, PASSWORD_ENV_VAR);
+                """, email, account.passwordEnv());
+    }
+
+    private String configuredEmail(BootstrapAccount account) {
+        String configured = environment.getProperty(account.emailEnv());
+        if (configured == null || configured.isBlank()) {
+            configured = account.email();
+        }
+        String normalized = normalize(configured);
+        if (!normalized.equals(account.email())) {
+            throw new IllegalStateException(account.emailEnv() + " must be " + account.email()
+                    + ". SuperAdmin bootstrap is restricted to the fixed allowlist.");
+        }
+        return normalized;
+    }
+
+    private String requiredPassword(String envVar, String email) {
+        String password = environment.getProperty(envVar);
+        if (password == null || password.isBlank()) {
+            throw new IllegalStateException(envVar + " is required to create SuperAdmin " + email
+                    + ". Existing rows are never overwritten, so set this only for first bootstrap.");
+        }
+        return password;
+    }
+
+    private static String normalize(String email) {
+        return email == null ? "" : email.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private record BootstrapAccount(String name, String email, String emailEnv, String passwordEnv) {
     }
 }

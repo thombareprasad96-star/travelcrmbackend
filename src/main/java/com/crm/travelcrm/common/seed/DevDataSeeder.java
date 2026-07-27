@@ -2,7 +2,6 @@ package com.crm.travelcrm.common.seed;
 
 import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.auth.enums.Role;
-import com.crm.travelcrm.auth.repository.SuperAdminRepository;
 import com.crm.travelcrm.auth.repository.UserRepository;
 import com.crm.travelcrm.booking.entity.Booking;
 import com.crm.travelcrm.booking.enums.BookingStatus;
@@ -12,7 +11,6 @@ import com.crm.travelcrm.bookingreminder.entity.BookingReminder;
 import com.crm.travelcrm.bookingreminder.entity.BookingReminderType;
 import com.crm.travelcrm.bookingreminder.repository.BookingReminderRepository;
 import com.crm.travelcrm.common.context.TenantContext;
-import com.crm.travelcrm.common.entity.SuperAdmin;
 import com.crm.travelcrm.company.entity.Company;
 import com.crm.travelcrm.company.entity.TaxRate;
 import com.crm.travelcrm.company.repository.CompanyRepository;
@@ -122,7 +120,6 @@ public class DevDataSeeder implements CommandLineRunner {
 
 
     private final PasswordEncoder passwordEncoder;
-    private final SuperAdminRepository superAdminRepository;
     private final TenantRepository tenantRepository;
     private final PlanRepository planRepository;
     private final UserRepository userRepository;
@@ -159,7 +156,6 @@ public class DevDataSeeder implements CommandLineRunner {
     public void run(String... args) {
         log.info("[DevDataSeeder] starting (app.seed.enabled=true)…");
 
-        seedSuperAdmin();
         // Plans are seeded by PlanCatalogueInitializer (@Order(0), unconditional) — they are
         // platform data every deployment needs, not demo data. They used to be seeded here,
         // which left the plans table permanently empty in prod, where this seeder is hard-off.
@@ -200,17 +196,6 @@ public class DevDataSeeder implements CommandLineRunner {
     }
 
     // ── bootstrap ────────────────────────────────────────────────────────────
-
-    private void seedSuperAdmin() {
-        if (superAdminRepository.count() > 0) return;
-        superAdminRepository.save(SuperAdmin.builder()
-                .name("Platform Admin")
-                .email("superadmin@demo.crm")
-                .password(passwordEncoder.encode(PWD))
-                .enabled(true)
-                .build());
-        log.info("[DevDataSeeder] seeded SuperAdmin (superadmin@demo.crm / {})", PWD);
-    }
 
     // seedPlans(), backfillPlanEntitlements() and ensureSubAgentEntitlement() moved to
     // platform/subscription/config/PlanCatalogueInitializer — see the class javadoc there.

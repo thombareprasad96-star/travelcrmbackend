@@ -26,8 +26,8 @@ import java.util.Locale;
 import java.util.Properties;
 
 /**
- * Per-tenant SMTP configuration + test-send. One {@link TenantSettings} row per tenant (lazily
- * created on first save). The SMTP password is stored AES-encrypted and never returned to the UI.
+ * Per-tenant SMTP configuration + test-send. Tenant email uses only this tenant-owned SMTP config;
+ * it never falls back to the platform CRM mailbox.
  */
 @Service
 @RequiredArgsConstructor
@@ -48,7 +48,7 @@ public class EmailConfigService {
         return toDto(repo.findByTenantId(tenantId).orElse(null));
     }
 
-    /** Send stats for the settings hub — "Sent Today" + delivery rate. */
+    /** Send stats for the settings hub: "Sent Today" plus delivery rate. */
     @Transactional(readOnly = true)
     public EmailStatsDTO getStats(Long tenantId) {
         return emailAudit.stats(tenantId);
@@ -61,7 +61,6 @@ public class EmailConfigService {
         ts.setSmtpPort(req.getPortNumber() > 0 ? req.getPortNumber() : 587);
         ts.setEncryption(StringUtils.hasText(req.getEncryption()) ? req.getEncryption() : "TLS");
         ts.setSmtpUsername(req.getUsername().trim());
-        // Only overwrite the stored password when the user actually changed it.
         if (req.isPasswordChanged() && StringUtils.hasText(req.getPassword())) {
             ts.setSmtpPasswordEnc(cipher.encrypt(req.getPassword()));
         }
@@ -76,10 +75,12 @@ public class EmailConfigService {
     public TestEmailResponse sendTest(TestEmailRequest req, Long tenantId) {
         TenantSettings ts = repo.findByTenantId(tenantId).orElse(null);
         if (ts == null || !StringUtils.hasText(ts.getSmtpHost())
+                || !StringUtils.hasText(ts.getSmtpUsername())
                 || !StringUtils.hasText(ts.getSmtpPasswordEnc())) {
             throw new BusinessException("SMTP is not configured. Save configuration first.",
                     HttpStatus.UNPROCESSABLE_ENTITY);
         }
+
         String recipient = req.getRecipientEmail().trim();
         try {
             JavaMailSenderImpl mailSender = new JavaMailSenderImpl();
@@ -87,17 +88,19 @@ public class EmailConfigService {
             mailSender.setPort(ts.getSmtpPort() != null ? ts.getSmtpPort() : 587);
             mailSender.setUsername(ts.getSmtpUsername());
             mailSender.setPassword(cipher.decrypt(ts.getSmtpPasswordEnc()));
+
             Properties props = mailSender.getJavaMailProperties();
             props.put("mail.transport.protocol", "smtp");
             props.put("mail.smtp.auth", "true");
             if ("SSL".equalsIgnoreCase(ts.getEncryption())) {
                 props.put("mail.smtp.ssl.enable", "true");
-            } else if ("TLS".equalsIgnoreCase(ts.getEncryption())) {
+            } else {
                 props.put("mail.smtp.starttls.enable", "true");
             }
 
             String fromAddress = StringUtils.hasText(ts.getEmailFromAddress())
-                    ? ts.getEmailFromAddress() : ts.getSmtpUsername();
+                    ? ts.getEmailFromAddress()
+                    : ts.getSmtpUsername();
             SimpleMailMessage msg = new SimpleMailMessage();
             msg.setFrom(fromAddress);
             msg.setTo(recipient);
@@ -113,7 +116,6 @@ public class EmailConfigService {
             return new TestEmailResponse(true, "Test email sent successfully to " + recipient,
                     null, LocalDateTime.now().format(DATETIME_FMT));
         } catch (MailException ex) {
-            // Structured error — a delivery failure is a normal 200 response, not a 500.
             log.warn("Test email failed for tenant {}: {}", tenantId, ex.getMessage());
             emailAudit.record(recipient, "Test Email", false, ex.getMessage());
             return new TestEmailResponse(false,
@@ -122,10 +124,7 @@ public class EmailConfigService {
         }
     }
 
-    // ── helpers ──────────────────────────────────────────────────────────────
-
     private TenantSettings loadOrCreate(Long tenantId) {
-        // tenantId auto-stamped by TenantEntityListener on persist; no need to set it here.
         return repo.findByTenantId(tenantId)
                 .orElseGet(() -> repo.save(TenantSettings.builder().build()));
     }

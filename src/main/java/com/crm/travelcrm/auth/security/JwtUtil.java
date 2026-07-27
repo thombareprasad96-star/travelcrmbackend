@@ -21,6 +21,9 @@ public class JwtUtil {
     @Value("${jwt.expiry-ms}")
     private long expiryMs;
 
+    @Value("${jwt.super-admin-expiry-ms:${jwt.expiry-ms}}")
+    private long superAdminExpiryMs;
+
     @Value("${impersonation.jwt.expiry-ms:1800000}")
     private long impersonationExpiryMs;
 
@@ -29,9 +32,10 @@ public class JwtUtil {
                 .subject(superAdmin.getEmail())
                 .claim(JwtClaims.ROLE, JwtClaims.ROLE_SUPER_ADMIN)
                 .claim(JwtClaims.TOKEN_TYPE, JwtClaims.TYPE_PLATFORM)
+                .claim(JwtClaims.TOKEN_VERSION, superAdmin.getTokenVersionOrZero())
                 // SuperAdmin has no tenant — intentionally omitted
                 .issuedAt(new Date())
-                .expiration(new Date(System.currentTimeMillis() + expiryMs))
+                .expiration(new Date(System.currentTimeMillis() + superAdminExpiryMs))
                 .signWith(getKey())
                 .compact();
     }

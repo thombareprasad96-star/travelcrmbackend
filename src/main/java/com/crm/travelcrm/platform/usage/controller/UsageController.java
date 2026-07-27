@@ -1,14 +1,19 @@
 package com.crm.travelcrm.platform.usage.controller;
 
+import com.crm.travelcrm.auth.mfa.SuperAdminStepUpService;
 import com.crm.travelcrm.common.dto.ApiResponse;
+import com.crm.travelcrm.common.entity.SuperAdmin;
+import com.crm.travelcrm.common.util.ClientIp;
 import com.crm.travelcrm.platform.usage.dto.TenantUsageResponse;
 import com.crm.travelcrm.platform.usage.dto.UpdateTenantQuotaRequest;
 import com.crm.travelcrm.platform.usage.dto.UsageDashboardResponse;
 import com.crm.travelcrm.platform.usage.service.UsageService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
@@ -25,6 +30,7 @@ import java.util.UUID;
 public class UsageController {
 
     private final UsageService usageService;
+    private final SuperAdminStepUpService superAdminStepUpService;
 
     /** Every live tenant's usage vs quota + rollup header. */
     @GetMapping
@@ -41,7 +47,14 @@ public class UsageController {
     /** Override (or clear) a tenant's usage limits. */
     @PutMapping("/{publicId}/quota")
     public ResponseEntity<ApiResponse<TenantUsageResponse>> override(
-            @PathVariable UUID publicId, @Valid @RequestBody UpdateTenantQuotaRequest request) {
+            @PathVariable UUID publicId,
+            @Valid @RequestBody UpdateTenantQuotaRequest request,
+            @AuthenticationPrincipal SuperAdmin superAdmin,
+            @RequestHeader(value = SuperAdminStepUpService.MFA_CODE_HEADER, required = false) String mfaCode,
+            HttpServletRequest httpRequest) {
+        superAdminStepUpService.requireCode(
+                superAdmin, mfaCode, "quota override",
+                ClientIp.resolve(httpRequest), httpRequest.getHeader("User-Agent"));
         return ResponseEntity.ok(ApiResponse.success("Quota updated", usageService.overrideQuota(publicId, request)));
     }
 }
