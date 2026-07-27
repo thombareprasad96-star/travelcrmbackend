@@ -106,8 +106,6 @@ jobs:
     name: Build and push Docker image
     runs-on: ubuntu-latest
     needs: validate-schema
-    outputs:
-      image_uri: ${{ steps.image.outputs.image_uri }}
 
     steps:
       - name: Checkout
@@ -211,14 +209,18 @@ jobs:
           HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          TRAVELCRM_IMAGE: ${{ needs.build-and-push.outputs.image_uri }}
         run: |
           remote="${HOSTINGER_USER}@${HOSTINGER_HOST}"
           ssh_opts=(-i ~/.ssh/hostinger_key -p "$HOSTINGER_PORT" -o StrictHostKeyChecking=yes)
           dockerhub_username="$(printf '%s' "$DOCKERHUB_USERNAME" | tr -d '[:space:]')"
           dockerhub_token="$(printf '%s' "$DOCKERHUB_TOKEN" | tr -d '\r\n')"
+          if [ -z "$dockerhub_username" ] || [ -z "$dockerhub_token" ]; then
+            echo "::error::Missing Docker Hub credentials"
+            exit 1
+          fi
+          travelcrm_image="docker.io/${dockerhub_username}/${IMAGE_NAME}:${GITHUB_SHA}"
           app_dir_q="$(printf '%q' "$HOSTINGER_APP_DIR")"
-          image_q="$(printf '%q' "$TRAVELCRM_IMAGE")"
+          image_q="$(printf '%q' "$travelcrm_image")"
           docker_user_q="$(printf '%q' "$dockerhub_username")"
           docker_token_q="$(printf '%q' "$dockerhub_token")"
           ssh "${ssh_opts[@]}" "$remote" \
