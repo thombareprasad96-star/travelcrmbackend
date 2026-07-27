@@ -8,6 +8,48 @@ COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-travelcrm}"
 TRAVELCRM_IMAGE="${TRAVELCRM_IMAGE:-${IMAGE_TAG:-}}"
 PRUNE_OLD_IMAGES="${PRUNE_OLD_IMAGES:-true}"
 
+validate_env_file() {
+  local file="$1"
+  local label="$2"
+  local line line_number key
+  line_number=0
+
+  while IFS= read -r line || [ -n "${line}" ]; do
+    line_number=$((line_number + 1))
+    line="${line%$'\r'}"
+
+    if [ -z "${line}" ] || [[ "${line}" == \#* ]]; then
+      continue
+    fi
+
+    if [[ "${line}" == export[[:space:]]* ]]; then
+      echo "${label}:${line_number}: remove 'export'; env files must use KEY=value." >&2
+      exit 1
+    fi
+
+    if [[ "${line}" != *=* ]]; then
+      echo "${label}:${line_number}: invalid env line; expected KEY=value." >&2
+      exit 1
+    fi
+
+    key="${line%%=*}"
+    if [ -z "${key}" ]; then
+      echo "${label}:${line_number}: invalid env line; key is empty." >&2
+      exit 1
+    fi
+
+    if [[ "${key}" =~ [[:space:]] ]]; then
+      echo "${label}:${line_number}: invalid env key; use KEY=value with no spaces around '='." >&2
+      exit 1
+    fi
+
+    if [[ ! "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      echo "${label}:${line_number}: invalid env key '${key}'." >&2
+      exit 1
+    fi
+  done < "${file}"
+}
+
 cd "${APP_DIR}"
 
 if [ -z "${TRAVELCRM_IMAGE}" ]; then
@@ -35,6 +77,9 @@ if [ ! -f "${app_env_file}" ]; then
   echo "Missing ${app_env_file}. Copy deploy/travelcrm.env.example and fill app secrets first." >&2
   exit 1
 fi
+
+validate_env_file "${COMPOSE_ENV_FILE}" "${APP_DIR}/${COMPOSE_ENV_FILE}"
+validate_env_file "${app_env_file}" "${app_env_file}"
 
 if ! docker compose version >/dev/null 2>&1; then
   echo "Docker Compose v2 is required. Install the docker-compose-plugin package on the VPS." >&2
