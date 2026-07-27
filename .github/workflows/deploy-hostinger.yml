@@ -9,7 +9,7 @@ on:
 
 env:
   IMAGE_NAME: travelcrm-backend
-  HOSTINGER_PORT: ${{ secrets.HOSTINGER_PORT || '22' }}
+  HOSTINGER_PORT: ${{ secrets.HOSTINGER_PORT || vars.HOSTINGER_PORT || '22' }}
   HOSTINGER_APP_DIR: ${{ vars.HOSTINGER_APP_DIR || '/opt/travelcrm' }}
 
 jobs:
@@ -168,13 +168,13 @@ jobs:
       - name: Configure SSH
         shell: bash
         env:
-          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
-          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST || vars.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER || vars.HOSTINGER_USER }}
           HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
-          HOSTINGER_KNOWN_HOSTS: ${{ secrets.HOSTINGER_KNOWN_HOSTS }}
+          HOSTINGER_KNOWN_HOSTS: ${{ secrets.HOSTINGER_KNOWN_HOSTS || vars.HOSTINGER_KNOWN_HOSTS }}
         run: |
-          : "${HOSTINGER_HOST:?Missing HOSTINGER_HOST secret}"
-          : "${HOSTINGER_USER:?Missing HOSTINGER_USER secret}"
+          : "${HOSTINGER_HOST:?Missing HOSTINGER_HOST secret or variable}"
+          : "${HOSTINGER_USER:?Missing HOSTINGER_USER secret or variable}"
           : "${HOSTINGER_SSH_KEY:?Missing HOSTINGER_SSH_KEY secret}"
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
@@ -190,8 +190,8 @@ jobs:
       - name: Upload compose files
         shell: bash
         env:
-          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
-          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST || vars.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER || vars.HOSTINGER_USER }}
         run: |
           remote="${HOSTINGER_USER}@${HOSTINGER_HOST}"
           ssh_opts=(-i ~/.ssh/hostinger_key -p "$HOSTINGER_PORT" -o StrictHostKeyChecking=yes)
@@ -205,8 +205,8 @@ jobs:
       - name: Run remote deployment
         shell: bash
         env:
-          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
-          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST || vars.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER || vars.HOSTINGER_USER }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
