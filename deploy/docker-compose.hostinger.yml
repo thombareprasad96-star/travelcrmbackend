@@ -7,7 +7,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-travel_crm}
       POSTGRES_USER: ${POSTGRES_USER:-travelcrm}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in /opt/travelcrm/.env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in /opt/travelcrm-be/.env}
       TZ: ${TZ:-Asia/Kolkata}
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -34,7 +34,7 @@ services:
       SERVER_PORT: 8080
       DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-travel_crm}
       DB_USERNAME: ${POSTGRES_USER:-travelcrm}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in /opt/travelcrm/.env}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in /opt/travelcrm-be/.env}
       LOG_DIR: /var/log/travelcrm
     ports:
       - "127.0.0.1:${HOST_BIND_PORT:-8080}:8080"

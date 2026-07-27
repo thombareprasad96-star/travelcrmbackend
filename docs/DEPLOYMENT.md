@@ -48,9 +48,9 @@ that is an accepted trade for a pilot, not a shape to grow into (§12).
 | File | Goes to |
 |---|---|
 | `deploy/travelcrm.env.example` | `/etc/travelcrm/travelcrm.env` (**640 root:travelcrm**) |
-| `deploy/hostinger.compose.env.example` | `/opt/travelcrm/.env` (**600 root/root or deploy user**) |
-| `deploy/docker-compose.hostinger.yml` | `/opt/travelcrm/docker-compose.hostinger.yml` |
-| `deploy/deploy-hostinger.sh` | `/opt/travelcrm/deploy-hostinger.sh` |
+| `deploy/hostinger.compose.env.example` | `/opt/travelcrm-be/.env` (**600 root/root or deploy user**) |
+| `deploy/docker-compose.hostinger.yml` | `/opt/travelcrm-be/docker-compose.hostinger.yml` |
+| `deploy/deploy-hostinger.sh` | `/opt/travelcrm-be/deploy-hostinger.sh` |
 | `deploy/travelcrm.service` | `/etc/systemd/system/travelcrm.service` |
 | `deploy/nginx-travelcrm.conf` | `/etc/nginx/sites-available/travelcrm` |
 | `deploy/backup-db.sh` | `/usr/local/bin/travelcrm-backup` |
@@ -217,13 +217,13 @@ sudo apt update
 sudo apt install -y docker.io docker-compose-plugin nginx
 sudo systemctl enable --now docker
 
-sudo mkdir -p /opt/travelcrm /etc/travelcrm
+sudo mkdir -p /opt/travelcrm-be /etc/travelcrm
 sudo cp deploy/travelcrm.env.example /etc/travelcrm/travelcrm.env
-sudo cp deploy/hostinger.compose.env.example /opt/travelcrm/.env
+sudo cp deploy/hostinger.compose.env.example /opt/travelcrm-be/.env
 sudo nano /etc/travelcrm/travelcrm.env      # app secrets
-sudo nano /opt/travelcrm/.env               # POSTGRES_PASSWORD + optional image/defaults
+sudo nano /opt/travelcrm-be/.env            # POSTGRES_PASSWORD + optional image/defaults
 sudo chmod 640 /etc/travelcrm/travelcrm.env
-sudo chmod 600 /opt/travelcrm/.env
+sudo chmod 600 /opt/travelcrm-be/.env
 ```
 
 The Compose app service overrides the database connection to
@@ -242,7 +242,7 @@ GitHub repository secrets required for `.github/workflows/deploy-hostinger.yml`:
 | `HOSTINGER_PORT` | Optional, defaults to `22` |
 | `HOSTINGER_KNOWN_HOSTS` | Optional pinned host key; if omitted, CI uses `ssh-keyscan` |
 
-Optional GitHub repository variable: `HOSTINGER_APP_DIR` (defaults to `/opt/travelcrm`).
+Optional GitHub repository variable: `HOSTINGER_APP_DIR` (defaults to `/opt/travelcrm-be`).
 
 The deploy workflow uploads `docker-compose.hostinger.yml` and `deploy-hostinger.sh` on every run,
 then deploys the exact image tag for the commit SHA. The VPS keeps persistent data in Docker volumes:
