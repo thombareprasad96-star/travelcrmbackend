@@ -116,20 +116,35 @@ jobs:
       - name: Set image tags
         id: image
         shell: bash
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
-          image_uri="docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${IMAGE_NAME}:${GITHUB_SHA}"
-          latest_uri="docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${IMAGE_NAME}:latest"
-          echo "image_uri=${image_uri}" >> "$GITHUB_OUTPUT"
-          echo "latest_uri=${latest_uri}" >> "$GITHUB_OUTPUT"
+          dockerhub_username="$(printf '%s' "$DOCKERHUB_USERNAME" | tr -d '[:space:]')"
+          if [ -z "$dockerhub_username" ]; then
+            echo "::error::Missing DOCKERHUB_USERNAME secret"
+            exit 1
+          fi
+          image_uri="docker.io/${dockerhub_username}/${IMAGE_NAME}:${GITHUB_SHA}"
+          latest_uri="docker.io/${dockerhub_username}/${IMAGE_NAME}:latest"
+          printf 'image_uri=%s\n' "$image_uri" >> "$GITHUB_OUTPUT"
+          printf 'latest_uri=%s\n' "$latest_uri" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        shell: bash
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          dockerhub_username="$(printf '%s' "$DOCKERHUB_USERNAME" | tr -d '[:space:]')"
+          dockerhub_token="$(printf '%s' "$DOCKERHUB_TOKEN" | tr -d '\r\n')"
+          if [ -z "$dockerhub_username" ] || [ -z "$dockerhub_token" ]; then
+            echo "::error::Missing Docker Hub credentials"
+            exit 1
+          fi
+          printf '%s' "$dockerhub_token" | docker login docker.io -u "$dockerhub_username" --password-stdin
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -200,10 +215,12 @@ jobs:
         run: |
           remote="${HOSTINGER_USER}@${HOSTINGER_HOST}"
           ssh_opts=(-i ~/.ssh/hostinger_key -p "$HOSTINGER_PORT" -o StrictHostKeyChecking=yes)
+          dockerhub_username="$(printf '%s' "$DOCKERHUB_USERNAME" | tr -d '[:space:]')"
+          dockerhub_token="$(printf '%s' "$DOCKERHUB_TOKEN" | tr -d '\r\n')"
           app_dir_q="$(printf '%q' "$HOSTINGER_APP_DIR")"
           image_q="$(printf '%q' "$TRAVELCRM_IMAGE")"
-          docker_user_q="$(printf '%q' "$DOCKERHUB_USERNAME")"
-          docker_token_q="$(printf '%q' "$DOCKERHUB_TOKEN")"
+          docker_user_q="$(printf '%q' "$dockerhub_username")"
+          docker_token_q="$(printf '%q' "$dockerhub_token")"
           ssh "${ssh_opts[@]}" "$remote" \
             "APP_DIR=$app_dir_q TRAVELCRM_IMAGE=$image_q DOCKERHUB_USERNAME=$docker_user_q DOCKERHUB_TOKEN=$docker_token_q bash -s" <<'REMOTE_DEPLOY'
           set -euo pipefail
