@@ -6,7 +6,8 @@ import org.springframework.web.multipart.MultipartFile;
 
 public interface HotelService {
 
-    PagedApiResponse<HotelDto> getAll(int page, int size, String sortBy, String sortDir);
+    PagedApiResponse<HotelDto> getAll(int page, int size, String sortBy, String sortDir,
+                                      String q, Long destinationId, String city, Integer stars);
 
     PagedApiResponse<HotelDto> getByDestination(Long destinationId, int page, int size, String sortBy, String sortDir);
 

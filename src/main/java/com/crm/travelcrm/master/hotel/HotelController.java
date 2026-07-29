@@ -20,14 +20,24 @@ public class HotelController {
 
     private final HotelService hotelService;
 
+    /**
+     * Paged hotel list. Search and the destination filter are folded into this ONE endpoint on
+     * purpose: a separate unpaged {@code /search} could not page its own results, so a searching
+     * client would silently drop back to "first N matches" — the bug this pagination pass exists
+     * to remove. {@code size} is clamped service-side (see {@code GeographySupport.MAX_PAGE_SIZE}).
+     */
     @GetMapping
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<PagedApiResponse<HotelDto>> getAll(
             @RequestParam(defaultValue = "0")         int page,
-            @RequestParam(defaultValue = "20")        int size,
-            @RequestParam(defaultValue = "createdAt") String sortBy,
-            @RequestParam(defaultValue = "desc")      String sortDir) {
-        return ResponseEntity.ok(hotelService.getAll(page, size, sortBy, sortDir));
+            @RequestParam(defaultValue = "25")        int size,
+            @RequestParam(defaultValue = "name")      String sortBy,
+            @RequestParam(defaultValue = "asc")       String sortDir,
+            @RequestParam(required = false)           String q,
+            @RequestParam(required = false)           Long destinationId,
+            @RequestParam(required = false)           String city,
+            @RequestParam(required = false)           Integer stars) {
+        return ResponseEntity.ok(hotelService.getAll(page, size, sortBy, sortDir, q, destinationId, city, stars));
     }
 
     @GetMapping("/destination/{destinationId}")

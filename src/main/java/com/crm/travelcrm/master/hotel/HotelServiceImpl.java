@@ -21,6 +21,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -35,12 +36,25 @@ public class HotelServiceImpl implements HotelService {
     private final HotelMapper hotelMapper;
     private final CloudinaryService cloudinaryService;
 
+    /**
+     * Columns a client may sort the hotel list by. Anything outside this set falls back to
+     * {@code createdAt} rather than reaching {@code PageRequest.of(...)} and 500-ing on an
+     * unknown property.
+     */
+    private static final Set<String> SORTABLE = Set.of("name", "stars", "rating", "createdAt", "updatedAt");
+
     @Override
     @Transactional(readOnly = true)
-    public PagedApiResponse<HotelDto> getAll(int page, int size, String sortBy, String sortDir) {
+    public PagedApiResponse<HotelDto> getAll(int page, int size, String sortBy, String sortDir,
+                                             String q, Long destinationId, String city, Integer stars) {
         Long tenantId = GeographySupport.currentTenantId();
-        Page<Hotel> result = hotelRepository.findByTenantId(
-                tenantId, PageRequest.of(page, size, GeographySupport.buildSort(sortBy, sortDir)));
+        Page<Hotel> result = hotelRepository.search(
+                tenantId,
+                destinationId,
+                city == null ? "" : city.trim(),
+                stars,
+                q == null ? "" : q.trim(),
+                GeographySupport.pageRequest(page, size, GeographySupport.buildSort(sortBy, sortDir, SORTABLE)));
         return PagedApiResponse.of("Hotels fetched successfully",
                 result.map(hotelMapper::toDto).getContent(),
                 PaginationMeta.from(result, sortBy, sortDir));
@@ -51,7 +65,8 @@ public class HotelServiceImpl implements HotelService {
     public PagedApiResponse<HotelDto> getByDestination(Long destinationId, int page, int size, String sortBy, String sortDir) {
         Long tenantId = GeographySupport.currentTenantId();
         Page<Hotel> result = hotelRepository.findByTenantIdAndDestinationId(
-                tenantId, destinationId, PageRequest.of(page, size, GeographySupport.buildSort(sortBy, sortDir)));
+                tenantId, destinationId,
+                GeographySupport.pageRequest(page, size, GeographySupport.buildSort(sortBy, sortDir, SORTABLE)));
         return PagedApiResponse.of("Hotels fetched successfully",
                 result.map(hotelMapper::toDto).getContent(),
                 PaginationMeta.from(result, sortBy, sortDir));
@@ -62,7 +77,8 @@ public class HotelServiceImpl implements HotelService {
     public PagedApiResponse<HotelDto> getByCity(Long cityId, int page, int size, String sortBy, String sortDir) {
         Long tenantId = GeographySupport.currentTenantId();
         Page<Hotel> result = hotelRepository.findByTenantIdAndCityId(
-                tenantId, cityId, PageRequest.of(page, size, GeographySupport.buildSort(sortBy, sortDir)));
+                tenantId, cityId,
+                GeographySupport.pageRequest(page, size, GeographySupport.buildSort(sortBy, sortDir, SORTABLE)));
         return PagedApiResponse.of("Hotels fetched successfully",
                 result.map(hotelMapper::toDto).getContent(),
                 PaginationMeta.from(result, sortBy, sortDir));
