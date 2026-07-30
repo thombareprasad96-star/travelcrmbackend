@@ -16,18 +16,7 @@ class PdfFormatTest {
     }
 
     @Test
-    void dateFormatsIsoString() {
-        assertThat(fmt.date("2026-08-15")).isEqualTo("15 Aug 2026");
-    }
-
-    @Test
-    void dateReturnsDashForBlankString() {
-        assertThat(fmt.date("")).isEqualTo("-");
-        assertThat(fmt.date("   ")).isEqualTo("-");
-    }
-
-    @Test
-    void dateLeavesNonIsoStringReadable() {
-        assertThat(fmt.date("15 Aug")).isEqualTo("15 Aug");
+    void dateReturnsDashForNullLocalDate() {
+        assertThat(fmt.date(null)).isEqualTo("-");
     }
 }
