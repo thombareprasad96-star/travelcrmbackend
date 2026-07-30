@@ -21,7 +21,8 @@ public interface CustomerService {
 
     CustomerResponse create(CreateCustomerRequest request);
 
-    PagedApiResponse<CustomerResponse> getAll(int page, int size, String sortBy, String sortDir);
+    PagedApiResponse<CustomerResponse> getAll(int page, int size, String sortBy, String sortDir,
+                                              String q, String status, String type, String tier);
 
     CustomerResponse getById(UUID publicId);
 

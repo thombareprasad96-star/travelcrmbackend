@@ -4,6 +4,7 @@ import com.crm.travelcrm.common.dto.PagedApiResponse;
 import com.crm.travelcrm.common.dto.PaginationMeta;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.common.context.TenantContext;
+import com.crm.travelcrm.common.util.PageSupport;
 import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.notification.api.NotifyEvent;
 import com.crm.travelcrm.notification.domain.enums.DeliveryChannel;
@@ -59,19 +60,34 @@ public class VendorServiceImpl implements VendorService {
 
     // ── GET ALL ───────────────────────────────────────────────────────────────
 
+    /**
+     * Columns a client may sort by; anything else falls back to createdAt instead of 500-ing.
+     * Covers every sortable column the vendor table offers EXCEPT {@code outstanding}, which is
+     * a {@code @Transient} getter with no column to sort on. {@code totalBusiness}/{@code totalPaid}
+     * live in the vendor_financials secondary table but are ordinary mapped fields, so they sort.
+     */
+    private static final Set<String> SORTABLE = Set.of(
+            "vendorName", "vendorCode", "vendorType", "status", "payStatus",
+            "rating", "totalBusiness", "totalPaid", "city", "createdAt", "updatedAt");
+
     @Override
     @Transactional(readOnly = true)
-    public PagedApiResponse<VendorResponseDTO> getAll(int page, int size, String sortBy, String sortDir) {
+    public PagedApiResponse<VendorResponseDTO> getAll(int page, int size, String sortBy, String sortDir,
+                                                      String q, String status, String type, String payStatus) {
         Long tenantId = TenantContext.getTenantId();
 
-        Sort sort = sortDir.equalsIgnoreCase("desc")
-                ? Sort.by(sortBy).descending()
-                : Sort.by(sortBy).ascending();
+        // Search and filters are AND-ed into the SAME paged query. The standalone /search and
+        // /filter endpoints return unpaged lists, so a paged client could not have used them
+        // without falling back to "first N matches" — the truncation this replaced.
+        Specification<Vendor> spec = VendorSpecification.isActiveTenant(tenantId)
+                .and(VendorSpecification.hasStatus(parseStatus(status)))
+                .and(VendorSpecification.hasType(type))
+                .and(VendorSpecification.hasPayStatus(parsePayStatus(payStatus)))
+                .and(VendorSpecification.matchesSearch(q));
 
-        Pageable pageable = PageRequest.of(page, size, sort);
+        Pageable pageable = PageSupport.pageRequest(page, size, PageSupport.buildSort(sortBy, sortDir, SORTABLE));
 
-        Page<Vendor> vendorPage = vendorRepository.findAll(
-                VendorSpecification.isActiveTenant(tenantId), pageable);
+        Page<Vendor> vendorPage = vendorRepository.findAll(spec, pageable);
 
         List<VendorResponseDTO> content = vendorPage.getContent()
                 .stream()

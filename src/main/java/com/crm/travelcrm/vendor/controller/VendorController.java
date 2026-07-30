@@ -51,18 +51,28 @@ public class VendorController {
                 "payStatus", java.util.Arrays.stream(VendorPayStatus.values()).map(Enum::name).toList()));
     }
 
+    /**
+     * Paged vendor list. Search + filters live HERE rather than on the unpaged /search and /filter
+     * endpoints, so a searching client still gets pagination instead of a truncated first page.
+     * {@code size} is clamped service-side (see {@code PageSupport.MAX_PAGE_SIZE}).
+     */
     @GetMapping
     @PreAuthorize("hasAuthority('VENDOR_READ')")
     public ResponseEntity<PagedApiResponse<VendorResponseDTO>> getAll(
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "10") int size,
-            @RequestParam(defaultValue = "vendorCode") String sortBy,
-            @RequestParam(defaultValue = "desc") String sortDir) {
+            @RequestParam(defaultValue = "25") int size,
+            @RequestParam(defaultValue = "vendorName") String sortBy,
+            @RequestParam(defaultValue = "asc") String sortDir,
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String type,
+            @RequestParam(required = false) String payStatus) {
 
-        log.info("Fetching vendors: page={}, size={}, sortBy={}, sortDir={}",
-                page, size, sortBy, sortDir);
+        log.info("Fetching vendors: page={}, size={}, sortBy={}, sortDir={}, q={}",
+                page, size, sortBy, sortDir, q);
 
-        PagedApiResponse<VendorResponseDTO> response = vendorService.getAll(page, size, sortBy, sortDir);
+        PagedApiResponse<VendorResponseDTO> response =
+                vendorService.getAll(page, size, sortBy, sortDir, q, status, type, payStatus);
         return ResponseEntity.ok(response);
     }
 

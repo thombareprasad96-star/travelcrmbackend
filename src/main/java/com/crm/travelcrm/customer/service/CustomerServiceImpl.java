@@ -7,6 +7,7 @@ import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.dto.PagedApiResponse;
 import com.crm.travelcrm.common.dto.PaginationMeta;
 import com.crm.travelcrm.common.exception.RestoreAvailableException;
+import com.crm.travelcrm.common.util.PageSupport;
 import com.crm.travelcrm.common.util.PhoneNormalizer;
 import com.crm.travelcrm.customer.dto.request.CreateCustomerRequest;
 import com.crm.travelcrm.customer.dto.request.StatusUpdateRequest;
@@ -139,18 +140,34 @@ public class CustomerServiceImpl implements CustomerService {
 
     // ── Read ──────────────────────────────────────────────────────────────────────
 
+    /** Columns a client may sort by; anything else falls back to createdAt instead of 500-ing. */
+    private static final Set<String> SORTABLE =
+            Set.of("name", "customerCode", "phone", "city", "status", "createdAt", "updatedAt");
+
     @Override
     @Transactional(readOnly = true)
-    public PagedApiResponse<CustomerResponse> getAll(int page, int size, String sortBy, String sortDir) {
+    public PagedApiResponse<CustomerResponse> getAll(int page, int size, String sortBy, String sortDir,
+                                                     String q, String status, String type, String tier) {
         Long tenantId = currentTenantId();
 
-        Pageable pageable = PageRequest.of(page, size, buildSort(sortBy, sortDir));
+        Pageable pageable = PageSupport.pageRequest(page, size, PageSupport.buildSort(sortBy, sortDir, SORTABLE));
+
+        // One spec for every case. The old fast path (findAllByTenantIdAndDeletedAtIsNull when not
+        // a sub-agent) is folded in here: activeForTenant is the same tenant + not-deleted pair, and
+        // collapsing the branches is what lets search/filters apply to BOTH roles rather than only
+        // the sub-agent path.
+        Specification<Customer> spec = CustomerSpecification.activeForTenant(tenantId)
+                .and(CustomerSpecification.hasStatus(parseStatus(status)))
+                .and(CustomerSpecification.hasType(parseType(type)))
+                .and(CustomerSpecification.hasTier(parseTier(tier)))
+                .and(CustomerSpecification.matchesSearch(q));
+
+        // Row-level scope stays AND-ed on last and unconditionally: a sub-agent must never widen
+        // its visible set by sending a search term.
         Long ownerFilter = subAgentScope.ownerFilter();
-        Page<Customer> customerPage = (ownerFilter == null)
-                ? customerRepository.findAllByTenantIdAndDeletedAtIsNull(tenantId, pageable)
-                : customerRepository.findAll(
-                        CustomerSpecification.activeForTenant(tenantId)
-                                .and(CustomerSpecification.ownedBy(ownerFilter)), pageable);
+        if (ownerFilter != null) spec = spec.and(CustomerSpecification.ownedBy(ownerFilter));
+
+        Page<Customer> customerPage = customerRepository.findAll(spec, pageable);
 
         List<CustomerResponse> content = enrichList(customerPage.getContent(), tenantId);
         log.debug("Fetched {} customers (page {}) for tenantId: {}", content.size(), page, tenantId);

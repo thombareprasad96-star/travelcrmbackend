@@ -10,7 +10,8 @@ import java.util.Map;
 
 public interface VendorService {
 
-    PagedApiResponse<VendorResponseDTO> getAll(int page, int size, String sortBy, String sortDir);
+    PagedApiResponse<VendorResponseDTO> getAll(int page, int size, String sortBy, String sortDir,
+                                               String q, String status, String type, String payStatus);
 
     VendorResponseDTO getById(Long id);
 

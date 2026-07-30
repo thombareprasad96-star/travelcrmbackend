@@ -1,11 +1,11 @@
 package com.crm.travelcrm.master.geography.support;
 
 import com.crm.travelcrm.common.context.TenantContext;
+import com.crm.travelcrm.common.util.PageSupport;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.util.StringUtils;
 
 import java.util.Set;
 
@@ -34,49 +34,26 @@ public final class GeographySupport {
         return auth != null ? auth.getName() : "system";
     }
 
-    /** Build a {@link Sort}; defaults to {@code createdAt} and descending order. */
+    // ── Paging (delegates to the shared implementation) ──────────────────────
+    // These forward to PageSupport so the stable-sort rule and the size clamp have exactly one
+    // definition across master/, vendor/ and customer/. Kept as thin wrappers rather than deleted
+    // because the nine master services already call them by this name.
+
+    /** @see PageSupport#buildSort(String, String) */
     public static Sort buildSort(String sortBy, String sortDir) {
-        return buildSort(sortBy, sortDir, null);
+        return PageSupport.buildSort(sortBy, sortDir);
     }
 
-    /**
-     * Build a {@link Sort} with a STABLE tiebreaker, optionally restricted to a whitelist.
-     *
-     * <p>The trailing {@code id DESC} is load-bearing, not decoration. Sorting a paged query on a
-     * non-unique column ({@code createdAt} across bulk-created rows, {@code name} across duplicates)
-     * leaves the order of the tied rows up to Postgres, and it may answer page 1 and page 2 with a
-     * different arrangement of the same ties. The visible symptom is one row showing on two pages
-     * while another never appears at all — which reads to the user as "the record got deleted".
-     * {@code id} is the primary key on every entity here, so appending it makes the ordering total
-     * and the paging reproducible.
-     *
-     * @param allowed when non-null, {@code sortBy} must name one of these properties; anything else
-     *                falls back to {@code createdAt}. Unvalidated input otherwise reaches
-     *                {@code PageRequest.of(...)} and surfaces as a 500 on an unknown property.
-     */
+    /** @see PageSupport#buildSort(String, String, Set) */
     public static Sort buildSort(String sortBy, String sortDir, Set<String> allowed) {
-        String property = StringUtils.hasText(sortBy) ? sortBy.trim() : "createdAt";
-        if (allowed != null && !allowed.contains(property)) {
-            property = "createdAt";
-        }
-        Sort primary = "asc".equalsIgnoreCase(sortDir)
-                ? Sort.by(property).ascending()
-                : Sort.by(property).descending();
-        return "id".equals(property) ? primary : primary.and(Sort.by(Sort.Direction.DESC, "id"));
+        return PageSupport.buildSort(sortBy, sortDir, allowed);
     }
 
-    // ── Page-request guards ──────────────────────────────────────────────────
-
-    /** Largest page a client may ask for; stops {@code ?size=100000} from becoming an OOM. */
-    public static final int MAX_PAGE_SIZE = 200;
-
-    /** Page size used when the caller sends nothing usable. */
-    public static final int DEFAULT_PAGE_SIZE = 25;
-
-    /** Clamp a client-supplied page/size pair into a safe {@link PageRequest}. */
+    /** @see PageSupport#pageRequest(int, int, Sort) */
     public static PageRequest pageRequest(int page, int size, Sort sort) {
-        int safePage = Math.max(page, 0);
-        int safeSize = size <= 0 ? DEFAULT_PAGE_SIZE : Math.min(size, MAX_PAGE_SIZE);
-        return PageRequest.of(safePage, safeSize, sort);
+        return PageSupport.pageRequest(page, size, sort);
     }
+
+    /** @see PageSupport#MAX_PAGE_SIZE */
+    public static final int MAX_PAGE_SIZE = PageSupport.MAX_PAGE_SIZE;
 }

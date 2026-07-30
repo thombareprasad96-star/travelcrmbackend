@@ -40,6 +40,25 @@ public final class CustomerSpecification {
                 tier == null ? cb.conjunction() : cb.equal(root.get("tier"), tier);
     }
 
+    /**
+     * Free-text search across the columns a user actually types into the list's search box.
+     * A blank query contributes {@code conjunction()} (always-true) so the caller can AND this in
+     * unconditionally instead of branching.
+     */
+    public static Specification<Customer> matchesSearch(String q) {
+        return (root, query, cb) -> {
+            if (q == null || q.isBlank()) return cb.conjunction();
+            String pattern = "%" + q.toLowerCase().trim() + "%";
+            return cb.or(
+                    cb.like(cb.lower(root.get("name")),         pattern),
+                    cb.like(cb.lower(root.get("customerCode")), pattern),
+                    cb.like(cb.lower(root.get("phone")),        pattern),
+                    cb.like(cb.lower(cb.coalesce(root.get("email"), "")), pattern),
+                    cb.like(cb.lower(cb.coalesce(root.get("city"),  "")), pattern)
+            );
+        };
+    }
+
     // ── Owner scope (B2B sub-agent row-level restriction) ────────────────────
     // AND-ed on ONLY when the caller is a sub-agent; other roles skip it (tenant-wide, unchanged).
     public static Specification<Customer> ownedBy(Long ownerUserId) {

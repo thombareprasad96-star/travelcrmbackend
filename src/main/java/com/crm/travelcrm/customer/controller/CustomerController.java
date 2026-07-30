@@ -44,15 +44,24 @@ public class CustomerController {
 
     // ── List (paginated) ─────────────────────────────────────────────────────────
 
+    /**
+     * Paged customer list. Search + filters live HERE rather than on the unpaged /search-name and
+     * /filter endpoints, so a searching client still gets pagination instead of a truncated first
+     * page. Sub-agent row scoping is applied inside the service and cannot be widened by {@code q}.
+     */
     @GetMapping
     @PreAuthorize("hasAuthority('CUSTOMER_READ')")
     public ResponseEntity<PagedApiResponse<CustomerResponse>> getAll(
             @RequestParam(defaultValue = "0")         int page,
-            @RequestParam(defaultValue = "20")        int size,
+            @RequestParam(defaultValue = "25")        int size,
             @RequestParam(defaultValue = "createdAt") String sortBy,
-            @RequestParam(defaultValue = "desc")      String sortDir) {
+            @RequestParam(defaultValue = "desc")      String sortDir,
+            @RequestParam(required = false)           String q,
+            @RequestParam(required = false)           String status,
+            @RequestParam(required = false)           String type,
+            @RequestParam(required = false)           String tier) {
 
-        return ResponseEntity.ok(customerService.getAll(page, size, sortBy, sortDir));
+        return ResponseEntity.ok(customerService.getAll(page, size, sortBy, sortDir, q, status, type, tier));
     }
 
     // ── Search / filter / stats / export (literal paths first) ──────────────────

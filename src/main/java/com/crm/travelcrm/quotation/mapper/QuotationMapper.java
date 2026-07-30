@@ -618,9 +618,7 @@ public class QuotationMapper {
     /** Total rooms summed across all hotels. */
     private Integer computeRooms(Quotation q) {
         if (q.getHotels() == null || q.getHotels().isEmpty()) return null;
-        int rooms = q.getHotels().stream()
-                .mapToInt(h -> h.getRooms() != null ? h.getRooms() : 0)
-                .sum();
+        int rooms = q.getHotels().getFirst().getRooms();
         return rooms > 0 ? rooms : null;
     }
 
