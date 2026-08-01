@@ -39,6 +39,13 @@ public class UpdateBookingRequestDTO {
     @Digits(integer = 10, fraction = 2, message = "Invalid amount format")
     private BigDecimal vendorCost;
 
+    /**
+     * Reclassify the booking as an overseas tour package (or back). Null leaves it unchanged, per
+     * this DTO's patch semantics. Changing it re-runs the tax computation, so it can move
+     * {@code tcs} and {@code totalPayable} when the tenant's policy is OVERSEAS_ONLY.
+     */
+    private Boolean overseasTourPackage;
+
     private List<String> services;
 
     // Amount already collected — ABSOLUTE value (not an increment). Server re-derives

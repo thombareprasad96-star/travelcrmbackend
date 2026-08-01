@@ -24,7 +24,7 @@ public class ActivityReportMapper {
                 .date(log.getCreatedAt() != null ? log.getCreatedAt().format(DATE_FMT) : null)
                 .time(log.getCreatedAt() != null ? log.getCreatedAt().format(TIME_FMT) : null)
                 .user(log.getUserName())
-                .username(deriveUsername(log.getUserEmail(), log.getUserName()))
+                .username(resolveUsername(log))
                 .type(log.getUserType())
                 .action(log.getAction() != null ? log.getAction().name() : null)
                 .description(log.getDescription())
@@ -38,7 +38,7 @@ public class ActivityReportMapper {
                 .date(log.getCreatedAt() != null ? log.getCreatedAt().format(DATE_FMT) : null)
                 .time(log.getCreatedAt() != null ? log.getCreatedAt().format(TIME_FMT) : null)
                 .user(log.getUserName())
-                .username(deriveUsername(log.getUserEmail(), log.getUserName()))
+                .username(resolveUsername(log))
                 .type(log.getUserType())
                 .action(log.getAction() != null ? log.getAction().name() : null)
                 .description(log.getDescription())
@@ -48,6 +48,23 @@ public class ActivityReportMapper {
     }
 
     /** "alice@x.com" → "@alice"; falls back to the full name with spaces collapsed to underscores. */
+    /**
+     * The acting user's real login username, prefixed for display.
+     *
+     * <p>Falls back to {@link #deriveUsername} only for rows written before {@code activity_logs}
+     * carried the column. That fallback must never be reached for new rows: it splits the email
+     * local-part, and now that an office can share one mailbox it would label every colleague
+     * {@code @info} — an audit trail that cannot tell three people apart.
+     */
+    private static String resolveUsername(ActivityLog log) {
+        String stored = log.getActingUsername();
+        if (stored != null && !stored.isBlank()) {
+            return "@" + stored;
+        }
+        return deriveUsername(log.getUserEmail(), log.getUserName());
+    }
+
+    /** Legacy shape, retained only for historical rows — see {@link #resolveUsername}. */
     private static String deriveUsername(String email, String fullName) {
         if (email != null && email.contains("@")) {
             return "@" + email.substring(0, email.indexOf('@'));

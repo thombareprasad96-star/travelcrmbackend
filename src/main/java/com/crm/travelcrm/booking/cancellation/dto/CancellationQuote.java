@@ -75,5 +75,11 @@ public class CancellationQuote {
     // ── Agency P&L (internal — never on a customer document) ──────────────────
     private BigDecimal sunkVendorCost;
     private BigDecimal vendorRecoverable;
+    /**
+     * The booking's active INTERNAL expense total — sunk in full, because the agency's own costs
+     * (staff commission, gateway fee, courier) are not recoverable from a cancellation.
+     */
+    private BigDecimal sunkInternalCosts;
+    /** {@code chargeBase − sunkVendorCost − sunkInternalCosts}. Pre-tax: GST/TCS are not margin. */
     private BigDecimal revisedNetProfit;
 }

@@ -19,6 +19,7 @@ import com.crm.travelcrm.accounting.settings.service.AccountingSettingsService;
 import com.crm.travelcrm.accounting.support.FinancialYear;
 import com.crm.travelcrm.accounting.support.GstStateCodes;
 import com.crm.travelcrm.accounting.support.IndianAmountWords;
+import com.crm.travelcrm.accounting.support.Percents;
 import com.crm.travelcrm.accounting.tax.dto.GstLineInput;
 import com.crm.travelcrm.accounting.tax.dto.GstQuote;
 import com.crm.travelcrm.accounting.tax.entity.HsnSacRate;
@@ -160,8 +161,14 @@ public class InvoiceServiceImpl implements InvoiceService {
         boolean overseas = Boolean.TRUE.equals(req.getOverseasTourPackage());
         boolean applyTcs = overseas
                 && (req.getApplyTcs() != null ? req.getApplyTcs() : settings.isAutoTcsOnOverseas());
+        // The slab is the TENANT's, not a platform constant — statutory rates move with every
+        // Finance Act and each tenant adopts the change on their CA's advice.
         BigDecimal tcs = applyTcs
-                ? tcsCalculator.compute(quote.getTotalTaxable(), req.getPriorOverseasSpendThisFy())
+                ? tcsCalculator.compute(quote.getTotalTaxable(), req.getPriorOverseasSpendThisFy(),
+                        new TcsCalculator.TcsSlab(
+                                settings.getTcsThreshold(),
+                                Percents.toFraction(settings.getTcsRateBelowPct()),
+                                Percents.toFraction(settings.getTcsRateAbovePct())))
                 : BigDecimal.ZERO;
 
         // ── Totals + round-off ──

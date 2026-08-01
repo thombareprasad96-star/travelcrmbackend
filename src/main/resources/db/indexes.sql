@@ -86,39 +86,84 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_leads_phone_tenant_open
         ON leads (phone, tenant_id)
         WHERE deleted_at IS NULL AND lead_stage NOT IN ('CONVERTED', 'LOST');
 
--- ── Staff email: per-tenant → PLATFORM-WIDE unique ──────────────────────────
--- REVERSES the earlier "email is unique per tenant" decision. One email now means
--- exactly one account across every tenant, so the login lookup — which resolves by
--- email alone with no tenant discriminator (AuthServiceImpl.userLogin) — is finally
--- asking a question the schema can answer. Under the old uq_user_email_tenant the same
--- address could exist in two tenants and that lookup threw NonUniqueResultException,
--- a pre-auth 500 for both accounts.
+-- ── Staff login: EMAIL → USERNAME ───────────────────────────────────────────
+-- RETIRES the platform-wide unique email. Requiring one address per account forced every
+-- staff member of an agency to hold a personal mailbox; an agency with a single shared
+-- info@ could provision exactly one user. Email is now a contact/display field, free to
+-- repeat, and the login identity is users.username.
 --
--- Partial (WHERE deleted_at IS NULL) so a soft-deleted user does not squat on its
--- address forever — same treatment as uq_leads_*_tenant_open above. Hibernate cannot
--- express a partial index, so this is the ONLY declaration of the constraint; the
--- @UniqueConstraint was removed from User.java rather than left to contradict it.
+-- Something must stay unique or the login lookup is ambiguous, and it must be unique
+-- GLOBALLY: the login form takes no organization, so the tenant is a RESULT of the lookup
+-- (AuthServiceImpl.userLogin), never an input to it. Under a per-tenant constraint that
+-- lookup would match several rows and throw NonUniqueResultException — a pre-auth 500.
 --
--- ddl-auto=update never drops an existing constraint, so the DROP is required to
--- retire uq_user_email_tenant on databases created before this change.
+-- This mirrors PART 2 of V2__lead_code.sql for the ddl-auto=update path. Both must stay in
+-- step: Flyway databases get the column from V2, ddl-auto databases get it from Hibernate
+-- (User.username is JPA-nullable precisely so that ALTER succeeds on a populated table),
+-- and this file supplies the backfill + partial index that neither Hibernate nor JPA can.
 --
--- The index is case-SENSITIVE, so uniqueness only means anything if every stored
--- address is already normalized — otherwise Admin@X.com and admin@x.com are two
--- accounts and "one email, one account" is a fiction. All four writers now lowercase
--- on the way in (UserServiceImpl, SubAgentServiceImpl, TenantServiceImpl, DevDataSeeder);
--- the UPDATE below retires rows written before TenantServiceImpl did so. Idempotent.
+-- SuperAdmin is untouched — separate table, separate endpoint, still email-keyed.
+
+-- The index is case-SENSITIVE, so uniqueness only means anything if every stored value is
+-- already normalized — otherwise Prasad and prasad are two accounts and "one username, one
+-- account" is a fiction. All four writers lowercase on the way in via UsernamePolicy
+-- (UserServiceImpl, SubAgentServiceImpl, TenantServiceImpl, DevDataSeeder); the UPDATEs
+-- below retire rows written before that. Idempotent.
 UPDATE users SET email = LOWER(email) WHERE email <> LOWER(email);
---
--- ⚠ spring.sql.init.continue-on-error=true: if duplicate live emails exist, the CREATE
--- below FAILS and startup CONTINUES — leaving no constraint at all. It is not enough to
--- see a clean boot; verify with:
---   SELECT indexname FROM pg_indexes WHERE tablename='users' AND indexname='uq_users_email_active';
--- and find offenders with:
---   SELECT email, count(*) FROM users WHERE deleted_at IS NULL GROUP BY email HAVING count(*) > 1;
+UPDATE users SET username = LOWER(username) WHERE username <> LOWER(username);
+
+-- Backfill from the email local-part. Identical logic to V2 — see the long comment there for
+-- why the first claimant of a stem keeps it clean and only genuine duplicates get "_<id>".
+-- Touches only NULL/empty username, so re-running is a no-op.
+WITH candidate AS (
+    SELECT id,
+           COALESCE(
+               NULLIF(left(regexp_replace(lower(split_part(email, '@', 1)), '[^a-z0-9._-]', '', 'g'),
+                           60), ''),
+               'user'
+           ) AS stem
+      FROM users
+     WHERE username IS NULL OR username = ''
+),
+ranked AS (
+    SELECT c.id,
+           c.stem,
+           row_number() OVER (PARTITION BY c.stem ORDER BY c.id) AS rn,
+           EXISTS (SELECT 1 FROM users x WHERE x.username = c.stem) AS taken
+      FROM candidate c
+)
+UPDATE users u
+   SET username = CASE WHEN r.rn = 1 AND NOT r.taken THEN r.stem
+                       ELSE r.stem || '_' || u.id END
+  FROM ranked r
+ WHERE u.id = r.id;
+
+-- ddl-auto=update never drops an existing constraint, so both DROPs are required to retire
+-- the email uniqueness on databases created before this change. uq_users_email_active is an
+-- index (CREATE UNIQUE INDEX), uq_user_email_tenant was a table constraint — hence the two
+-- different verbs. Leaving either in place would silently defeat the whole change: the
+-- second user given the shared office address would still be rejected.
+DROP INDEX IF EXISTS uq_users_email_active;
 ALTER TABLE users DROP CONSTRAINT IF EXISTS uq_user_email_tenant;
-CREATE UNIQUE INDEX IF NOT EXISTS uq_users_email_active
-        ON users (email)
+
+-- ⚠ spring.sql.init.continue-on-error=true: if duplicate live usernames exist, the CREATE
+-- below FAILS and startup CONTINUES — leaving NO unique constraint on the login identifier.
+-- It is not enough to see a clean boot; verify with:
+--   SELECT indexname FROM pg_indexes WHERE tablename='users' AND indexname='uq_users_username_active';
+-- and find offenders with:
+--   SELECT username, count(*) FROM users WHERE deleted_at IS NULL GROUP BY username HAVING count(*) > 1;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_users_username_active
+        ON users (username)
         WHERE deleted_at IS NULL;
+
+-- Audit trail: backfill activity_logs.username from the acting user. Hibernate adds the (nullable)
+-- column itself on this path; only the backfill needs doing here. Rows whose user is gone keep NULL
+-- and fall back to ActivityReportMapper's legacy derivation. Idempotent. Mirrors part 8 of V2.
+UPDATE activity_logs a
+   SET username = u.username
+  FROM users u
+ WHERE a.user_id = u.id
+   AND a.username IS NULL;
 
 -- SuperAdmin MFA / token-version backfill. Hibernate adds these nullable columns on old
 -- databases. Null token_version means a pre-MFA row; set it to 1 so older SuperAdmin
@@ -520,6 +565,25 @@ CREATE INDEX IF NOT EXISTS idx_leads_phone_norm_tenant
 --         ON leads (phone_normalized, tenant_id)
 --         WHERE deleted_at IS NULL AND phone_normalized IS NOT NULL
 --           AND lead_stage NOT IN ('CONVERTED', 'LOST');
+
+-- ── leads.lead_code: human-readable reference (LD-YY-NNNN) ──────────────────
+-- The lead's DISPLAY identity, issued by LeadCodeGenerator from the per-tenant lead_sequences
+-- counter. publicId stays the API/routing key — this exists because the UI had nothing to print
+-- but a raw UUID, which is not something a human can read out on a call. Bookings solved this
+-- long ago (BKG-YY-NNNN); leads simply never got the same treatment.
+--
+-- THE BACKFILL AND COUNTER SEED FOR THIS COLUMN ARE NOT HERE — they live in
+-- db/migration/V2__lead_code.sql, per DEPLOYMENT.md's rule "keep data backfills in versioned
+-- migrations, not in db/indexes.sql". Only the index survives here, because indexes are what this
+-- file is for and a dev database (ddl-auto=update, Flyway off) still needs it.
+--
+-- So on a dev database that predates the column: rows created before it show no code, and that is
+-- expected — nothing back-fills them here. New leads are unaffected, because
+-- LeadCodeGenerator.createInitial() seeds a missing counter from the tenant's row count rather than
+-- from 0, so a generated code can never collide with a code some other path already issued.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_leads_code_tenant
+        ON leads (lead_code, tenant_id) WHERE lead_code IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_lead_code ON leads (tenant_id, lead_code);
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- LEAD SOURCE INTEGRATION FRAMEWORK

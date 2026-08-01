@@ -76,6 +76,7 @@ public class ActivityAuditAspect {
                     description,
                     user.getId(),
                     user.getName(),
+                    user.getUsername(),
                     user.getEmail(),
                     ActivityLogRecorder.labelFor(user.getRole()),
                     user.getTenantId(),

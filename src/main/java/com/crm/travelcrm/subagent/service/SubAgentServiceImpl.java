@@ -3,6 +3,7 @@ package com.crm.travelcrm.subagent.service;
 import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.auth.enums.Role;
 import com.crm.travelcrm.auth.repository.UserRepository;
+import com.crm.travelcrm.auth.util.UsernamePolicy;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
@@ -50,12 +51,14 @@ public class SubAgentServiceImpl implements SubAgentService {
     public CreateSubAgentResponse create(CreateSubAgentRequest req) {
         Long tenantId = requireTenant();
         String email = req.getEmail().trim().toLowerCase();
+        String username = UsernamePolicy.normalize(req.getUsername());
 
-        // Email is unique platform-wide (uq_users_email_active) — a partner already onboarded by
-        // another agency cannot be re-onboarded under the same address and needs a distinct one.
-        if (userRepository.existsByEmail(email)) {
+        // Username is unique platform-wide (uq_users_username_active) — a partner already onboarded
+        // by another agency cannot reuse that login and needs a distinct one. Email is NOT checked:
+        // it is a contact field now, and a partner may legitimately share one with their own staff.
+        if (userRepository.existsByUsernameAndDeletedAtIsNull(username)) {
             throw new BusinessException(
-                    "A user with email " + email + " already exists.",
+                    "The username " + username + " is already taken.",
                     HttpStatus.CONFLICT);
         }
 
@@ -75,6 +78,7 @@ public class SubAgentServiceImpl implements SubAgentService {
         //    sub-agent's login stays disabled (isActive=false) until the seat is approved.
         User user = User.builder()
                 .name(req.getName().trim())
+                .username(username)
                 .email(email)
                 .password(passwordEncoder.encode(req.getPassword()))
                 .role(Role.SUB_AGENT)
@@ -99,8 +103,8 @@ public class SubAgentServiceImpl implements SubAgentService {
         SubAgentProfile saved = profileRepository.save(profile);
 
         if (seatAvailable) {
-            log.info("Sub-agent provisioned ACTIVE | email={} tenantId={} markup={} {}",
-                    email, tenantId, markupType, markupValue);
+            log.info("Sub-agent provisioned ACTIVE | username={} tenantId={} markup={} {}",
+                    username, tenantId, markupType, markupValue);
             return CreateSubAgentResponse.builder()
                     .subAgent(toResponse(saved, savedUser))
                     .licenseRequired(false)
@@ -108,7 +112,7 @@ public class SubAgentServiceImpl implements SubAgentService {
         }
 
         // Over cap — open the seat-license purchase for this pending sub-agent (issues the invoice).
-        log.info("Sub-agent provisioned PENDING_LICENSE (over cap) | email={} tenantId={}", email, tenantId);
+        log.info("Sub-agent provisioned PENDING_LICENSE (over cap) | username={} tenantId={}", username, tenantId);
         SubAgentLicenseRequestResponse licenseRequest = licenseService.openForPending(
                 tenantId, currentUserEmail(), saved.getPublicId(),
                 req.getPaymentMode(), req.getOfflineMode(), req.getOfflineReference(), req.getOfflineNotes());
@@ -251,9 +255,15 @@ public class SubAgentServiceImpl implements SubAgentService {
         return t;
     }
 
+    /**
+     * The acting staff member's real mailbox — deliberately NOT {@code auth.getName()}, which now
+     * returns the username. This feeds {@code SubAgentLicenseRequest.requestedByEmail}, which a
+     * SuperAdmin OUTSIDE this tenant reads to contact whoever asked for the seat; a username is not
+     * something they can act on.
+     */
     private String currentUserEmail() {
         Authentication a = SecurityContextHolder.getContext().getAuthentication();
-        return a != null ? a.getName() : "system";
+        return (a != null && a.getPrincipal() instanceof User u) ? u.getEmail() : "system";
     }
 
     private SubAgentResponse toResponse(SubAgentProfile p, User u) {
@@ -261,6 +271,7 @@ public class SubAgentServiceImpl implements SubAgentService {
                 .publicId(p.getPublicId())
                 .userPublicId(u.getPublicId())
                 .name(u.getName())
+                .username(u.getUsername())
                 .email(u.getEmail())
                 .phoneNumber(u.getPhoneNumber())
                 .markupType(p.getMarkupType())

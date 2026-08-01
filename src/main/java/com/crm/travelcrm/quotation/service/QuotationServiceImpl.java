@@ -134,9 +134,17 @@ public class QuotationServiceImpl implements QuotationService {
                 publicId, q.getHotels().size(), q.getFlightSegments().size(), q.getSightseeingDays().size(),
                 q.getCruises().size(), q.getVehicles().size(), q.getAddons().size());
         // Re-link the lead only if the client sent one (keeps the existing snapshot otherwise)
+        Lead lead = null;
+
         if (request.getLeadId() != null) {
-            linkLeadAndSnapshot(q, request.getLeadId());
+            lead = linkLeadAndSnapshot(q, request.getLeadId());
         }
+        applyDestinationCoverImage(
+                q,
+                request.getDestinationId(),
+                tenantId,
+                lead
+        );
 
         Quotation saved = quotationRepository.save(q);
         log.info("Quotation updated | publicId: {} | tenantId: {}", publicId, tenantId);

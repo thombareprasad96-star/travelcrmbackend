@@ -31,6 +31,9 @@ public class TenantResponse {
     private LocalDateTime deletedAt;
 
     // Populated only on create
+    /** The first admin's display name (echoes CreateTenantRequest.adminUsername). */
     private String adminUsername;
+    /** The first admin's LOGIN identifier — may have been derived, so it is echoed back here. */
+    private String adminLoginUsername;
     private String message;
 }

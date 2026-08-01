@@ -28,7 +28,9 @@ public class CreateLeadRequestDto {
     )
     private String phone;
 
-    @NotBlank(message = "Email is required")
+
+
+
     @Email(message = "Enter a valid email address")
     @Size(max = 150, message = "Email must not exceed 150 characters")
     private String email;

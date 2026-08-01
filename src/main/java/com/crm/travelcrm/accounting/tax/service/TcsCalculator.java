@@ -13,7 +13,11 @@ import java.math.RoundingMode;
  * FY (default 0) and this splits the current package across the remaining headroom. Domestic packages
  * never attract TCS — the caller simply does not invoke this.
  *
- * <p>Rates and the threshold are externalised (per Finance Act / FY) via {@code app.accounting.tcs.*}.
+ * <p><b>The slab is per-TENANT</b>, supplied by the caller from {@code AccountingSettings}. The
+ * {@code app.accounting.tcs.*} properties survive only as the platform default used to seed a
+ * tenant's first settings row and as the fallback when none exists. Statutory rates move with every
+ * Finance Act and tenants adopt the change on their CA's advice, not on this platform's deploy
+ * schedule — so the rate is theirs to set.
  */
 @Service
 public class TcsCalculator {
@@ -32,20 +36,43 @@ public class TcsCalculator {
     }
 
     /**
-     * TCS on {@code packageValue} given the buyer's prior overseas spend this FY. The portion that
-     * still fits under the threshold is taxed at the below rate; the remainder at the above rate.
+     * The slab a tenant collects TCS under. Rates are FRACTIONS here (0.05 = 5%) — the conversion
+     * from the percent the tenant edits happens once, at the call site.
+     *
+     * <p>A flat regime (which is what the law became on 1 Apr 2026: 2%, no threshold) is expressed
+     * by setting {@code rateBelow == rateAbove}; the threshold then makes no difference.
+     */
+    public record TcsSlab(BigDecimal threshold, BigDecimal rateBelow, BigDecimal rateAbove) {}
+
+    /** The platform defaults, used when a tenant has no settings row yet. */
+    public TcsSlab defaults() {
+        return new TcsSlab(threshold, rateBelow, rateAbove);
+    }
+
+    /**
+     * TCS on {@code packageValue} given the buyer's prior overseas spend this FY, under the
+     * PLATFORM default slab. Prefer the three-arg overload — the slab belongs to the tenant.
      */
     public BigDecimal compute(BigDecimal packageValue, BigDecimal priorOverseasSpendThisFy) {
+        return compute(packageValue, priorOverseasSpendThisFy, defaults());
+    }
+
+    /**
+     * TCS on {@code packageValue} under the TENANT's slab. The portion that still fits under the
+     * threshold is taxed at the below rate; the remainder at the above rate.
+     */
+    public BigDecimal compute(BigDecimal packageValue, BigDecimal priorOverseasSpendThisFy, TcsSlab slab) {
         BigDecimal value = nz(packageValue);
         if (value.signum() <= 0) return BigDecimal.ZERO;
 
+        TcsSlab s = slab != null ? slab : defaults();
         BigDecimal prior = nz(priorOverseasSpendThisFy).max(BigDecimal.ZERO);
-        BigDecimal headroom = threshold.subtract(prior).max(BigDecimal.ZERO);
+        BigDecimal headroom = nz(s.threshold()).subtract(prior).max(BigDecimal.ZERO);
 
         BigDecimal below = value.min(headroom);
         BigDecimal above = value.subtract(below).max(BigDecimal.ZERO);
 
-        BigDecimal tcs = below.multiply(rateBelow).add(above.multiply(rateAbove));
+        BigDecimal tcs = below.multiply(nz(s.rateBelow())).add(above.multiply(nz(s.rateAbove())));
         return tcs.setScale(2, RoundingMode.HALF_UP);
     }
 

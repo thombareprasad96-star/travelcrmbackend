@@ -27,6 +27,7 @@ import com.crm.travelcrm.lead.exception.LeadQuotaExceededException;
 import com.crm.travelcrm.lead.exception.NoEligibleAssigneeException;
 import com.crm.travelcrm.lead.mapper.LeadMapper;
 import com.crm.travelcrm.lead.repository.LeadRepository;
+import com.crm.travelcrm.lead.util.LeadCodeGenerator;
 import com.crm.travelcrm.notification.api.NotifyEvent;
 import com.crm.travelcrm.notification.domain.enums.DeliveryChannel;
 import com.crm.travelcrm.permission.service.ScopeResolver;
@@ -61,6 +62,7 @@ public class LeadServiceImpl implements LeadService {
 
     private final LeadRepository leadRepository;
     private final LeadMapper     leadMapper;
+    private final LeadCodeGenerator leadCodeGenerator;
     private final ApplicationEventPublisher eventPublisher;
     private final UserRepository userRepository;
     private final QuotationService quotationService;
@@ -106,6 +108,12 @@ public class LeadServiceImpl implements LeadService {
         // tenantId is set here so it's available immediately in this transaction;
         // TenantEntityListener also guards it on @PrePersist as a safety net.
         lead.setTenantId(tenantId);
+
+        // Human-readable reference (LD-26-0001). Assigned HERE rather than in the mapper because the
+        // generator holds a pessimistic lock on the tenant's counter row that must be held to commit
+        // — this method's @Transactional is that unit. Every creation path (manual, inbound ingest,
+        // sub-agent portal) funnels through here, so none of them can mint a code-less lead.
+        lead.setLeadCode(leadCodeGenerator.generate(tenantId));
 
         // Intelligent assignment (Strategy Pattern). Runs inside this transaction so the round-robin
         // cursor's pessimistic lock is held to commit — which is why assignment happens HERE and is

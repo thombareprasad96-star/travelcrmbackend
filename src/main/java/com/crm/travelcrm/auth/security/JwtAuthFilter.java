@@ -54,26 +54,29 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             return;
         }
 
-        String email    = jwtUtil.extractEmail(token);
+        // The subject is realm-dependent: an EMAIL for a SuperAdmin token, a USERNAME for a tenant
+        // staff token. The role/tenantId claims below decide which, so it is never resolved against
+        // the wrong realm.
+        String subject  = jwtUtil.extractSubject(token);
         String role     = jwtUtil.extractRole(token);
         Long   tenantId = jwtUtil.extractTenantId(token);
 
         try {
-            if (email != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+            if (subject != null && SecurityContextHolder.getContext().getAuthentication() == null) {
                 try {
                     UserDetails userDetails;
                     if (JwtClaims.ROLE_SUPER_ADMIN.equals(role)) {
-                        userDetails = superAdminDetailsService.loadUserByUsername(email);
+                        userDetails = superAdminDetailsService.loadUserByUsername(subject);
                     } else if (tenantId != null) {
-                        userDetails = userDetailsService.loadUserByEmailAndTenantId(email, tenantId);
+                        userDetails = userDetailsService.loadUserByUsernameAndTenantId(subject, tenantId);
                     } else {
-                        userDetails = userDetailsService.loadUserByUsername(email);
+                        userDetails = userDetailsService.loadUserByUsername(subject);
                     }
 
                     // Shared with the header-less SSE entry point (TokenAuthenticatorImpl) so both
                     // reject the same principals — see JwtPrincipalValidator.
                     if (!principalValidator.isAcceptable(userDetails, token)) {
-                        logger.warn("JWT principal is disabled/locked/stale: " + email);
+                        logger.warn("JWT principal is disabled/locked/stale: " + subject);
                         SecurityContextHolder.clearContext();
                     } else {
                         UsernamePasswordAuthenticationToken auth =

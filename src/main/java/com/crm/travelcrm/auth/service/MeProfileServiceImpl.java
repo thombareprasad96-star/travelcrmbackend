@@ -43,6 +43,7 @@ public class MeProfileServiceImpl implements MeProfileService {
     private MeProfileResponse toResponse(User u) {
         return MeProfileResponse.builder()
                 .name(u.getName())
+                .username(u.getUsername())
                 .email(u.getEmail())
                 .phoneNumber(u.getPhoneNumber())
                 .role(u.getRole() != null ? u.getRole().name() : null)

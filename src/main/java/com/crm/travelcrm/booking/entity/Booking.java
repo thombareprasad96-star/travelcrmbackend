@@ -125,6 +125,21 @@ public class Booking extends BaseTenantEntity implements Ownable {
     @Column(name = "vendor_cost", nullable = false, precision = 12, scale = 2)
     private BigDecimal vendorCost = BigDecimal.ZERO;
 
+    // Whether this booking is an overseas tour programme package. Drives TCS when the tenant's
+    // policy is OVERSEAS_ONLY — the setting that matches the statute for an agency selling both
+    // domestic and outbound, since TCS under s.206C(1G)/394 does not reach domestic packages.
+    //
+    // Per CBDT Circular 10/2023 a package qualifies only if it bundles at least TWO of
+    // {international ticket, hotel accommodation, other similar expenditure} — a bare international
+    // air ticket is not one. That judgement is the agent's, so this is an explicit flag rather than
+    // something inferred from the destination.
+    //
+    // Defaults false: a booking nobody classified is treated as domestic, which under-collects
+    // rather than over-collects, and over-collecting someone else's tax is the worse error.
+    @Builder.Default
+    @Column(name = "overseas_tour_package", nullable = false)
+    private boolean overseasTourPackage = false;
+
     @Builder.Default
     @Column(name = "gst", nullable = false, precision = 12, scale = 2)
     private BigDecimal gst = BigDecimal.ZERO;
@@ -149,6 +164,23 @@ public class Booking extends BaseTenantEntity implements Ownable {
     @Column(name = "refunded_amount", nullable = false, precision = 12, scale = 2)
     private BigDecimal refundedAmount = BigDecimal.ZERO;
 
+    // Sum of the ACTIVE, INTERNAL-typed rows of this booking's expense ledger — the agency's own
+    // cost of doing the booking (staff commission, marketing, gateway fees, courier), over and above
+    // what it paid suppliers. VENDOR-typed expense rows are deliberately excluded: they would
+    // double-count against the vendorCost typed above. See ExpenseCostType.
+    //
+    // Denormalised on purpose. It is the third term of netProfit, and storing it means the stored
+    // margin is explainable without re-reading the ledger, every report reads one row instead of
+    // joining, and a historic profit figure can still be reconciled after rows are edited. The
+    // ledger remains the source of truth; BookingProfitService is the only writer and recomputes
+    // both fields together, so the two can never disagree.
+    @Builder.Default
+    @Column(name = "total_internal_costs", nullable = false, precision = 12, scale = 2)
+    private BigDecimal totalInternalCosts = BigDecimal.ZERO;
+
+    // customerAmount − vendorCost − totalInternalCosts. Stored, never computed at read time, so
+    // dashboards and reports all read one agreed figure instead of each re-deriving it.
+    // BookingProfitService owns every write.
     @Builder.Default
     @Column(name = "net_profit", nullable = false, precision = 12, scale = 2)
     private BigDecimal netProfit = BigDecimal.ZERO;

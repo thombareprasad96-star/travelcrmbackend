@@ -12,6 +12,8 @@ public class LoginResponseDTO {
     private String tokenType;
     private UUID   id;
     private String email;
+    /** Tenant staff login identifier. Null on the SuperAdmin path — that realm is still email-keyed. */
+    private String username;
     private String role;
     private boolean mfaRequired;
     private boolean mfaSetupRequired;

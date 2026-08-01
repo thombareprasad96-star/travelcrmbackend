@@ -24,6 +24,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -202,7 +203,9 @@ public class LeadAssignmentService {
     // ── Commit: inbound (machine) path — no security context, no requester ──
 
     /**
-     * Decide an INBOUND lead's owner: lowest workload, round-robin among ties.
+     * Decide an INBOUND lead's owner: lowest workload, round-robin among ties. If the tenant has no
+     * active non-admin worker left, fall back to an eligible tenant admin rather than rejecting a real
+     * website/provider enquiry.
      *
      * <p><b>Why this cannot reuse {@link #assignForCreate}.</b> That method opens with
      * {@code currentUser()}, which throws when no {@code User} is in the security context — and on the
@@ -218,12 +221,10 @@ public class LeadAssignmentService {
      * <p>Runs in the caller's transaction (the lead-creation one), so the pessimistic lock on the
      * cursor is held to commit exactly as on the human path.
      *
-     * @return the chosen owner, or {@link Optional#empty()} when the tenant has NOBODY eligible.
-     *         Empty is a real, reachable state — a tenant can deactivate every agent — and it is
-     *         returned rather than thrown because the caller must quarantine the lead (HTTP 200 +
-     *         notify) instead of failing the webhook. A 4xx/5xx to JustDial means retries and
-     *         eventually a disabled integration; the lead would be lost to protect an invariant that
-     *         quarantine already protects.
+     * @return the chosen owner, or {@link Optional#empty()} when the tenant has neither a normal
+     *         assignment candidate nor an eligible tenant admin fallback. Empty remains reachable when
+     *         every tenant user who can own a lead is inactive/locked/permissionless; the caller then
+     *         records the failed delivery while still returning HTTP 200 to the provider.
      */
     @Transactional
     public Optional<AssignmentOutcome> assignForInbound(Long tenantId) {
@@ -237,8 +238,18 @@ public class LeadAssignmentService {
         List<User> pool = assignableUserResolver.resolve(tenantId, ELIGIBILITY_PERMISSION);
         List<Long> candidateIds = recommendationCandidates(pool);
         if (candidateIds.isEmpty()) {
-            log.warn("Inbound lead assignment found NO eligible user for tenant {} — caller must "
-                    + "quarantine the lead rather than drop it.", tenantId);
+            Optional<User> adminFallback = tenantAdminFallback(pool);
+            if (adminFallback.isPresent()) {
+                User admin = adminFallback.get();
+                log.warn("Inbound lead assignment found no active non-admin candidate for tenant {}; "
+                        + "falling back to tenant admin {}.", tenantId, admin.getId());
+                return Optional.of(new AssignmentOutcome(admin, admin.getId(), admin.getName(),
+                        AssignmentStrategyType.LOAD_BASED, false));
+            }
+
+            log.warn("Inbound lead assignment found NO eligible user or tenant-admin fallback for "
+                    + "tenant {} — caller must record the failed delivery rather than drop it.",
+                    tenantId);
             return Optional.empty();
         }
 
@@ -301,7 +312,8 @@ public class LeadAssignmentService {
     /**
      * The auto-recommendation candidates: the eligible pool minus Tenant Admins. Admins stay in the
      * dropdown (so an admin can MANUALLY assign a lead to itself) but are never auto-recommended,
-     * since an admin supervises rather than works the pipeline. Sorted ascending for round-robin.
+     * since an admin supervises rather than works the pipeline. Inbound assignment may still use an
+     * admin as a last-resort fallback when this list is empty. Sorted ascending for round-robin.
      */
     private List<Long> recommendationCandidates(List<User> pool) {
         return pool.stream()
@@ -309,6 +321,16 @@ public class LeadAssignmentService {
                 .map(User::getId)
                 .sorted()
                 .toList();
+    }
+
+    /**
+     * Last-resort owner for inbound leads. Because {@link AssignableUserResolver} already filtered
+     * for active, unlocked, non-deleted users with LEAD_READ, this does not assign to a disabled admin.
+     */
+    private Optional<User> tenantAdminFallback(List<User> pool) {
+        return pool.stream()
+                .filter(u -> u.getRole() == Role.TENANT_ADMIN)
+                .min(Comparator.comparing(User::getId));
     }
 
     /**

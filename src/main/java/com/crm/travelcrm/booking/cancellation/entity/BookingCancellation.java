@@ -166,6 +166,15 @@ public class BookingCancellation extends BaseTenantEntity {
     @Column(name = "vendor_recoverable", precision = 12, scale = 2)
     private BigDecimal vendorRecoverable;
 
+    /**
+     * The agency's own costs on the booking at the moment it was cancelled — frozen here like every
+     * other figure on this record, so the cancellation P&L stays reproducible even if the expense
+     * ledger is edited afterwards.
+     */
+    @Column(name = "sunk_internal_costs", precision = 12, scale = 2)
+    private BigDecimal sunkInternalCosts;
+
+    /** {@code finalChargeBase − sunkVendorCost − sunkInternalCosts}, frozen at cancel time. */
     @Column(name = "revised_net_profit", precision = 12, scale = 2)
     private BigDecimal revisedNetProfit;
 

@@ -16,24 +16,33 @@ import java.util.UUID;
 
 @Repository
 public interface UserRepository extends JpaRepository<User, Long> {
-    // ── Email finders ─────────────────────────────────────────────────────────
-    // Email is unique PLATFORM-WIDE among live rows (uq_users_email_active, db/indexes.sql), so an
-    // address needs no tenant to resolve — and must NOT be checked per-tenant: a tenant-scoped
-    // uniqueness check passes for a tenant that has not seen the address and then dies on the
-    // constraint. The per-tenant email finders were deliberately removed for that reason; if you
-    // are reaching for one, you want the global check below.
+    // ── Username finders — the login identity ─────────────────────────────────
+    // Username is unique PLATFORM-WIDE among live rows (uq_users_username_active), so it needs no
+    // tenant to resolve — and must NOT be checked per-tenant: a tenant-scoped uniqueness check
+    // passes for a tenant that has not seen the name and then dies on the constraint.
+    //
+    // There are deliberately NO email finders here any more. Email lost its unique index when an
+    // office became free to share one address, so findByEmail* could no longer answer "which
+    // account?" — it would resolve an arbitrary row or throw NonUniqueResultException from inside
+    // an unauthenticated code path. If you are reaching for one, you want a username finder.
     //
     // Soft-delete-aware by design — a deleted row must never resolve to a principal, and the
     // constraint only covers live rows, so a non-soft-delete-aware finder could match a deleted
-    // squatter. Every email lookup here filters deletedAt.
-    Optional<User> findByEmailAndDeletedAtIsNull(String email);
-    Optional<User> findByEmailAndTenantIdAndDeletedAtIsNull(String email, Long tenantId);
+    // squatter. Every username lookup here filters deletedAt, which is also what lets the partial
+    // unique index serve all of them.
+    Optional<User> findByUsernameAndDeletedAtIsNull(String username);
+    Optional<User> findByUsernameAndTenantIdAndDeletedAtIsNull(String username, Long tenantId);
     /** Returns a list purely so an ambiguous match fails closed instead of throwing a 500 — see
      *  UserDetailsServiceImpl. Under an intact constraint this can never exceed one row. */
-    List<User> findAllByEmailAndDeletedAtIsNull(String email);
+    List<User> findAllByUsernameAndDeletedAtIsNull(String username);
     Optional<User> findByPublicIdAndDeletedAtIsNull(UUID publicId);
-    /** The uniqueness check for every user-creating path. Global, matching the DB constraint. */
-    boolean existsByEmail(String email);
+    /**
+     * The uniqueness check for every user-creating path. Global, and scoped to live rows so it
+     * matches the partial index EXACTLY — the old {@code existsByEmail} ignored {@code deleted_at}
+     * while the constraint did not, so a soft-deleted account's identifier read as permanently
+     * taken even though the database would have accepted it.
+     */
+    boolean existsByUsernameAndDeletedAtIsNull(String username);
     List<User> findByTenantIdAndRoleInAndIsActiveTrue(Long tenantId, List<String> roles);
     List<User> findAllByTenantId(Long tenantId);
     List<User> findAllByTenantIdAndDeletedAtIsNull(Long tenantId);
@@ -93,11 +102,14 @@ public interface UserRepository extends JpaRepository<User, Long> {
             """)
     List<Object[]> countActiveUsersByTenant();
 
-    // Free-text search over name / email / phone within the caller's tenant.
+    // Free-text search over name / username / email / phone within the caller's tenant. Username is
+    // included because it is now the identifier an admin actually knows a colleague by — a shared
+    // office email no longer narrows a search to one person.
     @Query("""
             SELECT u FROM User u
             WHERE u.tenantId = :tenantId AND u.deletedAt IS NULL
               AND (LOWER(u.name) LIKE LOWER(CONCAT('%', :q, '%'))
+                OR LOWER(COALESCE(u.username, '')) LIKE LOWER(CONCAT('%', :q, '%'))
                 OR LOWER(u.email) LIKE LOWER(CONCAT('%', :q, '%'))
                 OR LOWER(COALESCE(u.phoneNumber, '')) LIKE LOWER(CONCAT('%', :q, '%')))
             ORDER BY u.name ASC
@@ -118,14 +130,15 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
     /**
      * Cross-tenant user search for the platform console (SuperAdmin). Tenant users only
-     * ({@code tenantId} not null); optional tenant filter; free-text over name/email. Each bind
-     * param is null/blank-guarded so an empty search / null tenant returns everything.
+     * ({@code tenantId} not null); optional tenant filter; free-text over name/username/email. Each
+     * bind param is null/blank-guarded so an empty search / null tenant returns everything.
      */
     @Query("""
             SELECT u FROM User u
             WHERE u.deletedAt IS NULL AND u.tenantId IS NOT NULL
               AND (:tenantId IS NULL OR u.tenantId = :tenantId)
               AND (:q = '' OR LOWER(u.name) LIKE LOWER(CONCAT('%', :q, '%'))
+                           OR LOWER(COALESCE(u.username, '')) LIKE LOWER(CONCAT('%', :q, '%'))
                            OR LOWER(u.email) LIKE LOWER(CONCAT('%', :q, '%')))
             """)
     Page<User> platformSearch(@Param("q") String q, @Param("tenantId") Long tenantId, Pageable pageable);

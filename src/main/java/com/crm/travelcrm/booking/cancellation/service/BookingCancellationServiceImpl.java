@@ -10,6 +10,7 @@ import com.crm.travelcrm.booking.exception.BookingNotFoundException;
 import com.crm.travelcrm.booking.repository.BookingRepository;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
+import com.crm.travelcrm.permission.service.SubAgentScope;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,6 +27,7 @@ public class BookingCancellationServiceImpl implements BookingCancellationServic
     private final BookingCancellationRepository cancellationRepository;
     private final CancellationPolicyResolver policyResolver;
     private final CancellationCalculator calculator;
+    private final SubAgentScope subAgentScope;
 
     @Override
     @Transactional(readOnly = true)   // readOnly: a stray write fails fast instead of committing
@@ -37,8 +39,7 @@ public class BookingCancellationServiceImpl implements BookingCancellationServic
     @Transactional(readOnly = true)
     public CancellationQuote preview(UUID bookingPublicId, BigDecimal overrideChargeBase,
                                      BigDecimal vendorRecoverable) {
-        Booking booking = bookingRepository.findByPublicIdAndDeletedAtIsNull(bookingPublicId)
-                .orElseThrow(() -> new BookingNotFoundException(bookingPublicId));
+        Booking booking = findVisibleBooking(bookingPublicId);
         CancellationPolicy policy = resolveGoverningPolicy(booking);
         // With no override the charge is policy-computed and vendor cost is assumed fully sunk
         // (worst-case P&L); a supplied override/recovery lets the UI preview the exact settled figures.
@@ -48,8 +49,7 @@ public class BookingCancellationServiceImpl implements BookingCancellationServic
     @Override
     @Transactional(readOnly = true)
     public CancellationSummaryDTO getSummary(UUID bookingPublicId) {
-        Booking booking = bookingRepository.findByPublicIdAndDeletedAtIsNull(bookingPublicId)
-                .orElseThrow(() -> new BookingNotFoundException(bookingPublicId));
+        Booking booking = findVisibleBooking(bookingPublicId);
         BookingCancellation record = cancellationRepository
                 .findByBookingIdAndDeletedAtIsNull(booking.getId())
                 .orElseThrow(() -> new ResourceNotFoundException(
@@ -79,6 +79,18 @@ public class BookingCancellationServiceImpl implements BookingCancellationServic
 
     private static BigDecimal nz(BigDecimal v) {
         return v != null ? v : BigDecimal.ZERO;
+    }
+
+    /**
+     * Load a booking for a read on its cancellation, applying the same row-level scope as every other
+     * by-id booking path (BookingServiceImpl.findActiveByPublicId): a sub-agent that does not own the
+     * booking gets a 404, never another sub-agent's cancellation quote or settlement figures.
+     */
+    private Booking findVisibleBooking(UUID bookingPublicId) {
+        Booking booking = bookingRepository.findByPublicIdAndDeletedAtIsNull(bookingPublicId)
+                .orElseThrow(() -> new BookingNotFoundException(bookingPublicId));
+        subAgentScope.assertVisible(booking, bookingPublicId);
+        return booking;
     }
 
     /**

@@ -1,7 +1,9 @@
 package com.crm.travelcrm.report.dashboard.service;
 
 import com.crm.travelcrm.auth.repository.UserRepository;
+import com.crm.travelcrm.booking.cancellation.repository.BookingCancellationRepository;
 import com.crm.travelcrm.booking.entity.Booking;
+import com.crm.travelcrm.booking.enums.BookingStatus;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.report.activity.service.ActivityReportService;
 import com.crm.travelcrm.report.booking.repository.BookingReportRepository;
@@ -39,6 +41,7 @@ public class ReportService {
     private final UserRepository userRepository;
     private final GeoReportRepository geoReportRepository;
     private final BookingReportRepository bookingReportRepository;
+    private final BookingCancellationRepository cancellationRepository;
 
     private final ActivityReportService activityReportService;
     private final GeographicReportService geographicReportService;
@@ -61,9 +64,19 @@ public class ReportService {
         List<Booking> bookings = bookingReportRepository.findRevenueList(
                 tenantId, "Booking Date", dt[0].toLocalDate(), dt[1].toLocalDate(), dt[0], dt[1],
                 null, null, null, null, null);
+        // Agency revenue = delivered package sales + the cancellation charge actually retained.
+        // Cancelled/refunded bookings are EXCLUDED from the first term — nothing was delivered, so
+        // their full customerAmount was never earned (this used to sum every status) — and enter
+        // only through the retained charge, which is the pre-tax base so no government tax is
+        // booked as agency revenue.
         BigDecimal revenue = bookings.stream()
+                .filter(b -> b.getStatus() != BookingStatus.CANCELLED
+                        && b.getStatus() != BookingStatus.REFUNDED)
                 .map(Booking::getCustomerAmount).filter(java.util.Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal retained = cancellationRepository.sumRetainedChargeBase(
+                tenantId, dt[0].toLocalDate(), dt[1].toLocalDate());
+        revenue = revenue.add(retained != null ? retained : BigDecimal.ZERO);
 
         return ReportSummaryDTO.builder()
                 .totalReports(REPORT_TYPE_COUNT)

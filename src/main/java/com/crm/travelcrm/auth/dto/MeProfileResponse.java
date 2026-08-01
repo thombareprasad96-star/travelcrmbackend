@@ -10,6 +10,8 @@ public class MeProfileResponse {
 
     private String name;
     /** Login identifier — read-only. */
+    private String username;
+    /** Contact address. No longer a login credential, and no longer unique across the platform. */
     private String email;
     private String phoneNumber;
     /** Role name — read-only. */

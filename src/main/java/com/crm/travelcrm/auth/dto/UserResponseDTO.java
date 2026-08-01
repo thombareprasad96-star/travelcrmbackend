@@ -12,6 +12,8 @@ import java.util.UUID;
 public class UserResponseDTO {
     UUID   publicId;
     String name;
+    /** Login identifier. Now the only field that identifies this user uniquely — email may repeat. */
+    String username;
     String email;
     Role   role;
     String phoneNumber;

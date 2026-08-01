@@ -28,7 +28,24 @@ public class BookingStatsResponseDTO {
     // Service populates these only when caller has booking:profit:read permission
     // When caller is AGENT these will be null — Jackson omits null fields
     private BigDecimal totalVendorCost;
-    private BigDecimal netProfit;
+    private BigDecimal netProfit;                        // delivered travel only
+
+    /**
+     * Cancellation charge retained across all cancellations, NET of GST/TCS. Its own line — revenue
+     * with no service delivered behind it, so merging it into totalRevenue would corrupt margin and
+     * realisation metrics.
+     */
+    private BigDecimal retainedCancellationCharges;
+
+    /** totalRevenue + retainedCancellationCharges. */
+    private BigDecimal agencyRevenue;
+
+    /** Profit on cancelled bookings — retained charge less unrecovered costs. Often negative. */
+    private BigDecimal cancelledProfit;
+
+    /** netProfit + cancelledProfit — total operating gross profit. */
+    private BigDecimal totalProfit;
+
     private BigDecimal totalRefundAmount;
 
     // ── Tax summary (ADMIN + MANAGER only) ────────────────────────────────────

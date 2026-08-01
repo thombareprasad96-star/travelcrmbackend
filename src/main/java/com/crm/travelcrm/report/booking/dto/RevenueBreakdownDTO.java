@@ -7,7 +7,8 @@ import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
 
-/** Revenue breakdown panel. {@code refunded} has no dedicated column and is returned 0. */
+/** Revenue breakdown panel. {@code refunded} is the sum of {@code Booking.refundedAmount} — the
+ *  money actually disbursed back to customers, not the value of refunded-status bookings. */
 @Getter
 @Builder
 @NoArgsConstructor

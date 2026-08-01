@@ -93,6 +93,14 @@ public interface LeadRepository extends JpaRepository<Lead, Long> {
     // ── Existence check (cross-aggregate FK validation, e.g. Booking.leadId) ──
     boolean existsByIdAndTenantIdAndDeletedAtIsNull(Long id, Long tenantId);
 
+    /**
+     * Every lead this tenant has ever had, INCLUDING soft-deleted ones. Deliberately not
+     * deletedAt-aware: the only caller is {@code LeadCodeGenerator}, seeding a brand-new counter
+     * row on a tenant whose rows were code-backfilled. A trashed lead still holds a lead_code that
+     * was quoted to a customer, so it must be counted or the counter reissues it.
+     */
+    long countByTenantId(Long tenantId);
+
     // Tenant-scoped fetch by internal id — used by the cancel-booking flow to revert
     // (REOPENED) or hard-delete the associated lead. Tenant-safe (never bare findById).
     @EntityGraph(attributePaths = "assignedUser")

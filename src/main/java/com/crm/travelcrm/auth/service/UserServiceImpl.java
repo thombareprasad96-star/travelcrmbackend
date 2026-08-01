@@ -9,6 +9,7 @@ import com.crm.travelcrm.auth.dto.UserStatsDTO;
 import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.auth.enums.Role;
 import com.crm.travelcrm.auth.repository.UserRepository;
+import com.crm.travelcrm.auth.util.UsernamePolicy;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
@@ -78,13 +79,17 @@ public class UserServiceImpl implements UserService {
         // Normalize before the uniqueness check AND before persisting so the
         // check and the stored value can never diverge by case/whitespace.
         String email = request.getEmail().trim().toLowerCase();
+        String username = UsernamePolicy.normalize(request.getUsername());
 
-        // Email is unique platform-wide (uq_users_email_active) — an address identifies exactly one
-        // account, so the check spans every tenant. Deliberately does not say WHICH organization
-        // holds it: that would let any tenant admin probe for the existence of a user elsewhere.
-        if (userRepository.existsByEmail(email)) {
+        // Username is unique platform-wide (uq_users_username_active) — it identifies exactly one
+        // live account, so the check spans every tenant. Deliberately does not say WHICH
+        // organization holds it: that would let any tenant admin probe for a user elsewhere.
+        //
+        // Email is NOT checked. It is a contact field now, and several colleagues sharing one
+        // office address is the case this whole change exists to allow.
+        if (userRepository.existsByUsernameAndDeletedAtIsNull(username)) {
             throw new BusinessException(
-                    "A user with email " + email + " already exists.",
+                    "The username " + username + " is already taken.",
                     HttpStatus.CONFLICT);
         }
 
@@ -92,6 +97,7 @@ public class UserServiceImpl implements UserService {
 
         User user = User.builder()
                 .name(request.getName().trim())
+                .username(username)
                 .email(email)
                 .password(passwordEncoder.encode(request.getPassword()))
                 .role(request.getRole())
@@ -102,8 +108,8 @@ public class UserServiceImpl implements UserService {
                 .build();
 
         User saved = userRepository.save(user);
-        log.info("User created: email={} role={} tenantId={} managerId={}",
-                saved.getEmail(), saved.getRole(), tenantId, managerId);
+        log.info("User created: username={} role={} tenantId={} managerId={}",
+                saved.getUsername(), saved.getRole(), tenantId, managerId);
 
         return toResponse(saved);
     }
@@ -223,14 +229,15 @@ public class UserServiceImpl implements UserService {
 
     @Override
     @Transactional(readOnly = true)
-    public boolean isEmailAvailable(String email) {
-        if (email == null || email.isBlank()) {
+    public boolean isUsernameAvailable(String username) {
+        String normalized = UsernamePolicy.normalize(username);
+        if (normalized == null) {
             return false;
         }
-        // Platform-wide, matching the create-user check and the DB constraint. An address taken in
+        // Platform-wide, matching the create-user check and the DB constraint. A username taken in
         // another tenant reads as unavailable here — anything narrower would promise the caller a
         // create that the uniqueness constraint then rejects.
-        return !userRepository.existsByEmail(email.trim().toLowerCase());
+        return !userRepository.existsByUsernameAndDeletedAtIsNull(normalized);
     }
 
     @Override
@@ -316,6 +323,7 @@ public class UserServiceImpl implements UserService {
         return UserResponseDTO.builder()
                 .publicId(user.getPublicId())
                 .name(user.getName())
+                .username(user.getUsername())
                 .email(user.getEmail())
                 .role(user.getRole())
                 .phoneNumber(user.getPhoneNumber())

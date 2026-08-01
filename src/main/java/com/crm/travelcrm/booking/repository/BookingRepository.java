@@ -89,6 +89,19 @@ public interface BookingRepository extends JpaRepository<Booking, Long>,
     @Query("SELECT COALESCE(SUM(b.paidAmount), 0) FROM Booking b WHERE b.deletedAt IS NULL AND b.status NOT IN ('CANCELLED', 'REFUNDED')")
     BigDecimal sumTotalCollected();
 
+    /**
+     * Profit on CANCELLED/REFUNDED bookings — the mirror of {@code sumNetProfit}, which covers only
+     * delivered travel. On a cancelled row {@code netProfit} holds the revised figure (retained
+     * charge less unrecovered vendor and internal costs), written by the cancel flow and kept in
+     * step by {@code BookingProfitService}, so this is a plain sum with no join.
+     *
+     * <p>Reported separately rather than folded into the headline profit: it is a churn and
+     * policy-pricing metric, not a sales one, and it is frequently negative — a 25% cancellation
+     * slab rarely covers a 100%-sunk visa or air cost.
+     */
+    @Query("SELECT COALESCE(SUM(b.netProfit), 0) FROM Booking b WHERE b.deletedAt IS NULL AND b.status IN ('CANCELLED', 'REFUNDED')")
+    BigDecimal sumCancelledProfit();
+
     @Query("SELECT COALESCE(SUM(b.totalPayable - b.paidAmount), 0) FROM Booking b WHERE b.deletedAt IS NULL AND b.status NOT IN ('CANCELLED', 'REFUNDED')")
     BigDecimal sumTotalPending();
 

@@ -40,22 +40,24 @@ public class TokenAuthenticatorImpl implements TokenAuthenticator {
             return false;
         }
 
-        String email    = jwtUtil.extractEmail(token);
+        // Realm-dependent subject — email for a SuperAdmin token, username for tenant staff. Kept
+        // byte-identical to JwtAuthFilter's routing on purpose (see the class javadoc).
+        String subject  = jwtUtil.extractSubject(token);
         String role     = jwtUtil.extractRole(token);
         Long   tenantId = jwtUtil.extractTenantId(token);
 
         try {
             UserDetails userDetails;
             if (JwtClaims.ROLE_SUPER_ADMIN.equals(role)) {
-                userDetails = superAdminDetailsService.loadUserByUsername(email);
+                userDetails = superAdminDetailsService.loadUserByUsername(subject);
             } else if (tenantId != null) {
-                userDetails = userDetailsService.loadUserByEmailAndTenantId(email, tenantId);
+                userDetails = userDetailsService.loadUserByUsernameAndTenantId(subject, tenantId);
             } else {
-                userDetails = userDetailsService.loadUserByUsername(email);
+                userDetails = userDetailsService.loadUserByUsername(subject);
             }
 
             if (!principalValidator.isAcceptable(userDetails, token)) {
-                log.warn("Header-less auth rejected — principal disabled/locked/stale: {}", email);
+                log.warn("Header-less auth rejected — principal disabled/locked/stale: {}", subject);
                 return false;
             }
 
@@ -76,7 +78,7 @@ public class TokenAuthenticatorImpl implements TokenAuthenticator {
             return true;
 
         } catch (Exception ex) {
-            log.warn("Header-less auth failed for email={}: {}", email, ex.getMessage());
+            log.warn("Header-less auth failed for subject={}: {}", subject, ex.getMessage());
             return false;
         }
     }

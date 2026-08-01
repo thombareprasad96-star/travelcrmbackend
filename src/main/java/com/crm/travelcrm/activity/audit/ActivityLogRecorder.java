@@ -41,8 +41,8 @@ public class ActivityLogRecorder {
      * and {@link ActivityLog} requires a tenant).
      */
     public void safeRecord(ActivityAction action, String description,
-                           Long userId, String userName, String userEmail, String userType,
-                           Long tenantId, String ipAddress, String userAgent) {
+                           Long userId, String userName, String username, String userEmail,
+                           String userType, Long tenantId, String ipAddress, String userAgent) {
         if (tenantId == null || action == null) {
             return;
         }
@@ -51,6 +51,7 @@ public class ActivityLogRecorder {
                     .tenantId(tenantId)
                     .actingUserId(userId)
                     .userName(userName)
+                    .actingUsername(username)
                     .userEmail(userEmail)
                     .userType(userType)
                     .action(action)

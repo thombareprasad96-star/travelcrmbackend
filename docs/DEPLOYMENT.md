@@ -250,18 +250,37 @@ then deploys the exact image tag for the commit SHA. The VPS keeps persistent da
 
 ### Flyway baseline and migration validation
 
-Current state: the reviewed baseline candidate is staged at
-`src/main/resources/db/proposed/V1_PROPOSED__baseline_schema.sql`. It is deliberately outside
-`src/main/resources/db/migration/`, so Flyway will not run it until it is manually reviewed and
-renamed to `V1__baseline_schema.sql`.
+Current state: the baseline has been **promoted** into `src/main/resources/db/migration/`:
+
+| Migration | Contents |
+|---|---|
+| `V1__baseline_schema.sql` | The reviewed baseline, copied verbatim from `db/proposed/V1_PROPOSED__baseline_schema.sql` (kept there as the review record). Describes the schema as it stands on the pilot database today. |
+| `V2__lead_code.sql` | Three parts. **1** — `leads.lead_code` + `lead_sequences` + backfill + counter seed + indexes. **2** — username login: `users.username` (+ backfill, NOT NULL, uniqueness swapped off `email`) and `activity_logs.username`. **3** — `booking_expenses`, the per-booking expense ledger (table + its three indexes). |
+
+Promoting the files does **not** turn Flyway on: `spring.flyway.enabled=${FLYWAY_ENABLED:false}`,
+so nothing runs until the server environment sets it.
+
+> ⚠️ **These files are not inert.** `JPA_DDL_AUTO` now defaults to `validate` on every environment,
+> local included — Hibernate creates nothing, so a migration that has not been applied is a boot
+> failure (`Schema-validation: missing table [...]`), not a silently-tolerated gap. While Flyway
+> stays off, apply each file by hand *before* restarting the app:
+>
+> ```bash
+> psql -U <user> -d <db> -f src/main/resources/db/migration/V2__lead_code.sql
+> ```
+>
+> Every statement in V1/V2 is idempotent, so re-running a file that is already applied is a no-op —
+> which is what makes it safe to append a new part to V2 while V2 is still unstamped.
+
+`V1` predates `leads.lead_code` on purpose, so both cutover paths converge on the same schema: a
+fresh database runs V1 then V2, and the pilot — whose schema already matches V1 — is stamped at V1
+and has V2 applied on top. Do not fold V2 back into V1.
 
 Fresh database cutover:
 
-1. Review `db/proposed/V1_PROPOSED__baseline_schema.sql` against the entity model and `db/indexes.sql`.
-2. Rename/copy the reviewed file to `src/main/resources/db/migration/V1__baseline_schema.sql`.
-3. Deploy with `FLYWAY_ENABLED=true`, `FLYWAY_BASELINE_ON_MIGRATE=false`,
+1. Deploy with `FLYWAY_ENABLED=true`, `FLYWAY_BASELINE_ON_MIGRATE=false`,
    `JPA_DDL_AUTO=validate`, and `SQL_INIT_MODE=never`.
-4. Let Flyway create `flyway_schema_history` and apply V1 on the empty database.
+2. Let Flyway create `flyway_schema_history` and apply V1 and V2 on the empty database.
 
 Existing pilot database adoption:
 

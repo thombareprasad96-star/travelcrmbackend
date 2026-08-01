@@ -52,6 +52,10 @@ public class BookingResponseDTO {
     private LocalDate travelDate;
 
     // ── Financials (full set — ADMIN and MANAGER only) ────────────────────────
+
+    /** Overseas tour programme package — drives TCS when the tenant's policy is OVERSEAS_ONLY. */
+    private boolean overseasTourPackage;
+
     private BigDecimal customerAmount;
     private BigDecimal vendorCost;      // sensitive — not in BookingSummaryDTO
     private BigDecimal gst;
@@ -59,7 +63,20 @@ public class BookingResponseDTO {
     private BigDecimal totalPayable;
     private BigDecimal paidAmount;
     private BigDecimal pendingAmount;   // computed in service, not stored
+
+    // The agency's own costs on this booking (staff commission, marketing, gateway fees, courier) —
+    // the sum of the ACTIVE, INTERNAL-typed expense rows. Supplier cost is NOT in here; that is
+    // vendorCost. Exposed so the UI can show the full margin breakdown
+    // (customerAmount − vendorCost − totalInternalCosts) instead of inferring the gap.
+    private BigDecimal totalInternalCosts;  // sensitive — not in BookingSummaryDTO
+
     private BigDecimal netProfit;       // sensitive — not in BookingSummaryDTO
+
+    // Gross amount actually refunded to the customer (money OUT), accrued by the refund flow.
+    // Exposed so the UI never has to guess a refund figure: before this field existed, three separate
+    // screens each invented their own (Σ totalPayable of REFUNDED, Σ paidAmount of "Refunded",
+    // and a hardcoded 0). Distinct from paidAmount, which stays the historical gross received.
+    private BigDecimal refundedAmount;
 
     // Status
     private BookingStatus status;

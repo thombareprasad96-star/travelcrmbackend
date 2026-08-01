@@ -23,6 +23,8 @@ public class SubAgentResponse {
     private UUID userPublicId;
 
     private String name;
+    /** The partner's login identifier. */
+    private String username;
     private String email;
     private String phoneNumber;
 

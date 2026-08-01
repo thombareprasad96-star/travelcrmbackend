@@ -45,7 +45,10 @@ public class UpgradeRequestController {
             @Valid @RequestBody CreateUpgradeRequestRequest request,
             @AuthenticationPrincipal User currentUser) {
         User u = require(currentUser);
-        UpgradeRequestResponse res = upgradeRequestService.create(u.getTenantId(), u.getUsername(), request);
+        // getEmail(), not getUsername(): this lands in UpgradeRequest.requestedByEmail, which a
+        // SuperAdmin outside the tenant reads to contact the requester. getUsername() now returns
+        // the login identifier, which is not a mailbox.
+        UpgradeRequestResponse res = upgradeRequestService.create(u.getTenantId(), u.getEmail(), request);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.success("Upgrade request submitted", res, HttpStatus.CREATED.value()));
     }

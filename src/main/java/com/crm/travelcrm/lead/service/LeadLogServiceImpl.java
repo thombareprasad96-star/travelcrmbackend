@@ -125,6 +125,9 @@ public class LeadLogServiceImpl implements LeadLogService {
                     && leadLogs.stream().noneMatch(l -> userFilter.equals(l.getAddedByUserId()))) continue;
             if (q != null) {
                 boolean match = (lead.getCustomerName() != null && lead.getCustomerName().toLowerCase().contains(q))
+                        // The reference a human actually has in front of them ("LD-26-0001") — the
+                        // whole reason the code exists is so it can be searched and quoted.
+                        || (lead.getLeadCode() != null && lead.getLeadCode().toLowerCase().contains(q))
                         || leadLogs.stream().anyMatch(l -> l.getComment() != null && l.getComment().toLowerCase().contains(q));
                 if (!match) continue;
             }
@@ -213,6 +216,7 @@ public class LeadLogServiceImpl implements LeadLogService {
                 .build();
         return LeadLogCardDto.builder()
                 .leadId(lead.getPublicId())
+                .leadCode(lead.getLeadCode())
                 .leadName(lead.getCustomerName())
                 .phone(lead.getPhone())
                 .stage(lead.getLeadStage() != null ? lead.getLeadStage().getDisplayName() : null)

@@ -19,6 +19,14 @@ import java.util.UUID;
 public class LeadResponseDto {
 
     private UUID id;             // ← was Long, now UUID (exposes publicId)
+
+    /**
+     * Human-readable reference ("LD-26-0001") — what the UI shows. Distinct from {@link #id}, which
+     * stays the UUID every route/link is keyed by. Null only on rows that predate the column and
+     * were never backfilled.
+     */
+    private String leadCode;
+
     private String customerName;
     private String phone;
     private String email;

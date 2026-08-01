@@ -10,6 +10,7 @@ import java.util.UUID;
 @Builder
 public class LeadLogCardDto {
     private UUID leadId;        // lead publicId — never the internal Long id
+    private String leadCode;    // human-readable reference ("LD-26-0001") — what the grid shows
     private String leadName;
     private String phone;
     private String stage;       // lead's current stage (display name)

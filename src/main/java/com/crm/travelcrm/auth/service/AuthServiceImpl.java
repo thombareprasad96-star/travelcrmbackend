@@ -11,6 +11,7 @@ import com.crm.travelcrm.auth.repository.SuperAdminRepository;
 import com.crm.travelcrm.auth.repository.UserRepository;
 import com.crm.travelcrm.auth.security.JwtUtil;
 import com.crm.travelcrm.auth.security.SuperAdminPasswordPolicy;
+import com.crm.travelcrm.auth.util.UsernamePolicy;
 import com.crm.travelcrm.activity.audit.ActivityLogRecorder;
 import com.crm.travelcrm.activity.entity.ActivityAction;
 import com.crm.travelcrm.platform.audit.PlatformAuditRecorder;
@@ -32,6 +33,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.Locale;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -314,32 +316,34 @@ public class AuthServiceImpl implements AuthService {
     public LoginResponseDTO userLogin(LoginRequestDTO request, String clientIp) {
 
         logger.trace("Entered userLogin()");
-        logger.debug("Login request for email: {}", request.getEmail());
+        logger.debug("Login request for username: {}", request.getLoginIdentifier());
 
-        // Email alone identifies exactly one account platform-wide (uq_users_email_active), so this
-        // needs no tenant discriminator — the tenant is a RESULT of the lookup, not an input to it.
-        // Under the old per-tenant constraint this same line matched two rows and threw
-        // NonUniqueResultException: an unauthenticated 500, fired before the password check.
+        // Username alone identifies exactly one account platform-wide (uq_users_username_active), so
+        // this needs no tenant discriminator — the tenant is a RESULT of the lookup, not an input to
+        // it. Email cannot play this role any more: an office may share one address, so a lookup by
+        // email would match several rows and throw NonUniqueResultException from an unauthenticated
+        // code path, before the password check.
         //
-        // Normalized to match how every writer stores it; the index is case-sensitive and all
-        // stored addresses are lowercase, so an un-normalized lookup would just miss.
+        // Normalized through the same UsernamePolicy every writer uses; the index is case-sensitive
+        // and all stored usernames are lowercase, so an un-normalized lookup would just miss.
         // Soft-deleted users are never found — they cannot authenticate.
-        String email = request.getEmail() == null ? "" : request.getEmail().trim().toLowerCase();
-        User user = userRepository.findByEmailAndDeletedAtIsNull(email)
+        String username = UsernamePolicy.normalize(request.getLoginIdentifier());
+        User user = (username == null ? Optional.<User>empty()
+                                      : userRepository.findByUsernameAndDeletedAtIsNull(username))
                 .orElseThrow(() -> {
-                    logger.warn("User not found: {}", email);
-                    return new BadCredentialsException("Invalid email or password");
+                    logger.warn("User not found: {}", username);
+                    return new BadCredentialsException("Invalid username or password");
                 });
 
         if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
-            logger.warn("Password mismatch for user: {}", request.getEmail());
-            throw new BadCredentialsException("Invalid email or password");
+            logger.warn("Password mismatch for user: {}", username);
+            throw new BadCredentialsException("Invalid username or password");
         }
 
         // Deactivated accounts cannot log in. Checked only after a correct password so
         // we don't reveal account state to someone who doesn't already hold the credentials.
         if (!Boolean.TRUE.equals(user.getIsActive())) {
-            logger.warn("Login blocked for inactive user: {}", request.getEmail());
+            logger.warn("Login blocked for inactive user: {}", username);
             throw new BusinessException(
                     "Your account is inactive. Please contact your administrator.",
                     HttpStatus.FORBIDDEN);
@@ -350,14 +354,14 @@ public class AuthServiceImpl implements AuthService {
         // correct password so tenant state is never revealed to a non-credential-holder.
         Tenant tenant = tenantRepository.findById(user.getTenantId()).orElse(null);
         if (tenant == null || !tenant.isOperational()) {
-            logger.warn("Login blocked — organization not operational for user: {}", request.getEmail());
+            logger.warn("Login blocked — organization not operational for user: {}", username);
             throw new BusinessException(
                     "Your organization's account is not active. Please contact support.",
                     HttpStatus.FORBIDDEN);
         }
 
         String token = jwtUtil.generateToken(user);
-        logger.info("User logged in: {}", request.getEmail());
+        logger.info("User logged in: {}", username);
 
         // Capture the staff member's IP into the tenant's "home IP" set — best-effort, never blocks login.
         staffIpService.recordStaffIp(user.getTenantId(), clientIp);
@@ -366,11 +370,11 @@ public class AuthServiceImpl implements AuthService {
         activityLogRecorder.safeRecord(
                 ActivityAction.Login,
                 "User logged in from IP: " + clientIp,
-                user.getId(), user.getName(), user.getEmail(),
+                user.getId(), user.getName(), user.getUsername(), user.getEmail(),
                 ActivityLogRecorder.labelFor(user.getRole()),
                 user.getTenantId(), clientIp, null);
 
-        return new LoginResponseDTO(
+        LoginResponseDTO response = new LoginResponseDTO(
                 user.getName(),
                 "Login successful",
                 token,
@@ -379,6 +383,10 @@ public class AuthServiceImpl implements AuthService {
                 user.getEmail(),
                 user.getRole().name()
         );
+        // Echo the resolved username so the client can display/cache the identity it must send back
+        // on the next login, rather than the (now non-unique) email it may have typed.
+        response.setUsername(user.getUsername());
+        return response;
     }
 
     // ----------------------------- change password ----------------------------

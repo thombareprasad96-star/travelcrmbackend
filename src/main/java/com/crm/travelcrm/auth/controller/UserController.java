@@ -76,17 +76,20 @@ public class UserController {
         return ResponseEntity.ok(ApiResponse.success("Users retrieved successfully", users));
     }
 
-    // Real-time email-availability check for the Create User form. Answers platform-wide, so a
+    // Real-time username-availability check for the Create User form. Answers platform-wide, so a
     // "taken" here may mean taken by another organization — the caller is told availability only,
-    // never where the address lives. Stays behind USER_READ so it is not a public existence oracle.
-    @GetMapping("/check-email")
+    // never where the name lives. Stays behind USER_READ so it is not a public existence oracle.
+    //
+    // Replaces /check-email, which became meaningless when email stopped being unique: it would
+    // have answered "available" for every address, which is a worse answer than no endpoint.
+    @GetMapping("/check-username")
     @PreAuthorize("hasAuthority('USER_READ')")
-    public ResponseEntity<ApiResponse<Map<String, Boolean>>> checkEmail(
-            @RequestParam String email) {
+    public ResponseEntity<ApiResponse<Map<String, Boolean>>> checkUsername(
+            @RequestParam String username) {
 
-        boolean available = userService.isEmailAvailable(email);
+        boolean available = userService.isUsernameAvailable(username);
         return ResponseEntity.ok(
-                ApiResponse.success("Email availability checked", Map.of("available", available)));
+                ApiResponse.success("Username availability checked", Map.of("available", available)));
     }
 
     // Lightweight active-user list for "assign to" / "copy from" dropdowns.

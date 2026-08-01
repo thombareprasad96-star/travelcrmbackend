@@ -2,6 +2,7 @@ package com.crm.travelcrm.report.dashboard.service;
 
 import com.crm.travelcrm.booking.assignment.BookingAssigneeView;
 import com.crm.travelcrm.booking.assignment.BookingAssigneeViewFactory;
+import com.crm.travelcrm.booking.cancellation.repository.BookingCancellationRepository;
 import com.crm.travelcrm.booking.entity.Booking;
 import com.crm.travelcrm.booking.enums.BookingStatus;
 import com.crm.travelcrm.booking.repository.BookingRepository;
@@ -55,6 +56,7 @@ public class DashboardAnalyticsService {
     private final BookingRepository bookingRepository;
     private final ReminderRepository reminderRepository;
     private final BookingAssigneeViewFactory assigneeViewFactory;
+    private final BookingCancellationRepository cancellationRepository;
 
     @Transactional(readOnly = true)
     public DashboardAnalyticsResponse getAnalytics(String period, String from, String to) {
@@ -88,9 +90,33 @@ public class DashboardAnalyticsService {
 
         BigDecimal revenue = sum(activeBookings, Booking::getCustomerAmount);
         BigDecimal profit = sum(activeBookings, Booking::getNetProfit);
-        BigDecimal refunds = sum(
-                bookings.stream().filter(booking -> booking.getStatus() == BookingStatus.REFUNDED).toList(),
-                Booking::getTotalPayable);
+        // Money actually disbursed back to customers — the authoritative, @Version-guarded counter on
+        // the booking, which the refund flow accrues one payout at a time.
+        //
+        // Deliberately STATUS-INDEPENDENT, matching BookingRepository.sumTotalRefund(). A booking only
+        // reaches REFUNDED once refundedAmount >= refundDue; a partially-refunded booking stays
+        // CANCELLED, so filtering on status would silently report ZERO for real money that has already
+        // left the bank. (It previously summed totalPayable of REFUNDED bookings — wrong on both
+        // counts: it hid every partial refund, and for full ones it reported the gross invoice
+        // customerAmount + gst + tcs instead of the amount paid out.)
+        BigDecimal refunds = sum(bookings, Booking::getRefundedAmount);
+
+        // Req #4 — agencyRevenue = activeBookingCustomerAmount + totalRetainedCancellationCharges.
+        // A cancelled booking contributes ONLY what the agency kept per the cancellation policy, not
+        // its full value: `revenue` above already excludes cancelled/refunded bookings entirely, so
+        // adding the retained charge here counts each rupee exactly once. The retained figure is the
+        // pre-tax charge base — see BookingCancellationRepository.sumRetainedChargeBase for why
+        // GST/TCS are excluded.
+        BigDecimal retainedCancellationCharges =
+                nz(cancellationRepository.sumRetainedChargeBase(tenantId, fromDate, toDate));
+        BigDecimal agencyRevenue = revenue.add(retainedCancellationCharges);
+
+        // Profit on the bookings that fell through. On a cancelled row netProfit IS the revised
+        // figure (retained charge less unrecovered costs) — the cancel flow writes it — so this is a
+        // plain sum. Kept off `profit`, which stays a pure sales metric; the two are added into
+        // totalProfit so the owner's "what did we make" number is complete either way.
+        BigDecimal cancelledProfit = sum(
+                bookings.stream().filter(b -> !isActiveBooking(b)).toList(), Booking::getNetProfit);
         List<PerformerAgg> performers = performers(leads, activeBookings);
 
         return DashboardAnalyticsResponse.builder()
@@ -98,7 +124,11 @@ public class DashboardAnalyticsService {
                 .convertedLeads(convertedLeads)
                 .conversionRate(percent(convertedLeads, totalLeads, 2))
                 .revenue(revenue)
+                .retainedCancellationCharges(retainedCancellationCharges)
+                .agencyRevenue(agencyRevenue)
                 .profit(profit)
+                .cancelledProfit(cancelledProfit)
+                .totalProfit(profit.add(cancelledProfit))
                 .netMargin(percent(profit, revenue, 1))
                 .refunds(refunds)
                 .winRate(percent(wins, activeBookings.size(), 2))
@@ -369,6 +399,10 @@ public class DashboardAnalyticsService {
 
     private String textOr(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value;
+    }
+
+    private static BigDecimal nz(BigDecimal v) {
+        return v != null ? v : BigDecimal.ZERO;
     }
 
     private Long requireTenant() {

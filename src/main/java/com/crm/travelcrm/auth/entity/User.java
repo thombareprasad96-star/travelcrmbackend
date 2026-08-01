@@ -14,11 +14,20 @@ import java.util.Collection;
 @Entity
 @Table(
     name = "users",
-    // No uniqueConstraints here by design. Email is unique PLATFORM-WIDE, but only among live rows:
-    // a soft-deleted user keeps its address, and an absolute UNIQUE(email) would let a deleted
-    // account squat on it forever. That needs a partial index (WHERE deleted_at IS NULL), which JPA
-    // cannot express — so uq_users_email_active is declared in db/indexes.sql, which runs after
-    // Hibernate DDL on every startup. Mirrors the uq_leads_*_tenant_open treatment.
+    // No uniqueConstraints here by design. USERNAME is unique PLATFORM-WIDE, but only among live
+    // rows: a soft-deleted user keeps its username, and an absolute UNIQUE(username) would let a
+    // deleted account squat on it forever. That needs a partial index (WHERE deleted_at IS NULL),
+    // which JPA cannot express — so uq_users_username_active is declared in db/indexes.sql (and in
+    // the V2 migration), which runs after Hibernate DDL on every startup. Mirrors the
+    // uq_leads_*_tenant_open treatment.
+    //
+    // EMAIL IS NO LONGER UNIQUE. It was (uq_users_email_active), which forced every staff member of
+    // an agency to hold a personal address. It is now a contact/display field only: an entire office
+    // may share info@agency.com. The login identity moved to `username` — see getUsername().
+    //
+    // No @Index for username: uq_users_username_active is itself a btree on (username) and every
+    // read filters deleted_at IS NULL, so it serves the login lookup, the uniqueness check and the
+    // availability check. A second plain index would be write cost for no read.
     indexes = {
         @Index(name = "idx_user_email",  columnList = "email"),
         @Index(name = "idx_user_tenant", columnList = "tenant_id"),
@@ -47,6 +56,18 @@ public class User extends BaseEntity implements UserDetails {
     @Column(name = "full_name", nullable = false, length = 150)
     private String name;
 
+    // The login identity for tenant staff — unique platform-wide among live rows, canonicalized by
+    // UsernamePolicy.normalize (trimmed + lowercased) on every write path.
+    //
+    // nullable = false matches the NOT NULL the V2 migration applies. Flyway owns the schema on
+    // every environment now (ddl-auto defaults to validate, including locally), so this never has to
+    // survive Hibernate trying to ALTER a populated table — it only has to describe the column
+    // truthfully, which validate then checks.
+    @Column(name = "username", nullable = false, length = 80)
+    private String username;
+
+    // Contact / display / audit address. NOT a login credential and NOT unique — every staff member
+    // of an agency may legitimately share one organization address.
     @Column(name = "email", nullable = false, length = 150)
     private String email;
 
@@ -106,7 +127,14 @@ public class User extends BaseEntity implements UserDetails {
         return effectiveAuthorities != null ? effectiveAuthorities : role.authorities();
     }
 
-    @Override public String getUsername()              { return email; }
+    // The Spring Security login identifier — the `username` column, NOT the email. This is also what
+    // Authentication.getName() returns, which makes it the value the JPA auditor stamps into
+    // created_by/updated_by (AuditingConfig) and what the module-local `auth.getName()` audit helpers
+    // record. That is intended: email is no longer unique, so it can no longer identify WHO acted —
+    // three staff sharing info@agency.com would produce three indistinguishable audit rows.
+    // Where an actual mailbox is required (UpgradeRequest.requestedByEmail,
+    // SubAgentLicenseRequest.requestedByEmail), call getEmail() explicitly.
+    @Override public String getUsername()              { return username; }
     // Safety net: entities should never reach JSON responses, but if one does,
     // the password hash must not be serialized.
     @JsonIgnore

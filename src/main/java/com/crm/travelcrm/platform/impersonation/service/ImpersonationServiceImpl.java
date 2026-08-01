@@ -62,7 +62,9 @@ public class ImpersonationServiceImpl implements ImpersonationService {
                 actor.superAdminId(), actor.email(),
                 target.getTenantId(), tenant != null ? tenant.getOrganizationCode() : null,
                 "USER", target.getPublicId(),
-                "Started impersonating " + target.getEmail()
+                // Username, not email: the email may be shared across the tenant's whole staff and
+                // would not identify WHO was impersonated. Pairs with the END record.
+                "Started impersonating " + target.getUsername()
                         + (tenant != null ? " @ " + tenant.getOrganizationCode() : ""),
                 ipAddress, userAgent);
 
@@ -87,13 +89,14 @@ public class ImpersonationServiceImpl implements ImpersonationService {
             return;
         }
 
-        String targetEmail = jwtUtil.extractEmail(impersonationToken);
+        // The impersonation token is a tenant-user token, so its subject is the target's USERNAME.
+        String targetUsername = jwtUtil.extractSubject(impersonationToken);
         Long tenantId = jwtUtil.extractTenantId(impersonationToken);
         Long impersonatorId = jwtUtil.extractImpersonatorId(impersonationToken);
         String impersonatorEmail = jwtUtil.extractImpersonatorEmail(impersonationToken);
 
         UUID targetPublicId = (tenantId != null)
-                ? userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(targetEmail, tenantId)
+                ? userRepository.findByUsernameAndTenantIdAndDeletedAtIsNull(targetUsername, tenantId)
                         .map(User::getPublicId).orElse(null)
                 : null;
         String tenantCode = (tenantId != null)
@@ -105,6 +108,6 @@ public class ImpersonationServiceImpl implements ImpersonationService {
         platformAuditRecorder.safeRecord(PlatformAuditAction.IMPERSONATION_END, true,
                 impersonatorId, impersonatorEmail,
                 tenantId, tenantCode, "USER", targetPublicId,
-                "Ended impersonating " + targetEmail, ipAddress, userAgent);
+                "Ended impersonating " + targetUsername, ipAddress, userAgent);
     }
 }

@@ -227,12 +227,18 @@ public class DevDataSeeder implements CommandLineRunner {
         String[] names = { "Demo Admin", "Demo Manager", "Demo Agent", "Demo Staff", "Demo Accountant" };
         List<User> out = new ArrayList<>();
         for (int i = 0; i < N; i++) {
-            String email = roles[i].name().toLowerCase() + "@demo.crm";
-            // Global check — email is unique platform-wide (uq_users_email_active). A tenant-scoped
-            // guard would pass for a tenant that has not seen the address and hit the DB constraint.
-            if (userRepository.existsByEmail(email)) continue;
+            // One shared organization mailbox across all five demo users — this is the case the
+            // username switch exists to allow, so the seeder now exercises it rather than handing
+            // every demo role its own address.
+            String email = "org@demo.crm";
+            String username = roles[i].name().toLowerCase();
+            // Global check — username is unique platform-wide (uq_users_username_active). A
+            // tenant-scoped guard would pass for a tenant that has not seen the name and then hit
+            // the DB constraint.
+            if (userRepository.existsByUsernameAndDeletedAtIsNull(username)) continue;
             out.add(userRepository.save(User.builder()
                     .name(names[i])
+                    .username(username)
                     .email(email)
                     .password(passwordEncoder.encode(PWD))
                     .role(roles[i])
@@ -241,7 +247,7 @@ public class DevDataSeeder implements CommandLineRunner {
                     .isActive(true)
                     .build()));
         }
-        log.info("[DevDataSeeder] seeded {} users (e.g. tenant_admin@demo.crm / {})", out.size(), PWD);
+        log.info("[DevDataSeeder] seeded {} users (log in as tenant_admin / {})", out.size(), PWD);
         return out.isEmpty() ? userRepository.findAllByTenantIdAndDeletedAtIsNull(tenantId) : out;
     }
 
@@ -455,6 +461,11 @@ public class DevDataSeeder implements CommandLineRunner {
         List<Lead> out = new ArrayList<>();
         for (int i = 0; i < N; i++) {
             Lead lead = Lead.builder()
+                    // Literal demo code, same idiom as the seeded BK1000x/CUS1000x above. Kept
+                    // structurally DIFFERENT from LeadCodeGenerator's LD-YY-NNNN on purpose: a
+                    // seeded row must never be able to collide with a generated one under
+                    // uq_leads_code_tenant on a dev database.
+                    .leadCode("LD1000" + (i + 1))
                     .customerName(names[i]).phone("+91 91234 5000" + i).email("lead" + i + "@demo.crm")
                     .leadSource(sources[i]).leadType(types[i]).leadStage(stages[i])
                     .assignedUser(users.get(i % users.size()))

@@ -120,7 +120,21 @@ public class CancellationCalculator {
 
         // ── Agency P&L ─────────────────────────────────────────────────────────
         BigDecimal sunkVendorCost = scale(nz(booking.getVendorCost()).subtract(recoverable));
-        BigDecimal revisedNetProfit = scale(chargeBase.subtract(sunkVendorCost));
+
+        // The agency's own costs are sunk in FULL on a cancellation — there is no "recoverable"
+        // counterpart. Staff commission was earned, the gateway fee was charged, the courier went
+        // out; none of it comes back because the customer cancelled. So this is the whole active
+        // INTERNAL total, not a fraction of it, and it is read straight off the booking column
+        // BookingProfitService maintains — keeping this calculator a pure function of its inputs.
+        BigDecimal sunkInternalCosts = scale(nz(booking.getTotalInternalCosts()));
+
+        // The retained figure here is chargeBase — the PRE-TAX charge — deliberately, not
+        // totalRetained. gstOnCharge is output tax owed to the government and tcsRetained is the
+        // customer's own tax credit; neither is agency income, so folding them in would overstate
+        // the margin by exactly the tax. Same principle as netProfit, which is likewise computed on
+        // the pre-tax customerAmount.
+        BigDecimal revisedNetProfit = scale(
+                chargeBase.subtract(sunkVendorCost).subtract(sunkInternalCosts));
 
         return q.systemComputedChargeBase(systemChargeBase)
                 .chargeBase(chargeBase)
@@ -135,6 +149,7 @@ public class CancellationCalculator {
                 .customerBalanceOwed(customerBalanceOwed)
                 .customerOwes(refundDue.signum() < 0)
                 .sunkVendorCost(sunkVendorCost)
+                .sunkInternalCosts(sunkInternalCosts)
                 .revisedNetProfit(revisedNetProfit)
                 .build();
     }

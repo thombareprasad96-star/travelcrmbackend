@@ -44,7 +44,23 @@ public class ActivityLog extends BaseTenantEntity {
     @Column(name = "user_name", length = 150)
     private String userName;
 
-    /** Denormalised snapshot of the acting user's email — the report derives the {@code @username} from this. */
+    /**
+     * Denormalised snapshot of the acting user's LOGIN username — the identity the Activity Report
+     * shows as {@code @name}. Recorded because email stopped being unique: a whole office may share
+     * info@agency.com, so {@link #userEmail} alone can no longer answer "who did this".
+     *
+     * <p>Nullable for rows written before this column existed; {@code ActivityReportMapper} falls
+     * back to the old email/name derivation for exactly those.
+     *
+     * <p>Named {@code actingUsername} (matching {@link #actingUserId}) and NOT {@code username}:
+     * Lombok's "does this accessor already exist" check is case-INSENSITIVE, so the neighbouring
+     * {@link #userName} field's {@code getUserName()} suppresses generation of {@code getUsername()}
+     * entirely — silently, with no warning. The column is still {@code username}.
+     */
+    @Column(name = "username", length = 80)
+    private String actingUsername;
+
+    /** Denormalised snapshot of the acting user's contact email. No longer unique — display only. */
     @Column(name = "user_email", length = 150)
     private String userEmail;
 

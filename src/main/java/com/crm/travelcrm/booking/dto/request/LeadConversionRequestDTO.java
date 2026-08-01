@@ -74,6 +74,12 @@ public class LeadConversionRequestDTO {
     private BigDecimal vendorCost;
 
     /**
+     * Whether this is an overseas tour programme package. Drives TCS when the tenant's policy is
+     * OVERSEAS_ONLY; ignored under NEVER / ALWAYS. Optional — absent means domestic.
+     */
+    private Boolean overseasTourPackage;
+
+    /**
      * Advance collected at conversion time — optional, defaults to 0.
      */
     @DecimalMin(value = "0.0", message = "Paid amount cannot be negative")

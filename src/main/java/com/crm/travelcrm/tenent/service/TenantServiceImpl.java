@@ -3,6 +3,7 @@ package com.crm.travelcrm.tenent.service;
 import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.auth.enums.Role;
 import com.crm.travelcrm.auth.repository.UserRepository;
+import com.crm.travelcrm.auth.util.UsernamePolicy;
 import com.crm.travelcrm.booking.cancellation.service.CancellationPolicySeeder;
 import com.crm.travelcrm.master.geography.service.CountrySeeder;
 import com.crm.travelcrm.common.context.PlatformActor;
@@ -78,12 +79,24 @@ public class TenantServiceImpl implements TenantService {
             throw new DuplicateTenantException("Email already registered: " + request.getEmail());
         }
 
-        // The admin's LOGIN email — a different thing from the organization's contact email checked
-        // above, and against a different table. Staff email is unique platform-wide, so this must be
-        // a global check: without it this flow mints a duplicate that breaks login for both accounts.
+        // The admin's contact email — a different thing from the organization's contact email
+        // checked above, and against a different table. NO uniqueness check: staff email lost its
+        // unique index so that colleagues (and, for a one-person agency, the organization itself)
+        // can share one address.
         String adminEmail = request.getAdminEmail().trim().toLowerCase();
-        if (userRepository.existsByEmail(adminEmail)) {
-            throw new DuplicateTenantException("Admin email already registered: " + adminEmail);
+
+        // The admin's LOGIN identifier is what must be unique now, platform-wide. Supplied when the
+        // console knows it; otherwise derived from the email local-part and disambiguated. Global
+        // check, matching uq_users_username_active — a tenant-scoped one would pass for a tenant
+        // that has not seen the name and then die on the constraint.
+        String adminUsername = UsernamePolicy.normalize(request.getAdminLoginUsername());
+        if (adminUsername == null) {
+            adminUsername = UsernamePolicy.firstAvailable(
+                    UsernamePolicy.stemFromEmail(adminEmail),
+                    candidate -> userRepository.existsByUsernameAndDeletedAtIsNull(candidate));
+        } else if (userRepository.existsByUsernameAndDeletedAtIsNull(adminUsername)) {
+            // Explicitly supplied — report the clash rather than quietly renaming what was asked for.
+            throw new DuplicateTenantException("Admin username already taken: " + adminUsername);
         }
 
         TenantPlan plan = request.getPlan() != null ? request.getPlan() : TenantPlan.STARTER;
@@ -122,9 +135,11 @@ public class TenantServiceImpl implements TenantService {
         Tenant saved = tenantRepository.save(tenant);
         log.info("Tenant saved with id: {}", saved.getId());
 
-        // First TENANT_ADMIN for this tenant.
+        // First TENANT_ADMIN for this tenant. request.getAdminUsername() is the DISPLAY NAME —
+        // see the field comment on CreateTenantRequest; the login identifier is adminUsername.
         User adminUser = User.builder()
                 .name(request.getAdminUsername())
+                .username(adminUsername)
                 .email(adminEmail)
                 .password(passwordEncoder.encode(request.getAdminPassword()))
                 .role(Role.TENANT_ADMIN)
@@ -152,6 +167,9 @@ public class TenantServiceImpl implements TenantService {
         TenantResponse response = tenantMapper.toResponse(saved);
         response.setUserCount(1L);
         response.setAdminUsername(request.getAdminUsername());
+        // The login identifier, echoed because it may have been DERIVED rather than supplied — this
+        // is the only place the caller can learn what the new admin actually signs in with.
+        response.setAdminLoginUsername(adminUsername);
         response.setMessage("Tenant created successfully");
         return response;
     }

@@ -46,8 +46,10 @@ public class SubAgentLicenseController {
             @Valid @RequestBody OpenSubAgentLicenseRequest request,
             @AuthenticationPrincipal User currentUser) {
         User u = require(currentUser);
+        // getEmail(), not getUsername(): this lands in SubAgentLicenseRequest.requestedByEmail, read
+        // by a SuperAdmin outside the tenant. getUsername() is now the login identifier, not a mailbox.
         SubAgentLicenseRequestResponse res = licenseService.openForPending(
-                u.getTenantId(), u.getUsername(), request.getSubAgentPublicId(), request.getPaymentMode(),
+                u.getTenantId(), u.getEmail(), request.getSubAgentPublicId(), request.getPaymentMode(),
                 request.getOfflineMode(), request.getOfflineReference(), request.getOfflineNotes());
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.success("Seat-license request submitted", res, HttpStatus.CREATED.value()));

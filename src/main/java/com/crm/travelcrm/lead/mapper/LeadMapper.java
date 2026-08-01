@@ -119,6 +119,7 @@ public class LeadMapper {
 
         return LeadResponseDto.builder()
                 .id(lead.getPublicId())                // ← was lead.getId()
+                .leadCode(lead.getLeadCode())          // display reference; id stays the UUID
                 .customerName(lead.getCustomerName())
                 .phone(lead.getPhone())
                 .email(lead.getEmail())

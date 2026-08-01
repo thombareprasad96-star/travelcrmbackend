@@ -38,7 +38,8 @@ public interface BookingMapper {
     @Mapping(target = "gst",                    ignore = true)  // calculated by service
     @Mapping(target = "tcs",                    ignore = true)  // calculated by service
     @Mapping(target = "totalPayable",           ignore = true)  // calculated by service
-    @Mapping(target = "netProfit",              ignore = true)  // GENERATED column, DB owns this
+    @Mapping(target = "totalInternalCosts",     ignore = true)  // summed from the expense ledger
+    @Mapping(target = "netProfit",              ignore = true)  // calculated by BookingProfitService
     @Mapping(target = "paidAmount",             ignore = true)  // starts at 0
     @Mapping(target = "refundedAmount",         ignore = true)  // starts at 0; owned by the refund flow
     @Mapping(target = "status",                 ignore = true)  // starts as PENDING
@@ -81,7 +82,8 @@ public interface BookingMapper {
     @Mapping(target = "totalPayable",           ignore = true)  // recalculated by service
     @Mapping(target = "paidAmount",             ignore = true)  // updated via payment endpoint only
     @Mapping(target = "refundedAmount",         ignore = true)  // updated via refund flow only
-    @Mapping(target = "netProfit",              ignore = true)  // GENERATED column
+    @Mapping(target = "totalInternalCosts",     ignore = true)  // summed from the expense ledger
+    @Mapping(target = "netProfit",              ignore = true)  // recalculated by BookingProfitService
     @Mapping(target = "status",                 ignore = true)  // via transitionStatus() only
     @Mapping(target = "paymentStatus",          ignore = true)  // derived from paidAmount
     @Mapping(target = "services",               ignore = true)  // handled separately

@@ -25,6 +25,7 @@ import java.util.UUID;
         indexes = {
                 @Index(name = "idx_lead_email", columnList = "email"),
                 @Index(name = "idx_lead_phone", columnList = "phone"),
+                @Index(name = "idx_lead_code", columnList = "tenant_id,lead_code"),
                 @Index(name = "idx_leads_assigned_user_id", columnList = "assigned_user_id")
         }
         // Uniqueness of (tenant_id, email) and (tenant_id, phone) is enforced by
@@ -42,6 +43,20 @@ import java.util.UUID;
 @AllArgsConstructor
 @SuperBuilder
 public class Lead extends BaseTenantEntity {
+
+    /**
+     * Human-readable per-tenant reference ({@code LD-26-0001}), issued by {@code LeadCodeGenerator}.
+     * This is the DISPLAY identity — {@code publicId} remains the API/routing key and is what every
+     * endpoint and FE link is still keyed by. Never renumber it: it is quoted to customers.
+     *
+     * <p>Nullable in the entity ON PURPOSE, same reasoning as {@link #origin}: {@code ddl-auto=update}
+     * adds the column as NULL on every existing row, and {@code nullable = false} here would make
+     * Hibernate try to add a NOT NULL to a column full of nulls and fail. {@code db/indexes.sql}
+     * backfills existing rows and seeds the counter; the NOT NULL is a follow-up documented there.</p>
+     */
+    @Column(name = "lead_code", length = 20)
+    private String leadCode;
+
     @Column(name = "customer_name", nullable = false, length = 150)
     private String customerName;
 

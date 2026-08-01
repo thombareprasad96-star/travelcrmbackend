@@ -40,9 +40,14 @@ public class JwtUtil {
                 .compact();
     }
 
+    // Subject is the USERNAME, not the email — it is the only value that still resolves to exactly
+    // one live account (uq_users_username_active). Note this invalidates tokens minted before the
+    // change: their subject is an email, which matches no username, so JwtAuthFilter fails to load
+    // the principal and the request falls through unauthenticated → 401 → re-login. That is the
+    // intended outcome; a fallback to an email lookup would reintroduce the ambiguity this removes.
     public String generateToken(User user) {
         return Jwts.builder()
-                .subject(user.getEmail())
+                .subject(user.getUsername())
                 .claim(JwtClaims.ROLE, user.getRole().name())
                 .claim(JwtClaims.TENANT_ID, user.getTenantId())   // ← ADDED
                 .claim(JwtClaims.TOKEN_VERSION, user.getTokenVersionOrZero())
@@ -61,7 +66,7 @@ public class JwtUtil {
     public String generateImpersonationToken(User user, Long impersonatorId, String impersonatorEmail) {
         long now = System.currentTimeMillis();
         return Jwts.builder()
-                .subject(user.getEmail())
+                .subject(user.getUsername())
                 .claim(JwtClaims.ROLE, user.getRole().name())
                 .claim(JwtClaims.TENANT_ID, user.getTenantId())
                 .claim(JwtClaims.TOKEN_VERSION, user.getTokenVersionOrZero())
@@ -78,7 +83,13 @@ public class JwtUtil {
         return impersonationExpiryMs;
     }
 
-    public String extractEmail(String token) {
+    /**
+     * The token subject. Renamed from {@code extractEmail} because it is no longer one thing: a
+     * SuperAdmin token carries an email, a tenant staff token carries a username. Callers must route
+     * on the {@code role}/{@code tenantId} claims before deciding which realm to resolve it against
+     * — which is exactly what JwtAuthFilter and TokenAuthenticatorImpl already do.
+     */
+    public String extractSubject(String token) {
         return getClaims(token).getSubject();
     }
 

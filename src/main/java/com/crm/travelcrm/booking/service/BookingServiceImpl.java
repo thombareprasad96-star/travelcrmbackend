@@ -21,6 +21,7 @@ import com.crm.travelcrm.booking.enums.PaymentStatus;
 import com.crm.travelcrm.booking.exception.BookingNotFoundException;
 import com.crm.travelcrm.booking.mapper.BookingMapper;
 import com.crm.travelcrm.booking.repository.BookingPaymentRepository;
+import com.crm.travelcrm.accounting.settings.service.AccountingSettingsService;
 import com.crm.travelcrm.booking.repository.BookingRepository;
 import com.crm.travelcrm.booking.cancellation.dto.CancellationQuote;
 import com.crm.travelcrm.booking.cancellation.entity.BookingCancellation;
@@ -96,16 +97,12 @@ public class BookingServiceImpl implements BookingService {
             BookingStatus.REFUNDED
     );
 
-    // Tax rates are externalised so they can be tuned per environment without a redeploy.
-    // NOTE: these are still flat rates applied to every booking. Correct Indian TCS is
-    // slabbed (nil domestic; 5% up to ₹7L, 20% above, under LRS) and GST varies by service —
-    // applying that properly needs a domestic/overseas + product classification the booking
-    // model does not yet carry. Externalising the rate is the safe first step, not the whole fix.
-    @Value("${app.booking.gst-rate:0.05}")
-    private BigDecimal gstRate;
-
-    @Value("${app.booking.tcs-rate:0.05}")
-    private BigDecimal tcsRate;
+    // Booking tax rates are now PER-TENANT, on AccountingSettings, resolved through
+    // BookingTaxCalculator — see recomputeTotals. They used to be the two flat properties
+    // app.booking.gst-rate / app.booking.tcs-rate applied to every booking of every tenant, which
+    // over-collected TCS from every domestic customer. Those properties survive only as the seed
+    // values for a tenant's first settings row (AccountingSettingsService.loadOrCreate), so an
+    // environment that had tuned them keeps its behaviour.
 
     private final BookingRepository        bookingRepository;
     private final BookingPaymentRepository paymentRepository;
@@ -124,6 +121,9 @@ public class BookingServiceImpl implements BookingService {
     private final CancellationDocumentService cancellationDocumentService;
     private final SubAgentScope subAgentScope;
     private final SubAgentCommissionService commissionService;
+    private final BookingProfitService profitService;
+    private final BookingTaxCalculator bookingTaxCalculator;
+    private final AccountingSettingsService accountingSettings;
     private final BookingAssigneeResolver assigneeResolver;
     private final BookingAssigneeViewFactory assigneeViewFactory;
 
@@ -288,6 +288,7 @@ public class BookingServiceImpl implements BookingService {
                 // customerAmount / vendorCost are stored as-is; the helper derives gst/tcs/total/profit.
                 .customerAmount(request.getCustomerAmount())
                 .vendorCost(request.getVendorCost())
+                .overseasTourPackage(Boolean.TRUE.equals(request.getOverseasTourPackage()))
                 .services(request.getServices() != null
                         ? new ArrayList<>(request.getServices())
                         : new ArrayList<>())
@@ -618,6 +619,15 @@ public class BookingServiceImpl implements BookingService {
         // loser gets a 409 instead of a second cancellation record).
         booking.setStatus(BookingStatus.CANCELLED);
         booking.setRefundedAmount(BigDecimal.ZERO);   // nothing disbursed yet; the refund flow accrues it
+
+        // Profit is REVISED, not left at the pre-cancellation figure. The trip did not happen, so
+        // customerAmount was never earned; what the agency actually made is the retained charge less
+        // the costs it could not recover. Leaving the old margin on the row meant every reader of
+        // Booking.netProfit either had to know to exclude cancelled bookings (most did) or silently
+        // reported the profit of a trip that never ran (BookingRevenueService did exactly that).
+        booking.setTotalInternalCosts(nz(quote.getSunkInternalCosts()));
+        booking.setNetProfit(nz(quote.getRevisedNetProfit()));
+
         Booking saved = bookingRepository.save(booking);
 
         // Notify only AFTER the money + record commit, so a rolled-back cancel never pushes a
@@ -689,6 +699,7 @@ public class BookingServiceImpl implements BookingService {
                 .refundStatus(refundDueOwed ? RefundStatus.PENDING : RefundStatus.NOT_APPLICABLE)
                 .sunkVendorCost(quote.getSunkVendorCost())
                 .vendorRecoverable(quote.getVendorRecoverable())
+                .sunkInternalCosts(quote.getSunkInternalCosts())
                 .revisedNetProfit(quote.getRevisedNetProfit())
                 .build();
     }
@@ -899,7 +910,21 @@ public class BookingServiceImpl implements BookingService {
     @Override
     @Transactional(readOnly = true)
     public BookingStatsResponseDTO getStats() {
+        // Agency revenue = delivered package sales + the cancellation charge actually retained.
+        // A cancelled booking contributes ONLY the retained charge — sumTotalRevenue already
+        // excludes it entirely, so nothing is double-counted. All-time, matching every other figure
+        // on this endpoint (it carries no date filter).
+        BigDecimal revenue  = nz(bookingRepository.sumTotalRevenue());
+        BigDecimal retained = nz(cancellationRepository.sumRetainedChargeBase(
+                requireTenantId(), LocalDate.of(1970, 1, 1), LocalDate.now()));
+        BigDecimal netProfit       = nz(bookingRepository.sumNetProfit());
+        BigDecimal cancelledProfit = nz(bookingRepository.sumCancelledProfit());
+
         return BookingStatsResponseDTO.builder()
+                .retainedCancellationCharges(retained)
+                .agencyRevenue(revenue.add(retained))
+                .cancelledProfit(cancelledProfit)
+                .totalProfit(netProfit.add(cancelledProfit))
                 .totalBookings(bookingRepository.countByDeletedAtIsNull())
                 .confirmedBookings(bookingRepository.countByStatusAndDeletedAtIsNull(BookingStatus.CONFIRMED))
                 .pendingBookings(bookingRepository.countByStatusAndDeletedAtIsNull(BookingStatus.PENDING))
@@ -1019,6 +1044,10 @@ public class BookingServiceImpl implements BookingService {
         return booking;
     }
 
+    private static BigDecimal nz(BigDecimal v) {
+        return v != null ? v : BigDecimal.ZERO;
+    }
+
     private Long requireTenantId() {
         Long tenantId = TenantContext.getTenantId();
         if (tenantId == null) {
@@ -1084,21 +1113,44 @@ public class BookingServiceImpl implements BookingService {
     }
 
     /**
-     * Recompute the derived money fields (gst / tcs / totalPayable / netProfit) and re-derive
+     * Recompute the derived money fields (gst / tcs / totalPayable, and — via
+     * {@link BookingProfitService} — totalInternalCosts / netProfit) and re-derive
      * paymentStatus from the booking's CURRENT paidAmount. Deliberately does NOT touch paidAmount —
      * that is owned by the payment ledger (POST/DELETE /payments, PATCH /payment), never by an edit
      * of the booking's amounts. Keeps totals consistent when customerAmount / vendorCost change.
      */
     private void recomputeTotals(Booking booking, BigDecimal customerAmount, BigDecimal vendorCost) {
-        BigDecimal gst          = customerAmount.multiply(gstRate).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal tcs          = customerAmount.multiply(tcsRate).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal totalPayable = customerAmount.add(gst).add(tcs);
-        BigDecimal netProfit    = customerAmount.subtract(vendorCost);
+        // Every figure is scaled to the paise, matching numeric(12,2) on the columns. totalPayable is
+        // scaled explicitly rather than inheriting whatever scale the client happened to send:
+        // @Digits(fraction = 2) caps the INPUT at 2dp but does not force it there, so a request
+        // carrying "1000" or "1000.5" would otherwise leave a scale-0/1 value on the entity that does
+        // not match what the next read brings back from the DB.
+        // Tax comes from THIS TENANT's settings, not a platform constant: whether GST is added at
+        // all, at what rate, and whether TCS applies never / only to overseas packages / always.
+        // A domestic-only operator sets TCS to NEVER and stops collecting a tax that s.206C(1G)/394
+        // does not impose on them.
+        BookingTaxCalculator.BookingTax tax = bookingTaxCalculator.compute(
+                customerAmount, booking.isOverseasTourPackage(), accountingSettings.loadOrCreate(requireTenantId()));
 
+        BigDecimal gst          = tax.gst();
+        BigDecimal tcs          = tax.tcs();
+        BigDecimal totalPayable = customerAmount.add(gst).add(tcs).setScale(2, RoundingMode.HALF_UP);
+
+        booking.setCustomerAmount(customerAmount);
+        booking.setVendorCost(vendorCost);
         booking.setGst(gst);
         booking.setTcs(tcs);
         booking.setTotalPayable(totalPayable);
-        booking.setNetProfit(netProfit);
+
+        // Profit is NOT computed here — BookingProfitService is its only writer, so the formula lives
+        // in exactly one place and the expense ledger and the booking edit can never disagree about
+        // it. On create/convert the row has no id yet and therefore no expense lines, so the internal
+        // cost term is zero; on an edit it is re-read from the ledger.
+        BigDecimal internalCosts = booking.getId() > 0
+                ? profitService.internalCostsOf(booking.getId())
+                : BigDecimal.ZERO;
+        profitService.applyInMemory(booking, internalCosts);
+
         booking.setPaymentStatus(
                 derivePaymentStatus(booking.getPaidAmount(), totalPayable, booking.getPaymentStatus()));
     }

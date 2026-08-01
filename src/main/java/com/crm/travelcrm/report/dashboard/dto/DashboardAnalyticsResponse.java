@@ -16,8 +16,33 @@ public class DashboardAnalyticsResponse {
     private long totalLeads;
     private long convertedLeads;
     private double conversionRate;
+    /** Σ customerAmount of ACTIVE bookings (cancelled/refunded excluded). Package sales only. */
     private BigDecimal revenue;
+
+    /**
+     * Cancellation charge retained in the period, NET of GST/TCS (the pre-tax charge base).
+     * Revenue with no service delivered behind it, so it is reported on its own line rather than
+     * merged into {@link #revenue} — merging would corrupt margin %, realisation per pax and every
+     * conversion metric derived from package sales.
+     */
+    private BigDecimal retainedCancellationCharges;
+
+    /** {@link #revenue} + {@link #retainedCancellationCharges} — total the agency earned. */
+    private BigDecimal agencyRevenue;
+
+    /** Profit on delivered travel — cancelled/refunded bookings excluded. A sales metric. */
     private BigDecimal profit;
+
+    /**
+     * Profit on cancelled bookings — retained charge less the vendor and internal costs that could
+     * not be recovered. Frequently NEGATIVE, and that is the point: it says whether the cancellation
+     * slab is priced above the agency's real sunk cost. A churn metric, not a sales one.
+     */
+    private BigDecimal cancelledProfit;
+
+    /** {@link #profit} + {@link #cancelledProfit} — total operating gross profit. */
+    private BigDecimal totalProfit;
+
     private double netMargin;
     private BigDecimal refunds;
     private double winRate;

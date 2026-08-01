@@ -1,6 +1,7 @@
 
 package com.crm.travelcrm.tenent.dto;
 
+import com.crm.travelcrm.auth.util.UsernamePolicy;
 import com.crm.travelcrm.tenent.enums.TenantPlan;
 import com.crm.travelcrm.tenent.enums.TenantStatus;
 import jakarta.validation.constraints.*;
@@ -45,9 +46,25 @@ public class CreateTenantRequest {
     private Integer maxUsers;
 
     // Admin user fields
+    //
+    // NOTE: despite the name, `adminUsername` is the admin's DISPLAY NAME (it is persisted to
+    // User.name) and always has been. It is deliberately NOT repurposed as the login identifier:
+    // the console posts a human name like "Prasad Thombare" here, which contains a space and would
+    // fail username validation — silently breaking tenant creation for an un-updated console.
     @NotBlank(message = "Admin username is required")
     @Size(max = 100, message = "Admin username must not exceed 100 characters")
     private String adminUsername;
+
+    // The admin's actual LOGIN identifier. Optional: this is a SuperAdmin bootstrap flow, and the
+    // SuperAdmin creating the organization does not necessarily know what login the customer wants.
+    // When blank the service derives one from adminEmail's local-part and returns it on the
+    // response (TenantResponse.adminLoginUsername) so it can be handed to the customer.
+    // Contrast /api/users and sub-agent creation, where a human is filling in the form and the
+    // username is required — inventing one there would hide a typo instead of surfacing it.
+    @Size(min = UsernamePolicy.MIN_LENGTH, max = UsernamePolicy.MAX_LENGTH,
+          message = "Admin login username must be 3–80 characters")
+    @Pattern(regexp = UsernamePolicy.PATTERN, message = UsernamePolicy.PATTERN_MESSAGE)
+    private String adminLoginUsername;
 
     @NotBlank(message = "Admin email is required")
     @Email(message = "Invalid admin email format")

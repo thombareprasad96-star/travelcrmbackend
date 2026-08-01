@@ -1,6 +1,7 @@
 package com.crm.travelcrm.auth.dto;
 
 import com.crm.travelcrm.auth.enums.Role;
+import com.crm.travelcrm.auth.util.UsernamePolicy;
 import jakarta.validation.constraints.*;
 import lombok.Data;
 
@@ -13,6 +14,17 @@ public class CreateUserRequest {
     @Size(max = 150, message = "Name must be 150 characters or fewer")
     private String name;
 
+    // The login identifier. Normalized (trimmed + lowercased) and checked for uniqueness in
+    // UserServiceImpl; the pattern deliberately accepts uppercase so "Prasad" is folded rather than
+    // rejected. Uniqueness is platform-wide, matching uq_users_username_active.
+    @NotBlank(message = "Username is required")
+    @Size(min = UsernamePolicy.MIN_LENGTH, max = UsernamePolicy.MAX_LENGTH,
+          message = "Username must be 3–80 characters")
+    @Pattern(regexp = UsernamePolicy.PATTERN, message = UsernamePolicy.PATTERN_MESSAGE)
+    private String username;
+
+    // Contact address, not a credential. NOT checked for uniqueness on purpose — a whole agency may
+    // share one organization mailbox.
     @NotBlank(message = "Email is required")
     @Email(message = "Invalid email format")
     @Size(max = 150, message = "Email must be 150 characters or fewer")

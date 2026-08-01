@@ -209,4 +209,55 @@ class CancellationCalculatorTest {
         assertEquals(bd("30000.00"), q2.getSunkVendorCost());
         assertEquals(bd("-5000.00"), q2.getRevisedNetProfit());
     }
+
+    @Test
+    void revisedProfit_alsoSubtractsInternalCostsInFull() {
+        // The agency's own costs have no "recoverable" counterpart — the staff commission was
+        // earned and the gateway fee was charged whether or not the customer travelled — so the
+        // WHOLE internal total is sunk, unlike vendor cost.
+        //
+        // 20 days → 25% band → chargeBase 25k. Vendor 70k with 40k recovered → sunk 30k.
+        // Internal 8k, sunk in full. Profit = 25k − 30k − 8k = −13k.
+        Booking b = booking("100000", "5000", "5000", "110000", "70000", "60000", 20);
+        b.setTotalInternalCosts(bd("8000.00"));
+
+        CancellationQuote q = calc.calculate(b, tieredPolicy(true, true), CANCEL_ON, null, bd("40000"));
+
+        assertEquals(bd("8000.00"), q.getSunkInternalCosts());
+        assertEquals(bd("30000.00"), q.getSunkVendorCost());
+        assertEquals(bd("-13000.00"), q.getRevisedNetProfit());
+
+        // The customer settlement is untouched by an agency-internal figure.
+        assertEquals(bd("26250.00"), q.getTotalRetained());
+        assertEquals(bd("33750.00"), q.getRefundDue());
+        assertReconciles(q);
+    }
+
+    @Test
+    void revisedProfit_isPreTax_neverCountsRetainedGstOrTcsAsMargin() {
+        // The retained figure in the profit line is chargeBase, NOT totalRetained. gstOnCharge is
+        // output tax owed to the government; folding it in would overstate the margin by exactly
+        // the tax. Here totalRetained is 26,250 but only 25,000 of it is the agency's.
+        Booking b = booking("100000", "5000", "5000", "110000", "20000", "60000", 20);
+        b.setTotalInternalCosts(BigDecimal.ZERO);
+
+        CancellationQuote q = calc.calculate(b, tieredPolicy(true, true), CANCEL_ON, null, null);
+
+        assertEquals(bd("25000.00"), q.getChargeBase());
+        assertEquals(bd("26250.00"), q.getTotalRetained());
+        // 25,000 − 20,000 − 0 = 5,000. Using totalRetained would have produced 6,250.
+        assertEquals(bd("5000.00"), q.getRevisedNetProfit());
+    }
+
+    @Test
+    void revisedProfit_treatsNullInternalCostsAsZero() {
+        // Every booking created before the feature has no value for the column.
+        Booking b = booking("100000", "5000", "5000", "110000", "70000", "60000", 20);
+        b.setTotalInternalCosts(null);
+
+        CancellationQuote q = calc.calculate(b, tieredPolicy(true, true), CANCEL_ON, null, null);
+
+        assertEquals(bd("0.00"), q.getSunkInternalCosts());
+        assertEquals(bd("-45000.00"), q.getRevisedNetProfit());   // unchanged from before the feature
+    }
 }

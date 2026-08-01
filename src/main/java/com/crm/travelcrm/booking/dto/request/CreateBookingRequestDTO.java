@@ -47,6 +47,17 @@ public class CreateBookingRequestDTO {
     @Digits(integer = 10, fraction = 2, message = "Invalid amount format")
     private BigDecimal vendorCost;
 
+    /**
+     * Whether this is an overseas tour programme package. Drives TCS when the tenant's policy is
+     * OVERSEAS_ONLY; ignored under NEVER / ALWAYS. Optional — absent means domestic, which
+     * under-collects rather than over-collects someone else's tax.
+     *
+     * <p>Per CBDT Circular 10/2023 a package qualifies only if it bundles at least TWO of
+     * {international ticket, hotel, other similar expenditure} — a bare international air ticket is
+     * not one — so this is an explicit judgement by the agent, never inferred from the destination.
+     */
+    private Boolean overseasTourPackage;
+
     // Initial payment at time of booking — optional, defaults to 0
     @DecimalMin(value = "0.0", message = "Paid amount cannot be negative")
     @Digits(integer = 10, fraction = 2, message = "Invalid amount format")

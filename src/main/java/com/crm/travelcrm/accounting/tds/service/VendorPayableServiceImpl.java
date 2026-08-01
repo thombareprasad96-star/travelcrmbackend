@@ -1,5 +1,7 @@
 package com.crm.travelcrm.accounting.tds.service;
 
+import com.crm.travelcrm.accounting.settings.service.AccountingSettingsService;
+import com.crm.travelcrm.accounting.support.Percents;
 import com.crm.travelcrm.accounting.tds.dto.*;
 import com.crm.travelcrm.accounting.tds.entity.VendorBill;
 import com.crm.travelcrm.accounting.tds.entity.VendorPayment;
@@ -49,6 +51,7 @@ public class VendorPayableServiceImpl implements VendorPayableService {
 
     private final VendorBillRepository billRepository;
     private final VendorPaymentRepository paymentRepository;
+    private final AccountingSettingsService accountingSettingsService;
     private final VendorRepository vendorRepository;
     private final BookingRepository bookingRepository;
     private final BookingServiceItemRepository serviceItemRepository;
@@ -89,7 +92,15 @@ public class VendorPayableServiceImpl implements VendorPayableService {
 
         String pan = vendor.getPanNumber();
         boolean hasPan = StringUtils.hasText(pan);
-        TdsResult tds = tdsCalculator.compute(tdsBase, req.getTdsSection(), hasPan);
+        // Section rates are the TENANT's. 206AA (no PAN ⇒ the higher rate) is still enforced inside
+        // the calculator regardless of what they configured — that is statute, not preference.
+        var taxSettings = accountingSettingsService.loadOrCreate(tenantId);
+        TdsResult tds = tdsCalculator.compute(tdsBase, req.getTdsSection(), hasPan,
+                new TdsCalculator.TdsRates(
+                        Percents.toFraction(taxSettings.getTds194cPct()),
+                        Percents.toFraction(taxSettings.getTds194hPct()),
+                        Percents.toFraction(taxSettings.getTds194jPct()),
+                        Percents.toFraction(taxSettings.getTdsNoPanPct())));
         BigDecimal netPayable = gross.subtract(tds.amount()).max(BigDecimal.ZERO);
 
         VendorBill bill = VendorBill.builder()

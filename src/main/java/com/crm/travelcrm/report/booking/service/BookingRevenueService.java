@@ -1,5 +1,6 @@
 package com.crm.travelcrm.report.booking.service;
 
+import com.crm.travelcrm.booking.cancellation.repository.BookingCancellationRepository;
 import com.crm.travelcrm.booking.entity.Booking;
 import com.crm.travelcrm.booking.enums.BookingStatus;
 import com.crm.travelcrm.booking.enums.PaymentStatus;
@@ -29,8 +30,9 @@ import java.util.List;
 
 /**
  * Read side of the Booking Revenue report. Tenant-scoped via {@link TenantContext}; money stays in
- * {@link BigDecimal}. Bare DTOs per the reports contract. {@code tripType}/{@code refunded} have no
- * column on Booking, so trip type is null and the international split / refunded are 0.
+ * {@link BigDecimal}. Bare DTOs per the reports contract. {@code tripType} has no column on Booking,
+ * so trip type is null and the international split is 0. {@code refunded} DOES have a column —
+ * {@code Booking.refundedAmount} — and is summed from it.
  */
 @Service
 @RequiredArgsConstructor
@@ -40,6 +42,12 @@ public class BookingRevenueService {
     private static final DateTimeFormatter CREATED_FMT = DateTimeFormatter.ofPattern("MMM dd, yy");
 
     private final BookingReportRepository repository;
+    private final BookingCancellationRepository cancellationRepository;
+
+    /** Delivered (or still to be delivered) — not cancelled, not refunded. */
+    private static boolean isActive(Booking b) {
+        return b.getStatus() != BookingStatus.CANCELLED && b.getStatus() != BookingStatus.REFUNDED;
+    }
 
     @Transactional(readOnly = true)
     public BookingRevenueResponseDTO getBookings(String startDate, String endDate, String dateType,
@@ -69,17 +77,37 @@ public class BookingRevenueService {
                                         String status, String paymentStatus,
                                         String minAmount, String maxAmount) {
         List<Booking> all = query(startDate, endDate, dateType, status, paymentStatus, minAmount, maxAmount, null);
-        BigDecimal totalRevenue = sum(all, Booking::getCustomerAmount);
-        BigDecimal netProfit    = sum(all, Booking::getNetProfit);
-        BigDecimal payable      = sum(all, Booking::getTotalPayable);
-        BigDecimal due          = sum(all, Booking::getPendingAmount);
+
+        // Split the set: a cancelled booking never delivered anything, so its customerAmount is not
+        // revenue and its (now revised) netProfit is cancellation margin, not trading margin.
+        // Summing the whole list — which this did — reported the full value of every cancelled
+        // booking as revenue and its profit alongside genuinely delivered trips.
+        List<Booking> active = all.stream().filter(BookingRevenueService::isActive).toList();
+        List<Booking> cancelled = all.stream().filter(b -> !isActive(b)).toList();
+
+        BigDecimal totalRevenue = sum(active, Booking::getCustomerAmount);
+        BigDecimal netProfit    = sum(active, Booking::getNetProfit);
+        BigDecimal payable      = sum(active, Booking::getTotalPayable);
+        BigDecimal due          = sum(active, Booking::getPendingAmount);
+
+        // Booking.netProfit on a cancelled row IS the revised figure (retained − sunk costs) — the
+        // cancel flow and BookingProfitService both write it — so this needs no join.
+        BigDecimal cancelledProfit = sum(cancelled, Booking::getNetProfit);
+        LocalDateTime[] window = ReportDateRange.resolve(startDate, endDate);
+        BigDecimal retained = nz(cancellationRepository.sumRetainedChargeBase(
+                requireTenant(), window[0].toLocalDate(), window[1].toLocalDate()));
+
         double avgMargin = payable.signum() > 0
                 ? netProfit.divide(payable, 4, RoundingMode.HALF_UP).movePointRight(2)
                         .setScale(1, RoundingMode.HALF_UP).doubleValue()
                 : 0.0;
         return RevenueSummaryDTO.builder()
                 .totalRevenue(totalRevenue)
+                .retainedCancellationCharges(retained)
+                .agencyRevenue(totalRevenue.add(retained))
                 .netProfit(netProfit)
+                .cancelledProfit(cancelledProfit)
+                .totalProfit(netProfit.add(cancelledProfit))
                 .avgNetMargin(avgMargin)
                 .outstandingDue(due)
                 .build();

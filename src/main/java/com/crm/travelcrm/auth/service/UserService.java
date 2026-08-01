@@ -20,7 +20,7 @@ public interface UserService {
 
     UserStatsDTO getStats(Long tenantId);
     List<UserResponseDTO> searchUsers(String query, Long tenantId);
-    boolean isEmailAvailable(String email);
+    boolean isUsernameAvailable(String username);
     UserResponseDTO toggleStatus(UUID publicId, Long tenantId);
     void resetPassword(UUID publicId, ResetPasswordRequest request, Long tenantId);
 }

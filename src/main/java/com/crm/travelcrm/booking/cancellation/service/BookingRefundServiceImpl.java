@@ -15,6 +15,7 @@ import com.crm.travelcrm.booking.exception.BookingNotFoundException;
 import com.crm.travelcrm.booking.repository.BookingPaymentRepository;
 import com.crm.travelcrm.booking.repository.BookingRepository;
 import com.crm.travelcrm.common.exception.BusinessException;
+import com.crm.travelcrm.permission.service.SubAgentScope;
 import com.crm.travelcrm.subagent.service.SubAgentCommissionService;
 import lombok.RequiredArgsConstructor;
 import org.apache.logging.log4j.LogManager;
@@ -47,16 +48,38 @@ public class BookingRefundServiceImpl implements BookingRefundService {
     private final BookingCancellationRepository cancellationRepository;
     private final CancellationDocumentService documentService;
     private final SubAgentCommissionService commissionService;
+    private final SubAgentScope subAgentScope;
 
     @Override
     @Transactional
     public RefundResponseDTO refund(UUID bookingPublicId, RefundBookingRequestDTO request) {
         Booking booking = bookingRepository.findByPublicIdAndDeletedAtIsNull(bookingPublicId)
                 .orElseThrow(() -> new BookingNotFoundException(bookingPublicId));
+        // Row-level scope: 404s a sub-agent that does not own this booking, matching the single by-id
+        // chokepoint every other booking path funnels through (BookingServiceImpl.findActiveByPublicId).
+        // Without it a SUB_AGENT holding BOOKING_REFUND could pay out against a peer's booking.
+        subAgentScope.assertVisible(booking, bookingPublicId);
 
         BookingCancellation record = cancellationRepository.findByBookingIdAndDeletedAtIsNull(booking.getId())
                 .orElseThrow(() -> new BusinessException(
                         "Cancel the booking before recording a refund.", HttpStatus.BAD_REQUEST));
+
+        // Idempotent resubmit: same key → return the original payout, disburse nothing new.
+        //
+        // This runs BEFORE the balance guards on purpose. An honest retry (client timed out, the
+        // payout actually committed) must reproduce the original answer, and the payout that COMPLETED
+        // the refund leaves remaining == 0 — so checking the balance first would answer a correct
+        // retry with "already fully refunded" 409 even though this exact request is the one that
+        // succeeded. The key is scoped to the booking, so it can only ever echo this booking's payout.
+        if (StringUtils.hasText(request.getIdempotencyKey())) {
+            var prior = paymentRepository.findByBookingIdAndIdempotencyKeyAndDeletedAtIsNull(
+                    booking.getId(), request.getIdempotencyKey());
+            if (prior.isPresent()) {
+                log.info("Refund idempotency hit for booking {} key {} — returning original payout",
+                        booking.getBookingCode(), request.getIdempotencyKey());
+                return echoExisting(booking, record, prior.get());
+            }
+        }
 
         if (record.isCustomerOwes()) {
             throw new BusinessException(
@@ -72,17 +95,6 @@ public class BookingRefundServiceImpl implements BookingRefundService {
         BigDecimal remaining = refundDue.subtract(already);
         if (remaining.signum() <= 0) {
             throw new BusinessException("This booking has already been fully refunded.", HttpStatus.CONFLICT);
-        }
-
-        // Idempotent resubmit: same key → return the original payout, disburse nothing new.
-        if (StringUtils.hasText(request.getIdempotencyKey())) {
-            var prior = paymentRepository.findByBookingIdAndIdempotencyKeyAndDeletedAtIsNull(
-                    booking.getId(), request.getIdempotencyKey());
-            if (prior.isPresent()) {
-                log.info("Refund idempotency hit for booking {} key {} — returning original payout",
-                        booking.getBookingCode(), request.getIdempotencyKey());
-                return echoExisting(booking, record, prior.get());
-            }
         }
 
         BigDecimal amount = nz(request.getAmount()).setScale(2, RoundingMode.HALF_UP);
