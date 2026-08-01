@@ -1,4 +1,8 @@
 
+
+
+
+
 <!--<html xmlns:th="http://www.thymeleaf.org">-->
 <!--<head>-->
 <!--    <meta charset="UTF-8" />-->
@@ -151,11 +155,17 @@
 <!--            padding: 2.5mm 0 2mm 0;-->
 <!--            vertical-align: middle;-->
 <!--        }-->
+<!--        /*.cover-logo-cell {*/-->
+<!--        /*    width: 62%;*/-->
+<!--        /*    height: 15mm;*/-->
+<!--        /*    vertical-align: middle;*/-->
+<!--        /*    overflow: hidden;*/-->
+<!--        /*}*/-->
+
 <!--        .cover-logo-cell {-->
 <!--            width: 62%;-->
-<!--            height: 15mm;-->
 <!--            vertical-align: middle;-->
-<!--            overflow: hidden;-->
+<!--            /* Height hatayi gayi hai taaki circle theek se fit ho sake */-->
 <!--        }-->
 <!--        .cover-contact-cell {-->
 <!--            width: 38%;-->
@@ -166,16 +176,18 @@
 <!--            line-height: 1.65;-->
 <!--        }-->
 <!--        .cover-logo {-->
-<!--            width: 52mm;-->
-<!--            height: 15mm;-->
+<!--            width: 24mm;-->
+<!--            height: 24mm;-->
+<!--            border-radius: 50%;-->
 <!--            overflow: hidden;-->
 <!--        }-->
 <!--        .cover-logo img {-->
 <!--            display: block;-->
-<!--            width: 48mm;-->
-<!--            height: 14mm;-->
-<!--            -fs-fit-images-to-width: 48mm;-->
+<!--            width: 24mm;-->
+<!--            height: 24mm;-->
+<!--            -fs-fit-images-to-width: 24mm;-->
 <!--        }-->
+
 <!--        .cover-company {-->
 <!--            font-family: "Times New Roman", serif;-->
 <!--            font-size: 21px;-->
@@ -353,19 +365,22 @@
 <!--        }-->
 <!--        .summary-grid tr:last-child td { border-bottom: 0; }-->
 <!--        .summary-grid td:nth-child(3) { border-right: 0; }-->
+
+<!--        /* UPDATED: Circle Size and Alignment */-->
 <!--        .summary-symbol {-->
 <!--            float: left;-->
-<!--            width: 9mm;-->
-<!--            height: 9mm;-->
-<!--            padding-top: 1.9mm;-->
+<!--            width: 14mm;-->
+<!--            height: 14mm;-->
+<!--            padding-top: 3.5mm;-->
 <!--            border: 0.8pt solid #143D67;-->
 <!--            border-radius: 50%;-->
 <!--            text-align: center;-->
-<!--            font-size: 6.4px;-->
+<!--            font-size: 9px;-->
 <!--            font-weight: bold;-->
 <!--            color: #143D67;-->
 <!--        }-->
-<!--        .summary-copy { margin-left: 11.5mm; }-->
+
+<!--        .summary-copy { margin-left: 17mm; /* Adjusted margin to accommodate larger circle */ }-->
 
 <!--        .two-col { margin-top: 4.5mm; }-->
 <!--        .two-col td.left { width: 47%; padding-right: 2.7mm; }-->
@@ -1240,6 +1255,12 @@
 
 
 
+
+
+
+
+
+
 <html xmlns:th="http://www.thymeleaf.org">
 <head>
     <meta charset="UTF-8" />
@@ -1260,6 +1281,12 @@
       Optional standalone model attributes used only when provided:
       quotationValidUntil, bookingAmount, destinationImageUrl.
       destinationImageUrl is preferred for the cover; q.coverImageUrl remains the fallback.
+
+      CHANGE LOG (this revision):
+      1. Added .vehicle-image CSS rule (below .hotel-image).
+      2. Vehicle table's "Type" cell now renders v.imagePath, using the same
+         Cloudinary transform pattern as hotel/sightseeing images.
+      Nothing else was modified.
     -->
 
     <style th:inline="none">
@@ -1788,6 +1815,7 @@
         .hotel-card td { padding: 3.5mm; vertical-align: middle; }
         .hotel-image-cell { width: 47mm; text-align: right; }
         .hotel-image { width: 42mm; height: 29mm; display: block; }
+        .vehicle-image { width: 32mm; height: 20mm; display: block; margin-top: 2mm; -fs-fit-images-to-width: 32mm; }
         .hotel-name {
             font-family: "Times New Roman", serif;
             font-size: 13px;
@@ -2350,7 +2378,13 @@
                 <th style="width: 10%;" class="r">Qty</th>
             </tr>
             <tr th:each="v : ${q.vehicle.vehicles}">
-                <td th:text="${fmt.orElse(v.type, '-')}">-</td>
+                <td>
+                    <span th:text="${fmt.orElse(v.type, '-')}">-</span>
+                    <img class="vehicle-image" th:if="${!#strings.isEmpty(v.imagePath)}"
+                         th:src="${#strings.contains(v.imagePath,'/upload/')
+                                   ? #strings.replace(v.imagePath,'/upload/','/upload/c_fill,w_340,h_220,g_auto,f_jpg,q_auto/')
+                                   : v.imagePath}" alt="Vehicle" />
+                </td>
                 <td>
                     <span th:text="${fmt.orElse(v.pickup, '-')}">-</span> &#8212; <span th:text="${fmt.orElse(v.drop, '-')}">-</span>
                     <div class="small-copy" th:if="${!#strings.isEmpty(v.notes)}" th:text="${fmt.plain(v.notes)}">Notes</div>

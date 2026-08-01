@@ -1,3 +1,575 @@
+<!--<!DOCTYPE html>-->
+<!--&lt;!&ndash;-->
+<!--  MODERN quotation design — the premium editorial counterpart to pdf/quotation.html (Classic).-->
+
+<!--  Selected by Quotation.templateStyle == MODERN (QuotationPdfService.render()). Classic is untouched-->
+<!--  by this file's existence; both consume the IDENTICAL context: q, customer, totals, fmt,-->
+<!--  generatedOn, companyName/Tagline/Phone/Email/Website/Address/LogoUrl, brandColor, companyGst,-->
+<!--  companyGoogleReviews, companyYearsExperience, sectionOrder.-->
+
+<!--  SECTION GATING — sectionOrder is the ONLY thing this template asks about whether a section renders.-->
+<!--  QuotationPdfService.orderedSectionKeys() decides it: a section is in the list only when it was-->
+<!--  explicitly included AND has content (an included-but-empty section printed a heading over nothing).-->
+<!--  Never re-derive that here as q.<x>.included — a second copy of the rule is a second copy to drift.-->
+<!--  Anything OUTSIDE a section that quotes section data (the at-a-glance rows below) must carry the-->
+<!--  same guard, or the document advertises a service it never details.-->
+
+<!--  RENDERER RULES (OpenPDF / Flying Saucer, TemplateMode.XML) — the constraints this design lives in:-->
+<!--    • Well-formed XML: every tag closed. One bare <br> fails the ENTIRE render.-->
+<!--    • CSS 2.1: no flexbox, no grid, no gradients, no @import. Tables and floats only.-->
+<!--      border-radius and page-break-inside:avoid ARE honoured.-->
+<!--    • Fonts: 'ModernSans' = embedded DejaVu Sans, registered ONLY for Modern renders — it carries a-->
+<!--      real ₹ (U+20B9) and ✓/★ glyphs, which is why this design can price in ₹ where Classic prints-->
+<!--      "Rs.". Display face = base-14 'Times New Roman' (no registration needed). Nothing else resolves.-->
+<!--    • Images: user-supplied URLs are th:if-guarded and sized via the Cloudinary c_fill transform-->
+<!--      because object-fit does not exist here. travelBgUrl is a bundled fallback extracted by the PDF-->
+<!--      service, so Modern still has cover art when q.coverImageUrl is blank.-->
+<!--    • body background paints on EVERY page — that is what keeps the warm paper tone under content-->
+<!--      that flows onto auto-created pages.-->
+<!--&ndash;&gt;-->
+<!--<html xmlns:th="http://www.thymeleaf.org">-->
+<!--<head>-->
+<!--<style th:inline="none">-->
+<!--  /* Body pages carry a slim running footer in a 13mm bottom margin; the cover is a named-->
+<!--     page with zero margins and an empty margin box, so it stays footer-free (Classic's-->
+<!--     @page cover suppression mechanism). counter(page)/counter(pages) resolve inside the-->
+<!--     running element via the :before rules below — the documented Flying Saucer recipe. */-->
+<!--  @page { size: A4; margin: 0 0 13mm 0;-->
+<!--          @bottom-center { content: element(pageFooter); } }-->
+<!--  @page cover { size: A4; margin: 0;-->
+<!--                @bottom-center { content: ""; } }-->
+
+<!--  body {-->
+<!--    margin: 0; padding: 0;-->
+<!--    background: #faf7f1;                       /* warm paper — repeats on every page */-->
+<!--    font-family: 'ModernSans', Helvetica, Arial, sans-serif;-->
+<!--    font-size: 10px; color: #262a33; line-height: 1.55;-->
+<!--  }-->
+<!--  .serif { font-family: 'Times New Roman', Georgia, serif; }-->
+
+<!--  /* ── Cover ─────────────────────────────────────────────────────────────── */-->
+<!--  .cover      { page: cover; width: 100%; height: 297mm; background: #10182a; page-break-after: always; }-->
+<!--  .cover-in   { padding: 20mm 18mm 16mm 18mm; }-->
+<!--  .brandline  { color: #c9a468; font-size: 10.5px; letter-spacing: 4px; text-transform: uppercase; }-->
+<!--  .tagline    { color: #7e8798; font-size: 9px; letter-spacing: 1.5px; margin-top: 2mm; }-->
+<!--  .kick-rule  { width: 16mm; height: 0.7mm; font-size: 0; line-height: 0; background: #b08d57; margin-top: 24mm; }-->
+<!--  .kicker     { color: #c9a468; font-size: 9px; letter-spacing: 5px; text-transform: uppercase; margin-top: 3mm; }-->
+<!--  .cover-title{ color: #f6f1e7; font-size: 34px; line-height: 1.18; margin-top: 5mm; font-weight: bold; }-->
+<!--  .cover-dest { color: #aeb6c4; font-size: 12.5px; margin-top: 4mm; letter-spacing: 0.5px; }-->
+<!--  .cover-rule { border-bottom: 1px solid #2c3752; margin-top: 8mm; }-->
+<!--  .cover-img-frame { margin-top: 10mm; border: 1px solid #33405e; border-radius: 12px;-->
+<!--                     padding: 2.5mm; background: #16203a; page-break-inside: avoid; }-->
+<!--  .cover-img  { width: 100%; height: 78mm; border-radius: 8px; }-->
+<!--  /* imageless-cover fallback: keeps the vertical rhythm the photo frame would occupy */-->
+<!--  .cover-orn  { margin-top: 10mm; border: 1px solid #33405e; border-radius: 12px;-->
+<!--                background: #16203a; text-align: center; padding: 26mm 10mm;-->
+<!--                page-break-inside: avoid; }-->
+<!--  .orn-stars  { font-family: 'StarFont'; color: #c9a468; font-size: 11px; letter-spacing: 7px; }-->
+<!--  .orn-line   { font-family: 'Times New Roman', Georgia, serif; font-style: italic;-->
+<!--                color: #aeb6c4; font-size: 14.5px; margin-top: 5mm; }-->
+<!--  .orn-rule   { width: 22mm; height: 1px; font-size: 0; line-height: 0; background: #33405e;-->
+<!--                margin: 6mm auto 0 auto; }-->
+<!--  .cover-meta { width: 100%; margin-top: 12mm; border-top: 1px solid #2c3752; }-->
+<!--  .cover-meta td { padding: 6mm 4mm 0 0; vertical-align: top; width: 25%; }-->
+<!--  .m-label    { color: #7e8798; font-size: 8px; letter-spacing: 2.5px; text-transform: uppercase; }-->
+<!--  .m-value    { color: #f6f1e7; font-size: 12px; margin-top: 1.5mm; }-->
+<!--  .cover-foot { color: #7e8798; font-size: 8.5px; letter-spacing: 1px; margin-top: 14mm; }-->
+
+<!--  /* ── Flowing pages ─────────────────────────────────────────────────────── */-->
+<!--  .page-body  { padding: 14mm 16mm 8mm 16mm; }-->
+<!--  .section    { margin-top: 10mm; page-break-inside: auto; }-->
+<!--  .keep       { page-break-inside: avoid; }-->
+<!--  .sec-kick   { color: #b08d57; font-size: 8.5px; letter-spacing: 4px; text-transform: uppercase; }-->
+<!--  .sec-title  { font-size: 19px; color: #10182a; margin-top: 1.5mm; font-weight: bold; }-->
+<!--  /* section header row: kicker+title left, bronze component figure right */-->
+<!--  .sec-head   { width: 100%; page-break-inside: avoid; page-break-after: avoid; }-->
+<!--  .sec-head td{ padding: 0; vertical-align: bottom; }-->
+<!--  .sec-head td.amt { text-align: right; width: 36mm; }-->
+<!--  .amt-lab    { color: #9aa1ad; font-size: 7px; letter-spacing: 2px; text-transform: uppercase; }-->
+<!--  .amt-val    { color: #b08d57; font-size: 12.5px; font-weight: bold; margin-top: 0.8mm; }-->
+<!--  /* the rupee sign lives ONLY in ModernSans (DejaVu); base-14 Times has no U+20B9,-->
+<!--     so serif-set amounts must carry the sign in this span or it silently vanishes */-->
+<!--  .rup        { font-family: 'ModernSans', Helvetica, Arial, sans-serif; }-->
+<!--  .grand-val .rup { font-size: 21px; }-->
+
+<!--  .card { background: #ffffff; border: 1px solid #e9e1d2; border-radius: 10px;-->
+<!--          padding: 5mm; margin-top: 4mm; page-break-inside: avoid; }-->
+
+<!--  .chip { display: inline-block; border: 1px solid #e4d9c3; border-radius: 8px;-->
+<!--          padding: 1px 6px; margin: 0 1mm 1mm 0; font-size: 8px; color: #8a6d3b;-->
+<!--          background: #fbf6ea; letter-spacing: 0.8px; text-transform: uppercase; }-->
+
+<!--  .hair { border-bottom: 1px solid #eee5d4; margin: 3mm 0; }-->
+
+<!--  /* overview strip */-->
+<!--  .glance td { padding: 3mm 5mm; border-right: 1px solid #eee5d4; vertical-align: top; }-->
+<!--  .glance td.last { border-right: none; }-->
+<!--  .glance td.glance-route { border-top: 1px solid #eee5d4; border-right: none; }-->
+
+<!--  /* flights */-->
+<!--  .route      { font-size: 16px; color: #10182a; font-weight: bold; }-->
+<!--  .route-arrow{ color: #b08d57; }-->
+<!--  .leg td     { padding: 1.2mm 4mm 1.2mm 0; font-size: 9.5px; color: #4b5563; vertical-align: top; }-->
+<!--  .leg .lab   { color: #9aa1ad; font-size: 8px; letter-spacing: 1.5px; text-transform: uppercase; }-->
+
+<!--  /* hotels */-->
+<!--  .stars      { font-family: 'StarFont'; color: #c9a468; font-size: 10px; letter-spacing: 2px; }-->
+<!--  .h-img      { width: 44mm; height: 30mm; border-radius: 8px; }-->
+
+<!--  /* itinerary timeline — a day row never splits mid-activity */-->
+<!--  .tl         { width: 100%; }-->
+<!--  .tl tr      { page-break-inside: avoid; }-->
+<!--  .tl-act     { page-break-inside: avoid; }-->
+<!--  .meal-lab   { color: #9aa1ad; font-size: 7px; letter-spacing: 2px; text-transform: uppercase;-->
+<!--                margin-right: 1mm; }-->
+<!--  .tl td.daycol { width: 17mm; vertical-align: top; padding-top: 1mm; }-->
+<!--  .day-no     { font-family: 'Times New Roman', Georgia, serif; font-size: 24px; color: #b08d57; font-weight: bold; }-->
+<!--  .day-date   { font-size: 8px; color: #9aa1ad; letter-spacing: 1px; margin-top: 1mm; }-->
+<!--  .tl td.bodycol { border-left: 2px solid #e5dac4; padding: 0 0 7mm 6mm; vertical-align: top; }-->
+<!--  .act-name   { font-family: 'Times New Roman', Georgia, serif; font-size: 13.5px; color: #10182a; font-weight: bold; }-->
+<!--  .act-meta   { color: #8a6d3b; font-size: 8.5px; letter-spacing: 1px; margin-top: 1mm; text-transform: uppercase; }-->
+<!--  .act-desc   { color: #4b5563; font-size: 9.5px; margin-top: 1.5mm; }-->
+<!--  .act-img    { width: 38mm; height: 26mm; border-radius: 8px; margin-top: 2mm; }-->
+
+<!--  /* pricing */-->
+<!--  .price-tbl  { width: 100%; }-->
+<!--  .price-tbl td { padding: 2.2mm 0; font-size: 10.5px; color: #4b5563;-->
+<!--                  border-bottom: 1px solid #eee5d4; }-->
+<!--  .price-tbl td.num { text-align: right; color: #10182a; }-->
+<!--  .grand { background: #10182a; border-radius: 10px; padding: 6mm; margin-top: 4mm;-->
+<!--           page-break-inside: avoid; }-->
+<!--  .grand-lab { color: #c9a468; font-size: 8.5px; letter-spacing: 4px; text-transform: uppercase; }-->
+<!--  .grand-val { font-family: 'Times New Roman', Georgia, serif; color: #f6f1e7; font-size: 26px;-->
+<!--               font-weight: bold; margin-top: 1.5mm; }-->
+<!--  .grand-sub { color: #aeb6c4; font-size: 9px; margin-top: 1.5mm; }-->
+<!--  .price-note{ color: #9aa1ad; font-size: 7.5px; letter-spacing: 0.8px; margin-top: 3mm; }-->
+
+<!--  /* inclusions/exclusions */-->
+<!--  .ie td { width: 50%; vertical-align: top; padding-right: 6mm; }-->
+<!--  .ie-item { font-size: 9.5px; color: #4b5563; padding: 1.2mm 0; }-->
+<!--  .tick { color: #7a934d; } .cross { color: #b3552f; }-->
+
+<!--  .pol-li { font-size: 9.5px; color: #4b5563; padding: 1mm 0; }-->
+
+<!--  .thanks { background: #10182a; border-radius: 12px; padding: 8mm; margin-top: 10mm;-->
+<!--            page-break-inside: avoid; }-->
+<!--  .thanks-t { font-family: 'Times New Roman', Georgia, serif; color: #f6f1e7; font-size: 19px; font-weight: bold; }-->
+<!--  .thanks-c { color: #aeb6c4; font-size: 9.5px; margin-top: 2.5mm; line-height: 1.7; }-->
+<!--  .foot-note { color: #9aa1ad; font-size: 8px; margin-top: 4mm; letter-spacing: 0.5px; }-->
+
+<!--  /* running page footer — body pages only (suppressed on the cover via @page cover) */-->
+<!--  .page-foot  { position: running(pageFooter); width: 210mm; }-->
+<!--  .pf-pad     { padding: 2.5mm 16mm 0 16mm; }-->
+<!--  .pf-tbl     { width: 100%; border-top: 1px solid #e5dac4; }-->
+<!--  .pf-tbl td  { padding-top: 2.4mm; font-size: 7.5px; color: #9aa1ad;-->
+<!--                letter-spacing: 1.8px; text-transform: uppercase; }-->
+<!--  .pf-tbl td.pfr { text-align: right; }-->
+<!--  /* one generated-content sequence so the digits can never paint out of order */-->
+<!--  .pageno:before  { content: "Page " counter(page) " of " counter(pages); }-->
+<!--</style>-->
+<!--</head>-->
+<!--<body>-->
+
+<!--&lt;!&ndash; running footer source — position:running() lifts it out of flow; it renders in the-->
+<!--     @bottom-center margin box of every body page (never the cover) &ndash;&gt;-->
+<!--<div class="page-foot"><div class="pf-pad">-->
+<!--  <table class="pf-tbl"><tr>-->
+<!--    <td th:text="${companyName}">MyTripSafar</td>-->
+<!--    <td class="pfr"><span class="pageno"></span></td>-->
+<!--  </tr></table>-->
+<!--</div></div>-->
+
+<!--&lt;!&ndash; ═══════════════ COVER ═══════════════ &ndash;&gt;-->
+<!--<div class="cover"><div class="cover-in">-->
+
+<!--  <div>-->
+<!--    <img th:if="${!#strings.isEmpty(companyLogoUrl)}" th:src="${companyLogoUrl}"-->
+<!--         style="height:11mm;" alt="logo"/>-->
+<!--    <div th:if="${#strings.isEmpty(companyLogoUrl)}" class="brandline serif"-->
+<!--         th:text="${companyName}">MyTripSafar</div>-->
+<!--    <div class="tagline" th:text="${companyTagline}">Your Journey, Our Passion</div>-->
+<!--  </div>-->
+
+<!--  <div class="kick-rule" th:style="'background-color:' + ${brandColor} + ';'"></div>-->
+<!--  <div class="kicker">Travel Proposal</div>-->
+<!--  <div class="cover-title serif" th:text="${q.title}">Nepal Family Getaway</div>-->
+<!--  <div class="cover-dest" th:if="${customer != null and customer.destination != null}"-->
+<!--       th:text="${customer.destination}">Pokhara &amp; Kathmandu</div>-->
+<!--  <div class="cover-rule"></div>-->
+
+<!--  <div class="cover-img-frame" th:if="${!#strings.isEmpty(q.coverImageUrl) or !#strings.isEmpty(travelBgUrl)}">-->
+<!--    <img class="cover-img"-->
+<!--         th:src="${!#strings.isEmpty(q.coverImageUrl)-->
+<!--                  ? (#strings.contains(q.coverImageUrl,'/upload/')-->
+<!--                     ? #strings.replace(q.coverImageUrl,'/upload/','/upload/c_fill,w_1000,h_460,g_auto,f_jpg/')-->
+<!--                     : q.coverImageUrl)-->
+<!--                  : travelBgUrl}" alt="cover"/>-->
+<!--  </div>-->
+
+<!--  &lt;!&ndash; no usable cover art: a quiet serif ornament holds the frame's place in the rhythm &ndash;&gt;-->
+<!--  <div class="cover-orn" th:if="${#strings.isEmpty(q.coverImageUrl) and #strings.isEmpty(travelBgUrl)}">-->
+<!--    <div class="orn-stars">&#9733; &#160; &#9733; &#160; &#9733;</div>-->
+<!--    <div class="orn-line">A journey composed in every detail</div>-->
+<!--    <div class="orn-rule"></div>-->
+<!--  </div>-->
+
+<!--  <table class="cover-meta"><tr>-->
+<!--    <td th:if="${customer != null and customer.name != null}">-->
+<!--      <div class="m-label">Prepared for</div>-->
+<!--      <div class="m-value serif" th:text="${customer.name}">Asha Rao</div>-->
+<!--    </td>-->
+<!--    <td th:if="${customer != null and customer.travelDate != null}">-->
+<!--      <div class="m-label">Travel date</div>-->
+<!--      <div class="m-value serif" th:text="${fmt.date(customer.travelDate)}">15 Aug 2026</div>-->
+<!--    </td>-->
+<!--    <td th:if="${customer != null}">-->
+<!--      <div class="m-label">Travellers</div>-->
+<!--      <div class="m-value serif"-->
+<!--           th:text="${fmt.travellers(customer.adults, customer.children, customer.infants)}">2 Adults</div>-->
+<!--    </td>-->
+<!--    <td th:if="${q.quoteNo != null}">-->
+<!--      <div class="m-label">Quote No.</div>-->
+<!--      <div class="m-value serif" th:text="${'#' + q.quoteNo}">#1042</div>-->
+<!--    </td>-->
+<!--  </tr></table>-->
+
+<!--  <div class="cover-foot">-->
+<!--    <span th:if="${companyYearsExperience != null}"-->
+<!--          th:text="${companyYearsExperience + ' years of crafting journeys'}">12 years</span>-->
+<!--    <span th:if="${companyYearsExperience != null and companyGoogleReviews != null}"> &#183; </span>-->
+<!--    <span th:if="${companyGoogleReviews != null}"-->
+<!--          th:text="${companyGoogleReviews + ' Google reviews'}">400 reviews</span>-->
+<!--    <span th:if="${generatedOn != null}"-->
+<!--          th:text="${' &#183; Prepared on ' + fmt.date(generatedOn)}"> · Prepared on</span>-->
+<!--  </div>-->
+
+<!--</div></div>-->
+
+<!--&lt;!&ndash; ═══════════════ BODY ═══════════════ &ndash;&gt;-->
+<!--<div class="page-body">-->
+
+<!--  &lt;!&ndash; at a glance &ndash;&gt;-->
+<!--  <div class="card" style="padding:0;">-->
+<!--    <table class="glance" style="width:100%;"><tr>-->
+<!--      <td th:if="${customer != null and customer.destination != null}">-->
+<!--        <div class="m-label" style="color:#9aa1ad;">Destination</div>-->
+<!--        <div class="serif" style="font-size:12px; margin-top:1mm;" th:text="${customer.destination}">Nepal</div>-->
+<!--      </td>-->
+<!--      <td>-->
+<!--        <div class="m-label" style="color:#9aa1ad;">Duration</div>-->
+<!--        <div class="serif" style="font-size:12px; margin-top:1mm;"-->
+<!--             th:text="${(q.nights != null ? q.nights + ' Nights' : '') + (q.days != null ? ' / ' + q.days + ' Days' : '')}">2N / 3D</div>-->
+<!--      </td>-->
+<!--      &lt;!&ndash; q.rooms sums every hotel row regardless of hotelIncluded (mapper computeRooms), so without-->
+<!--           the section guard a quotation with no hotel section still announces a room count. &ndash;&gt;-->
+<!--      <td th:if="${q.rooms != null and #lists.contains(sectionOrder,'hotel')}">-->
+<!--        <div class="m-label" style="color:#9aa1ad;">Rooms</div>-->
+<!--        <div class="serif" style="font-size:12px; margin-top:1mm;" th:text="${q.rooms}">2</div>-->
+<!--      </td>-->
+<!--      <td class="last" th:if="${totals != null and totals.grandTotal != null}">-->
+<!--        <div class="m-label" style="color:#9aa1ad;">Package total</div>-->
+<!--        <div class="serif" style="font-size:12px; margin-top:1mm;"><span-->
+<!--             class="rup">&#8377;</span><span-->
+<!--             th:text="${#strings.replace(fmt.inr(totals.grandTotal),'Rs.','')}"> 97,650</span></div>-->
+<!--      </td>-->
+<!--    </tr>-->
+<!--    &lt;!&ndash; Routing is flight-section data: it must disappear with the section, not merely with the flag. &ndash;&gt;-->
+<!--    <tr th:if="${q.flight != null and q.flight.journey != null and #lists.contains(sectionOrder,'flight')}">-->
+<!--      <td colspan="4" class="glance-route">-->
+<!--        <div class="m-label" style="color:#9aa1ad;">Flight routing</div>-->
+<!--        <div style="font-size:10.5px; color:#4b5563; margin-top:1mm;"-->
+<!--             th:text="${q.flight.journey}">GOP &#8594; KTM &#8594; GOP</div>-->
+<!--      </td>-->
+<!--    </tr></table>-->
+<!--  </div>-->
+
+<!--  &lt;!&ndash; FLIGHTS &ndash;&gt;-->
+<!--  <div class="section" th:if="${#lists.contains(sectionOrder,'flight')}">-->
+<!--    <table class="sec-head"><tr>-->
+<!--      <td>-->
+<!--        <div class="sec-kick">Getting there</div>-->
+<!--        <div class="sec-title serif" th:text="${fmt.orElse(q.flight.title,'Flights')}">Flights</div>-->
+<!--      </td>-->
+<!--      <td class="amt" th:if="${q.flight.amount != null and q.flight.amount.signum() != 0}">-->
+<!--        <div class="amt-lab">Section total</div>-->
+<!--        <div class="amt-val" th:text="${#strings.replace(fmt.inr(q.flight.amount),'Rs.','&#8377;')}">&#8377; 48,000</div>-->
+<!--      </td>-->
+<!--    </tr></table>-->
+
+<!--    <div class="card" th:each="seg : ${q.flight.segments}">-->
+<!--      <div class="route">-->
+<!--        <span th:text="${seg.from}">GOP</span>-->
+<!--        <span class="route-arrow"> &#8594; </span>-->
+<!--        <span th:text="${seg.to}">KTM</span>-->
+<!--      </div>-->
+<!--      <div style="margin-top:1.5mm;">-->
+<!--        <span class="chip" th:if="${seg.airline != null}" th:text="${seg.airline}">Buddha Air</span>-->
+<!--        <span class="chip" th:if="${seg.flightNo != null}" th:text="${seg.flightNo}">U4-608</span>-->
+<!--        <span class="chip" th:if="${seg.travelClass != null}" th:text="${seg.travelClass}">Economy</span>-->
+<!--      </div>-->
+<!--      <div class="hair"></div>-->
+<!--      <table style="width:100%;"><tr class="leg">-->
+<!--        <td><div class="lab">Departs</div>-->
+<!--            <div th:text="${(seg.depDate != null ? seg.depDate : '') + (seg.depTime != null ? ' &#183; ' + seg.depTime : '')}">15 Aug · 10:20</div></td>-->
+<!--        <td><div class="lab">Arrives</div>-->
+<!--            <div th:text="${(seg.arrDate != null ? seg.arrDate : '') + (seg.arrTime != null ? ' &#183; ' + seg.arrTime : '')}">15 Aug · 11:35</div></td>-->
+<!--        <td th:if="${seg.duration != null}"><div class="lab">Duration</div><div th:text="${seg.duration}">1h 15m</div></td>-->
+<!--        <td th:if="${seg.cabin != null or seg.checkin != null}">-->
+<!--          <div class="lab">Baggage</div>-->
+<!--          <div th:text="${(seg.cabin != null ? seg.cabin + 'kg cabin' : '') + (seg.cabin != null and seg.checkin != null ? ' + ' : '') + (seg.checkin != null ? seg.checkin + 'kg check-in' : '')}">7 + 20kg</div>-->
+<!--        </td>-->
+<!--      </tr></table>-->
+<!--      <div th:if="${seg.connections != null and !#lists.isEmpty(seg.connections)}" style="margin-top:2mm;">-->
+<!--        <div class="lab" style="color:#9aa1ad; font-size:8px; letter-spacing:1.5px;">VIA</div>-->
+<!--        <div class="act-desc" th:each="con : ${seg.connections}"-->
+<!--             th:text="${(con.airline != null ? con.airline + ' ' : '') + (con.flightNo != null ? con.flightNo + ' ' : '') + (con.from != null ? con.from : '') + ' &#8594; ' + (con.to != null ? con.to : '')}">via</div>-->
+<!--      </div>-->
+<!--    </div>-->
+<!--  </div>-->
+
+<!--  &lt;!&ndash; HOTELS &ndash;&gt;-->
+<!--  <div class="section" th:if="${#lists.contains(sectionOrder,'hotel')}">-->
+<!--    <table class="sec-head"><tr>-->
+<!--      <td>-->
+<!--        <div class="sec-kick">Your stay</div>-->
+<!--        <div class="sec-title serif" th:text="${fmt.orElse(q.hotel.title,'Hotels')}">Hotels</div>-->
+<!--      </td>-->
+<!--      <td class="amt" th:if="${q.hotel.amount != null and q.hotel.amount.signum() != 0}">-->
+<!--        <div class="amt-lab">Section total</div>-->
+<!--        <div class="amt-val" th:text="${#strings.replace(fmt.inr(q.hotel.amount),'Rs.','&#8377;')}">&#8377; 36,000</div>-->
+<!--      </td>-->
+<!--    </tr></table>-->
+
+<!--    <div class="card" th:each="h : ${q.hotel.hotels}">-->
+<!--      <table style="width:100%;"><tr>-->
+<!--        <td style="vertical-align:top;">-->
+<!--          <div class="act-name" th:text="${h.name}">Temple Tree Resort</div>-->
+<!--          <div class="stars" th:if="${h.stars != null}"-->
+<!--               th:text="${#strings.repeat('&#9733;', h.stars)}">★★★★</div>-->
+<!--          <div class="act-meta" th:if="${h.city != null}" th:text="${h.city}">Pokhara</div>-->
+<!--          <div style="margin-top:2mm;">-->
+<!--            <span class="chip" th:if="${h.roomType != null}" th:text="${h.roomType}">Deluxe</span>-->
+<!--            <span class="chip" th:if="${h.mealPlan != null}" th:text="${h.mealPlan}">Breakfast</span>-->
+<!--            <span class="chip" th:if="${h.refundable == null or h.refundable}">Refundable</span>-->
+<!--            <span class="chip" th:if="${h.refundable != null and !h.refundable}"-->
+<!--                  style="color:#b3552f; border-color:#ecd5c9; background:#fdf3ee;">Non-refundable</span>-->
+<!--          </div>-->
+<!--          <div class="act-desc"-->
+<!--               th:text="${(h.checkIn != null ? 'Check-in ' + h.checkIn : '') + (h.checkOut != null ? ' &#183; Check-out ' + h.checkOut : '') + (h.rooms != null ? ' &#183; ' + h.rooms + ' room(s)' : '')}">dates</div>-->
+<!--        </td>-->
+<!--        <td style="width:46mm; text-align:right; vertical-align:top;" th:if="${!#strings.isEmpty(h.imagePath)}">-->
+<!--          <img class="h-img" th:src="${#strings.replace(h.imagePath,'/upload/','/upload/c_fill,w_425,h_290,g_auto,f_jpg/')}" alt="hotel"/>-->
+<!--        </td>-->
+<!--      </tr></table>-->
+<!--    </div>-->
+<!--  </div>-->
+
+<!--  &lt;!&ndash; ITINERARY TIMELINE &ndash;&gt;-->
+<!--  <div class="section" th:if="${#lists.contains(sectionOrder,'sightseeing')}">-->
+<!--    <table class="sec-head"><tr>-->
+<!--      <td>-->
+<!--        <div class="sec-kick">Day by day</div>-->
+<!--        <div class="sec-title serif" th:text="${fmt.orElse(q.sightseeing.title,'Your Itinerary')}">Your Itinerary</div>-->
+<!--      </td>-->
+<!--      <td class="amt" th:if="${q.sightseeing.amount != null and q.sightseeing.amount.signum() != 0}">-->
+<!--        <div class="amt-lab">Section total</div>-->
+<!--        <div class="amt-val" th:text="${#strings.replace(fmt.inr(q.sightseeing.amount),'Rs.','&#8377;')}">&#8377; 14,000</div>-->
+<!--      </td>-->
+<!--    </tr></table>-->
+
+<!--    <table class="tl" style="margin-top:4mm;">-->
+<!--      <tr th:each="day : ${q.sightseeing.days}">-->
+<!--        <td class="daycol">-->
+<!--          <div class="day-no" th:text="${day.day != null and day.day &lt; 10 ? '0' + day.day : day.day}">01</div>-->
+<!--          <div class="day-date" th:if="${!#strings.isEmpty(day.date)}" th:text="${day.date}">15 Aug</div>-->
+<!--        </td>-->
+<!--        <td class="bodycol">-->
+<!--          <div class="tl-act" th:each="act, actStat : ${day.activities}" th:style="${actStat.index > 0} ? 'margin-top:4mm;' : ''">-->
+<!--            <div class="act-name" th:text="${act.attraction}">Phewa Lake</div>-->
+<!--            <div class="act-meta"-->
+<!--                 th:text="${(act.startTime != null ? act.startTime : '') + (act.startTime != null and act.transfer != null ? ' &#183; ' : '') + (act.transfer != null ? act.transfer : '')}">15:00 · Private car</div>-->
+<!--            <div class="act-desc" th:if="${!#strings.isEmpty(act.description)}"-->
+<!--                 th:text="${fmt.plain(act.description)}">Sunset boat ride.</div>-->
+<!--            <div style="margin-top:1.5mm;" th:if="${!#lists.isEmpty(act.meals)}">-->
+<!--              <span class="meal-lab">Meals</span><span class="chip" th:each="m : ${act.meals}" th:text="${m}">Dinner</span>-->
+<!--            </div>-->
+<!--            <img class="act-img" th:if="${!#strings.isEmpty(act.imagePath)}"-->
+<!--                 th:src="${#strings.replace(act.imagePath,'/upload/','/upload/c_fill,w_380,h_260,g_auto,f_jpg/')}" alt=""/>-->
+<!--          </div>-->
+<!--        </td>-->
+<!--      </tr>-->
+<!--    </table>-->
+<!--  </div>-->
+
+<!--  &lt;!&ndash; CRUISE &ndash;&gt;-->
+<!--  <div class="section" th:if="${#lists.contains(sectionOrder,'cruise')}">-->
+<!--    <table class="sec-head"><tr>-->
+<!--      <td>-->
+<!--        <div class="sec-kick">On the water</div>-->
+<!--        <div class="sec-title serif" th:text="${fmt.orElse(q.cruise.title,'Cruise')}">Cruise</div>-->
+<!--      </td>-->
+<!--      <td class="amt" th:if="${q.cruise.amount != null and q.cruise.amount.signum() != 0}">-->
+<!--        <div class="amt-lab">Section total</div>-->
+<!--        <div class="amt-val" th:text="${#strings.replace(fmt.inr(q.cruise.amount),'Rs.','&#8377;')}">&#8377; 20,000</div>-->
+<!--      </td>-->
+<!--    </tr></table>-->
+<!--    <div class="card" th:each="c : ${q.cruise.cruises}">-->
+<!--      <div class="act-name" th:text="${c.name}">Cruise</div>-->
+<!--      <div class="act-meta"-->
+<!--           th:text="${(c.type != null ? c.type : '') + (c.cabin != null ? ' &#183; ' + c.cabin : '') + (c.nights != null ? ' &#183; ' + c.nights + ' nights' : '')}">type</div>-->
+<!--      <div class="act-desc"-->
+<!--           th:text="${(c.depPort != null ? c.depPort : '') + ' &#8594; ' + (c.arrPort != null ? c.arrPort : '') + (c.depDate != null ? ' &#183; sails ' + c.depDate : '')}">route</div>-->
+<!--    </div>-->
+<!--  </div>-->
+
+<!--  &lt;!&ndash; VEHICLES &ndash;&gt;-->
+<!--  <div class="section" th:if="${#lists.contains(sectionOrder,'vehicle')}">-->
+<!--    <table class="sec-head"><tr>-->
+<!--      <td>-->
+<!--        <div class="sec-kick">On the road</div>-->
+<!--        <div class="sec-title serif" th:text="${fmt.orElse(q.vehicle.title,'Transfers')}">Transfers</div>-->
+<!--      </td>-->
+<!--      <td class="amt" th:if="${q.vehicle.amount != null and q.vehicle.amount.signum() != 0}">-->
+<!--        <div class="amt-lab">Section total</div>-->
+<!--        <div class="amt-val" th:text="${#strings.replace(fmt.inr(q.vehicle.amount),'Rs.','&#8377;')}">&#8377; 8,000</div>-->
+<!--      </td>-->
+<!--    </tr></table>-->
+<!--    <div class="card" th:each="v : ${q.vehicle.vehicles}">-->
+<!--      <div class="act-name" th:text="${v.type}">Private car</div>-->
+<!--      <div class="act-desc"-->
+<!--           th:text="${(v.pickup != null ? v.pickup : '') + ' &#8594; ' + (v.drop != null ? v.drop : '') + (v.startDate != null ? ' &#183; ' + v.startDate : '') + (v.endDate != null ? ' to ' + v.endDate : '')}">route</div>-->
+<!--      <div style="margin-top:1.5mm;" th:if="${v.qty != null}">-->
+<!--        <span class="chip" th:text="${v.qty + ' vehicle(s)'}">1</span>-->
+<!--      </div>-->
+<!--      <div class="act-desc" th:if="${!#strings.isEmpty(v.notes)}" th:text="${fmt.plain(v.notes)}">notes</div>-->
+<!--    </div>-->
+<!--  </div>-->
+
+<!--  &lt;!&ndash; ADD-ONS &ndash;&gt;-->
+<!--  <div class="section" th:if="${#lists.contains(sectionOrder,'addons')}">-->
+<!--    <table class="sec-head"><tr>-->
+<!--      <td>-->
+<!--        <div class="sec-kick">A little extra</div>-->
+<!--        <div class="sec-title serif" th:text="${fmt.orElse(q.addons.title,'Add-on Services')}">Add-ons</div>-->
+<!--      </td>-->
+<!--      <td class="amt" th:if="${q.addons.amount != null and q.addons.amount.signum() != 0}">-->
+<!--        <div class="amt-lab">Section total</div>-->
+<!--        <div class="amt-val" th:text="${#strings.replace(fmt.inr(q.addons.amount),'Rs.','&#8377;')}">&#8377; 5,000</div>-->
+<!--      </td>-->
+<!--    </tr></table>-->
+<!--    &lt;!&ndash; th:each ki precedence th:if se zyada hai, to th:if har item pe alag chalta hai — ek-->
+<!--         switched-off add-on line print nahi hogi. null == "included" (builder aise hi likhta hai). &ndash;&gt;-->
+<!--    <div class="card" th:each="a : ${q.addons.items}" th:if="${a.included == null or a.included}">-->
+<!--      <div class="act-name" th:text="${a.serviceType}">Service</div>-->
+<!--      <div class="act-desc" th:if="${!#strings.isEmpty(a.description)}" th:text="${fmt.plain(a.description)}">desc</div>-->
+<!--      <div style="margin-top:1.5mm;" th:if="${a.quantity != null}">-->
+<!--        <span class="chip" th:text="${'Qty ' + a.quantity}">Qty</span>-->
+<!--      </div>-->
+<!--    </div>-->
+<!--  </div>-->
+
+<!--  &lt;!&ndash; PRICING &ndash;&gt;-->
+<!--  <div class="section keep" th:if="${totals != null}">-->
+<!--    <div class="sec-kick">The investment</div>-->
+<!--    <div class="sec-title serif">Pricing Summary</div>-->
+
+<!--    <div class="card">-->
+<!--      <table class="price-tbl">-->
+<!--        <tr th:if="${totals.subtotal != null}">-->
+<!--          <td>Package subtotal</td>-->
+<!--          <td class="num" th:text="${#strings.replace(fmt.inr(totals.subtotal),'Rs.','&#8377;')}">₹ 98,000</td>-->
+<!--        </tr>-->
+<!--        <tr th:if="${totals.discountAmount != null and totals.discountAmount.signum() != 0}">-->
+<!--          <td>Discount</td>-->
+<!--          <td class="num" style="color:#7a934d; font-weight:bold;"-->
+<!--              th:text="${'&#8722; ' + #strings.replace(fmt.inr(totals.discountAmount),'Rs.','&#8377;')}">− ₹ 5,000</td>-->
+<!--        </tr>-->
+<!--        <tr th:if="${totals.taxAmount != null and totals.taxAmount.signum() != 0}">-->
+<!--          <td th:text="${totals.taxPercent != null ? 'Taxes (' + totals.taxPercent + '%)' : 'Taxes'}">Taxes (5%)</td>-->
+<!--          <td class="num" th:text="${#strings.replace(fmt.inr(totals.taxAmount),'Rs.','&#8377;')}">₹ 4,650</td>-->
+<!--        </tr>-->
+<!--      </table>-->
+
+<!--      <div class="grand">-->
+<!--        <div class="grand-lab">Grand Total</div>-->
+<!--        <div class="grand-val"><span class="rup">&#8377;</span><span-->
+<!--             th:text="${#strings.replace(fmt.inr(totals.grandTotal),'Rs.','')}"> 97,650</span></div>-->
+<!--        <div class="grand-sub"-->
+<!--             th:if="${totals.perAdult != null and customer != null and customer.adults != null}"-->
+<!--             th:text="${#strings.replace(fmt.inr(totals.perAdult),'Rs.','&#8377;') + ' per adult &#183; all taxes included'}">per adult</div>-->
+<!--      </div>-->
+<!--      <div class="price-note">All prices in Indian Rupees (&#8377;).</div>-->
+<!--    </div>-->
+<!--  </div>-->
+
+<!--  &lt;!&ndash; INCLUSIONS / EXCLUSIONS &ndash;&gt;-->
+<!--  <div class="section keep" th:if="${!#lists.isEmpty(q.inclusions) or !#lists.isEmpty(q.exclusions)}">-->
+<!--    <div class="sec-kick">The fine print, kindly</div>-->
+<!--    <div class="sec-title serif">What&#8217;s Included</div>-->
+<!--    <div class="card">-->
+<!--      <table class="ie"><tr>-->
+<!--        <td th:if="${!#lists.isEmpty(q.inclusions)}">-->
+<!--          <div class="ie-item" th:each="inc : ${q.inclusions}">-->
+<!--            <span class="tick">&#10003;</span> <span th:text="${inc}">inclusion</span>-->
+<!--          </div>-->
+<!--        </td>-->
+<!--        <td th:if="${!#lists.isEmpty(q.exclusions)}">-->
+<!--          <div class="ie-item" th:each="exc : ${q.exclusions}">-->
+<!--            <span class="cross">&#10007;</span> <span th:text="${exc}">exclusion</span>-->
+<!--          </div>-->
+<!--        </td>-->
+<!--      </tr></table>-->
+<!--    </div>-->
+<!--  </div>-->
+
+<!--  &lt;!&ndash; POLICIES &ndash;&gt;-->
+<!--  <div class="section"-->
+<!--       th:if="${!#lists.isEmpty(q.paymentPolicies) or !#lists.isEmpty(q.cancellationPolicies) or !#lists.isEmpty(q.bookingTerms)}">-->
+<!--    <div class="sec-kick">Good to know</div>-->
+<!--    <div class="sec-title serif">Policies &amp; Terms</div>-->
+<!--    <div class="card" th:if="${!#lists.isEmpty(q.paymentPolicies)}">-->
+<!--      <div class="sec-kick" style="letter-spacing:2px;">Payment</div>-->
+<!--      <div class="pol-li" th:each="p, ps : ${q.paymentPolicies}"-->
+<!--           th:text="${(ps.index + 1) + '. ' + p}">1. policy</div>-->
+<!--    </div>-->
+<!--    <div class="card" th:if="${!#lists.isEmpty(q.cancellationPolicies)}">-->
+<!--      <div class="sec-kick" style="letter-spacing:2px;">Cancellation</div>-->
+<!--      <div class="pol-li" th:each="p, ps : ${q.cancellationPolicies}"-->
+<!--           th:text="${(ps.index + 1) + '. ' + p}">1. policy</div>-->
+<!--    </div>-->
+<!--    <div class="card" th:if="${!#lists.isEmpty(q.bookingTerms)}">-->
+<!--      <div class="sec-kick" style="letter-spacing:2px;">Booking terms</div>-->
+<!--      <div class="pol-li" th:each="t, ts : ${q.bookingTerms}"-->
+<!--           th:text="${(ts.index + 1) + '. ' + t}">1. term</div>-->
+<!--    </div>-->
+<!--  </div>-->
+
+<!--  &lt;!&ndash; THANK YOU &ndash;&gt;-->
+<!--  <div class="thanks">-->
+<!--    <div class="thanks-t">We would love to craft this journey for you.</div>-->
+<!--    <div class="thanks-c">-->
+<!--      <span th:text="${companyName}">MyTripSafar</span>-->
+<!--      <span th:if="${!#strings.isEmpty(companyPhone)}" th:text="${' &#183; ' + companyPhone}"> · phone</span>-->
+<!--      <span th:if="${!#strings.isEmpty(companyEmail)}" th:text="${' &#183; ' + companyEmail}"> · email</span>-->
+<!--      <span th:if="${!#strings.isEmpty(companyWebsite)}" th:text="${' &#183; ' + companyWebsite}"> · web</span>-->
+<!--      <div th:if="${!#strings.isEmpty(companyAddress)}" th:text="${companyAddress}">address</div>-->
+<!--      <div th:if="${companyGst != null}" th:text="${'GSTIN: ' + companyGst}">gst</div>-->
+<!--    </div>-->
+<!--    <div class="foot-note"-->
+<!--         th:text="${'Quotation ' + (q.quoteNo != null ? '#' + q.quoteNo : '') + (q.version != null ? ' &#183; ' + q.version : '') + (generatedOn != null ? ' &#183; prepared on ' + fmt.date(generatedOn) : '') + ' &#183; valid subject to availability at confirmation.'}">meta</div>-->
+<!--  </div>-->
+
+<!--</div>-->
+<!--</body>-->
+<!--</html>-->
+
+
+
+
+
+
+
+
 <!DOCTYPE html>
 <!--
   MODERN quotation design — the premium editorial counterpart to pdf/quotation.html (Classic).
@@ -29,144 +601,144 @@
 -->
 <html xmlns:th="http://www.thymeleaf.org">
 <head>
-<style th:inline="none">
-  /* Body pages carry a slim running footer in a 13mm bottom margin; the cover is a named
-     page with zero margins and an empty margin box, so it stays footer-free (Classic's
-     @page cover suppression mechanism). counter(page)/counter(pages) resolve inside the
-     running element via the :before rules below — the documented Flying Saucer recipe. */
-  @page { size: A4; margin: 0 0 13mm 0;
-          @bottom-center { content: element(pageFooter); } }
-  @page cover { size: A4; margin: 0;
-                @bottom-center { content: ""; } }
+  <style th:inline="none">
+    /* Body pages carry a slim running footer in a 13mm bottom margin; the cover is a named
+       page with zero margins and an empty margin box, so it stays footer-free (Classic's
+       @page cover suppression mechanism). counter(page)/counter(pages) resolve inside the
+       running element via the :before rules below — the documented Flying Saucer recipe. */
+    @page { size: A4; margin: 0 0 13mm 0;
+      @bottom-center { content: element(pageFooter); } }
+    @page cover { size: A4; margin: 0;
+      @bottom-center { content: ""; } }
 
-  body {
-    margin: 0; padding: 0;
-    background: #faf7f1;                       /* warm paper — repeats on every page */
-    font-family: 'ModernSans', Helvetica, Arial, sans-serif;
-    font-size: 10px; color: #262a33; line-height: 1.55;
-  }
-  .serif { font-family: 'Times New Roman', Georgia, serif; }
+    body {
+      margin: 0; padding: 0;
+      background: #faf7f1;                       /* warm paper — repeats on every page */
+      font-family: 'ModernSans', Helvetica, Arial, sans-serif;
+      font-size: 10px; color: #262a33; line-height: 1.55;
+    }
+    .serif { font-family: 'Times New Roman', Georgia, serif; }
 
-  /* ── Cover ─────────────────────────────────────────────────────────────── */
-  .cover      { page: cover; width: 100%; height: 297mm; background: #10182a; page-break-after: always; }
-  .cover-in   { padding: 20mm 18mm 16mm 18mm; }
-  .brandline  { color: #c9a468; font-size: 10.5px; letter-spacing: 4px; text-transform: uppercase; }
-  .tagline    { color: #7e8798; font-size: 9px; letter-spacing: 1.5px; margin-top: 2mm; }
-  .kick-rule  { width: 16mm; height: 0.7mm; font-size: 0; line-height: 0; background: #b08d57; margin-top: 24mm; }
-  .kicker     { color: #c9a468; font-size: 9px; letter-spacing: 5px; text-transform: uppercase; margin-top: 3mm; }
-  .cover-title{ color: #f6f1e7; font-size: 34px; line-height: 1.18; margin-top: 5mm; font-weight: bold; }
-  .cover-dest { color: #aeb6c4; font-size: 12.5px; margin-top: 4mm; letter-spacing: 0.5px; }
-  .cover-rule { border-bottom: 1px solid #2c3752; margin-top: 8mm; }
-  .cover-img-frame { margin-top: 10mm; border: 1px solid #33405e; border-radius: 12px;
-                     padding: 2.5mm; background: #16203a; page-break-inside: avoid; }
-  .cover-img  { width: 100%; height: 78mm; border-radius: 8px; }
-  /* imageless-cover fallback: keeps the vertical rhythm the photo frame would occupy */
-  .cover-orn  { margin-top: 10mm; border: 1px solid #33405e; border-radius: 12px;
-                background: #16203a; text-align: center; padding: 26mm 10mm;
-                page-break-inside: avoid; }
-  .orn-stars  { font-family: 'StarFont'; color: #c9a468; font-size: 11px; letter-spacing: 7px; }
-  .orn-line   { font-family: 'Times New Roman', Georgia, serif; font-style: italic;
-                color: #aeb6c4; font-size: 14.5px; margin-top: 5mm; }
-  .orn-rule   { width: 22mm; height: 1px; font-size: 0; line-height: 0; background: #33405e;
-                margin: 6mm auto 0 auto; }
-  .cover-meta { width: 100%; margin-top: 12mm; border-top: 1px solid #2c3752; }
-  .cover-meta td { padding: 6mm 4mm 0 0; vertical-align: top; width: 25%; }
-  .m-label    { color: #7e8798; font-size: 8px; letter-spacing: 2.5px; text-transform: uppercase; }
-  .m-value    { color: #f6f1e7; font-size: 12px; margin-top: 1.5mm; }
-  .cover-foot { color: #7e8798; font-size: 8.5px; letter-spacing: 1px; margin-top: 14mm; }
+    /* ── Cover ─────────────────────────────────────────────────────────────── */
+    .cover      { page: cover; width: 100%; height: 297mm; background: #10182a; page-break-after: always; }
+    .cover-in   { padding: 20mm 18mm 16mm 18mm; }
+    .brandline  { color: #c9a468; font-size: 10.5px; letter-spacing: 4px; text-transform: uppercase; }
+    .tagline    { color: #7e8798; font-size: 9px; letter-spacing: 1.5px; margin-top: 2mm; }
+    .kick-rule  { width: 16mm; height: 0.7mm; font-size: 0; line-height: 0; background: #b08d57; margin-top: 24mm; }
+    .kicker     { color: #c9a468; font-size: 9px; letter-spacing: 5px; text-transform: uppercase; margin-top: 3mm; }
+    .cover-title{ color: #f6f1e7; font-size: 34px; line-height: 1.18; margin-top: 5mm; font-weight: bold; }
+    .cover-dest { color: #aeb6c4; font-size: 12.5px; margin-top: 4mm; letter-spacing: 0.5px; }
+    .cover-rule { border-bottom: 1px solid #2c3752; margin-top: 8mm; }
+    .cover-img-frame { margin-top: 10mm; border: 1px solid #33405e; border-radius: 12px;
+      padding: 2.5mm; background: #16203a; page-break-inside: avoid; }
+    .cover-img  { width: 100%; height: 78mm; border-radius: 8px; }
+    /* imageless-cover fallback: keeps the vertical rhythm the photo frame would occupy */
+    .cover-orn  { margin-top: 10mm; border: 1px solid #33405e; border-radius: 12px;
+      background: #16203a; text-align: center; padding: 26mm 10mm;
+      page-break-inside: avoid; }
+    .orn-stars  { font-family: 'StarFont'; color: #c9a468; font-size: 11px; letter-spacing: 7px; }
+    .orn-line   { font-family: 'Times New Roman', Georgia, serif; font-style: italic;
+      color: #aeb6c4; font-size: 14.5px; margin-top: 5mm; }
+    .orn-rule   { width: 22mm; height: 1px; font-size: 0; line-height: 0; background: #33405e;
+      margin: 6mm auto 0 auto; }
+    .cover-meta { width: 100%; margin-top: 12mm; border-top: 1px solid #2c3752; }
+    .cover-meta td { padding: 6mm 4mm 0 0; vertical-align: top; width: 25%; }
+    .m-label    { color: #7e8798; font-size: 8px; letter-spacing: 2.5px; text-transform: uppercase; }
+    .m-value    { color: #f6f1e7; font-size: 12px; margin-top: 1.5mm; }
+    .cover-foot { color: #7e8798; font-size: 8.5px; letter-spacing: 1px; margin-top: 14mm; }
 
-  /* ── Flowing pages ─────────────────────────────────────────────────────── */
-  .page-body  { padding: 14mm 16mm 8mm 16mm; }
-  .section    { margin-top: 10mm; page-break-inside: auto; }
-  .keep       { page-break-inside: avoid; }
-  .sec-kick   { color: #b08d57; font-size: 8.5px; letter-spacing: 4px; text-transform: uppercase; }
-  .sec-title  { font-size: 19px; color: #10182a; margin-top: 1.5mm; font-weight: bold; }
-  /* section header row: kicker+title left, bronze component figure right */
-  .sec-head   { width: 100%; page-break-inside: avoid; page-break-after: avoid; }
-  .sec-head td{ padding: 0; vertical-align: bottom; }
-  .sec-head td.amt { text-align: right; width: 36mm; }
-  .amt-lab    { color: #9aa1ad; font-size: 7px; letter-spacing: 2px; text-transform: uppercase; }
-  .amt-val    { color: #b08d57; font-size: 12.5px; font-weight: bold; margin-top: 0.8mm; }
-  /* the rupee sign lives ONLY in ModernSans (DejaVu); base-14 Times has no U+20B9,
-     so serif-set amounts must carry the sign in this span or it silently vanishes */
-  .rup        { font-family: 'ModernSans', Helvetica, Arial, sans-serif; }
-  .grand-val .rup { font-size: 21px; }
+    /* ── Flowing pages ─────────────────────────────────────────────────────── */
+    .page-body  { padding: 14mm 16mm 8mm 16mm; }
+    .section    { margin-top: 10mm; page-break-inside: auto; }
+    .keep       { page-break-inside: avoid; }
+    .sec-kick   { color: #b08d57; font-size: 8.5px; letter-spacing: 4px; text-transform: uppercase; }
+    .sec-title  { font-size: 19px; color: #10182a; margin-top: 1.5mm; font-weight: bold; }
+    /* section header row: kicker+title left, bronze component figure right */
+    .sec-head   { width: 100%; page-break-inside: avoid; page-break-after: avoid; }
+    .sec-head td{ padding: 0; vertical-align: bottom; }
+    .sec-head td.amt { text-align: right; width: 36mm; }
+    .amt-lab    { color: #9aa1ad; font-size: 7px; letter-spacing: 2px; text-transform: uppercase; }
+    .amt-val    { color: #b08d57; font-size: 12.5px; font-weight: bold; margin-top: 0.8mm; }
+    /* the rupee sign lives ONLY in ModernSans (DejaVu); base-14 Times has no U+20B9,
+       so serif-set amounts must carry the sign in this span or it silently vanishes */
+    .rup        { font-family: 'ModernSans', Helvetica, Arial, sans-serif; }
+    .grand-val .rup { font-size: 21px; }
 
-  .card { background: #ffffff; border: 1px solid #e9e1d2; border-radius: 10px;
-          padding: 5mm; margin-top: 4mm; page-break-inside: avoid; }
+    .card { background: #ffffff; border: 1px solid #e9e1d2; border-radius: 10px;
+      padding: 5mm; margin-top: 4mm; page-break-inside: avoid; }
 
-  .chip { display: inline-block; border: 1px solid #e4d9c3; border-radius: 8px;
-          padding: 1px 6px; margin: 0 1mm 1mm 0; font-size: 8px; color: #8a6d3b;
-          background: #fbf6ea; letter-spacing: 0.8px; text-transform: uppercase; }
+    .chip { display: inline-block; border: 1px solid #e4d9c3; border-radius: 8px;
+      padding: 1px 6px; margin: 0 1mm 1mm 0; font-size: 8px; color: #8a6d3b;
+      background: #fbf6ea; letter-spacing: 0.8px; text-transform: uppercase; }
 
-  .hair { border-bottom: 1px solid #eee5d4; margin: 3mm 0; }
+    .hair { border-bottom: 1px solid #eee5d4; margin: 3mm 0; }
 
-  /* overview strip */
-  .glance td { padding: 3mm 5mm; border-right: 1px solid #eee5d4; vertical-align: top; }
-  .glance td.last { border-right: none; }
-  .glance td.glance-route { border-top: 1px solid #eee5d4; border-right: none; }
+    /* overview strip */
+    .glance td { padding: 3mm 5mm; border-right: 1px solid #eee5d4; vertical-align: top; }
+    .glance td.last { border-right: none; }
+    .glance td.glance-route { border-top: 1px solid #eee5d4; border-right: none; }
 
-  /* flights */
-  .route      { font-size: 16px; color: #10182a; font-weight: bold; }
-  .route-arrow{ color: #b08d57; }
-  .leg td     { padding: 1.2mm 4mm 1.2mm 0; font-size: 9.5px; color: #4b5563; vertical-align: top; }
-  .leg .lab   { color: #9aa1ad; font-size: 8px; letter-spacing: 1.5px; text-transform: uppercase; }
+    /* flights */
+    .route      { font-size: 16px; color: #10182a; font-weight: bold; }
+    .route-arrow{ color: #b08d57; }
+    .leg td     { padding: 1.2mm 4mm 1.2mm 0; font-size: 9.5px; color: #4b5563; vertical-align: top; }
+    .leg .lab   { color: #9aa1ad; font-size: 8px; letter-spacing: 1.5px; text-transform: uppercase; }
 
-  /* hotels */
-  .stars      { font-family: 'StarFont'; color: #c9a468; font-size: 10px; letter-spacing: 2px; }
-  .h-img      { width: 44mm; height: 30mm; border-radius: 8px; }
+    /* hotels */
+    .stars      { font-family: 'StarFont'; color: #c9a468; font-size: 10px; letter-spacing: 2px; }
+    .h-img      { width: 44mm; height: 30mm; border-radius: 8px; }
 
-  /* itinerary timeline — a day row never splits mid-activity */
-  .tl         { width: 100%; }
-  .tl tr      { page-break-inside: avoid; }
-  .tl-act     { page-break-inside: avoid; }
-  .meal-lab   { color: #9aa1ad; font-size: 7px; letter-spacing: 2px; text-transform: uppercase;
-                margin-right: 1mm; }
-  .tl td.daycol { width: 17mm; vertical-align: top; padding-top: 1mm; }
-  .day-no     { font-family: 'Times New Roman', Georgia, serif; font-size: 24px; color: #b08d57; font-weight: bold; }
-  .day-date   { font-size: 8px; color: #9aa1ad; letter-spacing: 1px; margin-top: 1mm; }
-  .tl td.bodycol { border-left: 2px solid #e5dac4; padding: 0 0 7mm 6mm; vertical-align: top; }
-  .act-name   { font-family: 'Times New Roman', Georgia, serif; font-size: 13.5px; color: #10182a; font-weight: bold; }
-  .act-meta   { color: #8a6d3b; font-size: 8.5px; letter-spacing: 1px; margin-top: 1mm; text-transform: uppercase; }
-  .act-desc   { color: #4b5563; font-size: 9.5px; margin-top: 1.5mm; }
-  .act-img    { width: 38mm; height: 26mm; border-radius: 8px; margin-top: 2mm; }
+    /* itinerary timeline — a day row never splits mid-activity */
+    .tl         { width: 100%; }
+    .tl tr      { page-break-inside: avoid; }
+    .tl-act     { page-break-inside: avoid; }
+    .meal-lab   { color: #9aa1ad; font-size: 7px; letter-spacing: 2px; text-transform: uppercase;
+      margin-right: 1mm; }
+    .tl td.daycol { width: 17mm; vertical-align: top; padding-top: 1mm; }
+    .day-no     { font-family: 'Times New Roman', Georgia, serif; font-size: 24px; color: #b08d57; font-weight: bold; }
+    .day-date   { font-size: 8px; color: #9aa1ad; letter-spacing: 1px; margin-top: 1mm; }
+    .tl td.bodycol { border-left: 2px solid #e5dac4; padding: 0 0 7mm 6mm; vertical-align: top; }
+    .act-name   { font-family: 'Times New Roman', Georgia, serif; font-size: 13.5px; color: #10182a; font-weight: bold; }
+    .act-meta   { color: #8a6d3b; font-size: 8.5px; letter-spacing: 1px; margin-top: 1mm; text-transform: uppercase; }
+    .act-desc   { color: #4b5563; font-size: 9.5px; margin-top: 1.5mm; }
+    .act-img    { width: 38mm; height: 26mm; border-radius: 8px; margin-top: 2mm; }
 
-  /* pricing */
-  .price-tbl  { width: 100%; }
-  .price-tbl td { padding: 2.2mm 0; font-size: 10.5px; color: #4b5563;
-                  border-bottom: 1px solid #eee5d4; }
-  .price-tbl td.num { text-align: right; color: #10182a; }
-  .grand { background: #10182a; border-radius: 10px; padding: 6mm; margin-top: 4mm;
-           page-break-inside: avoid; }
-  .grand-lab { color: #c9a468; font-size: 8.5px; letter-spacing: 4px; text-transform: uppercase; }
-  .grand-val { font-family: 'Times New Roman', Georgia, serif; color: #f6f1e7; font-size: 26px;
-               font-weight: bold; margin-top: 1.5mm; }
-  .grand-sub { color: #aeb6c4; font-size: 9px; margin-top: 1.5mm; }
-  .price-note{ color: #9aa1ad; font-size: 7.5px; letter-spacing: 0.8px; margin-top: 3mm; }
+    /* pricing */
+    .price-tbl  { width: 100%; }
+    .price-tbl td { padding: 2.2mm 0; font-size: 10.5px; color: #4b5563;
+      border-bottom: 1px solid #eee5d4; }
+    .price-tbl td.num { text-align: right; color: #10182a; }
+    .grand { background: #10182a; border-radius: 10px; padding: 6mm; margin-top: 4mm;
+      page-break-inside: avoid; }
+    .grand-lab { color: #c9a468; font-size: 8.5px; letter-spacing: 4px; text-transform: uppercase; }
+    .grand-val { font-family: 'Times New Roman', Georgia, serif; color: #f6f1e7; font-size: 26px;
+      font-weight: bold; margin-top: 1.5mm; }
+    .grand-sub { color: #aeb6c4; font-size: 9px; margin-top: 1.5mm; }
+    .price-note{ color: #9aa1ad; font-size: 7.5px; letter-spacing: 0.8px; margin-top: 3mm; }
 
-  /* inclusions/exclusions */
-  .ie td { width: 50%; vertical-align: top; padding-right: 6mm; }
-  .ie-item { font-size: 9.5px; color: #4b5563; padding: 1.2mm 0; }
-  .tick { color: #7a934d; } .cross { color: #b3552f; }
+    /* inclusions/exclusions */
+    .ie td { width: 50%; vertical-align: top; padding-right: 6mm; }
+    .ie-item { font-size: 9.5px; color: #4b5563; padding: 1.2mm 0; }
+    .tick { color: #7a934d; } .cross { color: #b3552f; }
 
-  .pol-li { font-size: 9.5px; color: #4b5563; padding: 1mm 0; }
+    .pol-li { font-size: 9.5px; color: #4b5563; padding: 1mm 0; }
 
-  .thanks { background: #10182a; border-radius: 12px; padding: 8mm; margin-top: 10mm;
-            page-break-inside: avoid; }
-  .thanks-t { font-family: 'Times New Roman', Georgia, serif; color: #f6f1e7; font-size: 19px; font-weight: bold; }
-  .thanks-c { color: #aeb6c4; font-size: 9.5px; margin-top: 2.5mm; line-height: 1.7; }
-  .foot-note { color: #9aa1ad; font-size: 8px; margin-top: 4mm; letter-spacing: 0.5px; }
+    .thanks { background: #10182a; border-radius: 12px; padding: 8mm; margin-top: 10mm;
+      page-break-inside: avoid; }
+    .thanks-t { font-family: 'Times New Roman', Georgia, serif; color: #f6f1e7; font-size: 19px; font-weight: bold; }
+    .thanks-c { color: #aeb6c4; font-size: 9.5px; margin-top: 2.5mm; line-height: 1.7; }
+    .foot-note { color: #9aa1ad; font-size: 8px; margin-top: 4mm; letter-spacing: 0.5px; }
 
-  /* running page footer — body pages only (suppressed on the cover via @page cover) */
-  .page-foot  { position: running(pageFooter); width: 210mm; }
-  .pf-pad     { padding: 2.5mm 16mm 0 16mm; }
-  .pf-tbl     { width: 100%; border-top: 1px solid #e5dac4; }
-  .pf-tbl td  { padding-top: 2.4mm; font-size: 7.5px; color: #9aa1ad;
-                letter-spacing: 1.8px; text-transform: uppercase; }
-  .pf-tbl td.pfr { text-align: right; }
-  /* one generated-content sequence so the digits can never paint out of order */
-  .pageno:before  { content: "Page " counter(page) " of " counter(pages); }
-</style>
+    /* running page footer — body pages only (suppressed on the cover via @page cover) */
+    .page-foot  { position: running(pageFooter); width: 210mm; }
+    .pf-pad     { padding: 2.5mm 16mm 0 16mm; }
+    .pf-tbl     { width: 100%; border-top: 1px solid #e5dac4; }
+    .pf-tbl td  { padding-top: 2.4mm; font-size: 7.5px; color: #9aa1ad;
+      letter-spacing: 1.8px; text-transform: uppercase; }
+    .pf-tbl td.pfr { text-align: right; }
+    /* one generated-content sequence so the digits can never paint out of order */
+    .pageno:before  { content: "Page " counter(page) " of " counter(pages); }
+  </style>
 </head>
 <body>
 
@@ -269,18 +841,18 @@
       <td class="last" th:if="${totals != null and totals.grandTotal != null}">
         <div class="m-label" style="color:#9aa1ad;">Package total</div>
         <div class="serif" style="font-size:12px; margin-top:1mm;"><span
-             class="rup">&#8377;</span><span
-             th:text="${#strings.replace(fmt.inr(totals.grandTotal),'Rs.','')}"> 97,650</span></div>
+                class="rup">&#8377;</span><span
+                th:text="${#strings.replace(fmt.inr(totals.grandTotal),'Rs.','')}"> 97,650</span></div>
       </td>
     </tr>
-    <!-- Routing is flight-section data: it must disappear with the section, not merely with the flag. -->
-    <tr th:if="${q.flight != null and q.flight.journey != null and #lists.contains(sectionOrder,'flight')}">
-      <td colspan="4" class="glance-route">
-        <div class="m-label" style="color:#9aa1ad;">Flight routing</div>
-        <div style="font-size:10.5px; color:#4b5563; margin-top:1mm;"
-             th:text="${q.flight.journey}">GOP &#8594; KTM &#8594; GOP</div>
-      </td>
-    </tr></table>
+      <!-- Routing is flight-section data: it must disappear with the section, not merely with the flag. -->
+      <tr th:if="${q.flight != null and q.flight.journey != null and #lists.contains(sectionOrder,'flight')}">
+        <td colspan="4" class="glance-route">
+          <div class="m-label" style="color:#9aa1ad;">Flight routing</div>
+          <div style="font-size:10.5px; color:#4b5563; margin-top:1mm;"
+               th:text="${q.flight.journey}">GOP &#8594; KTM &#8594; GOP</div>
+        </td>
+      </tr></table>
   </div>
 
   <!-- FLIGHTS -->
@@ -310,9 +882,9 @@
       <div class="hair"></div>
       <table style="width:100%;"><tr class="leg">
         <td><div class="lab">Departs</div>
-            <div th:text="${(seg.depDate != null ? seg.depDate : '') + (seg.depTime != null ? ' &#183; ' + seg.depTime : '')}">15 Aug · 10:20</div></td>
+          <div th:text="${(seg.depDate != null ? seg.depDate : '') + (seg.depTime != null ? ' &#183; ' + seg.depTime : '')}">15 Aug · 10:20</div></td>
         <td><div class="lab">Arrives</div>
-            <div th:text="${(seg.arrDate != null ? seg.arrDate : '') + (seg.arrTime != null ? ' &#183; ' + seg.arrTime : '')}">15 Aug · 11:35</div></td>
+          <div th:text="${(seg.arrDate != null ? seg.arrDate : '') + (seg.arrTime != null ? ' &#183; ' + seg.arrTime : '')}">15 Aug · 11:35</div></td>
         <td th:if="${seg.duration != null}"><div class="lab">Duration</div><div th:text="${seg.duration}">1h 15m</div></td>
         <td th:if="${seg.cabin != null or seg.checkin != null}">
           <div class="lab">Baggage</div>
@@ -442,6 +1014,8 @@
         <span class="chip" th:text="${v.qty + ' vehicle(s)'}">1</span>
       </div>
       <div class="act-desc" th:if="${!#strings.isEmpty(v.notes)}" th:text="${fmt.plain(v.notes)}">notes</div>
+      <img class="act-img" th:if="${!#strings.isEmpty(v.imagePath)}"
+           th:src="${#strings.replace(v.imagePath,'/upload/','/upload/c_fill,w_380,h_260,g_auto,f_jpg/')}" alt=""/>
     </div>
   </div>
 
@@ -493,7 +1067,7 @@
       <div class="grand">
         <div class="grand-lab">Grand Total</div>
         <div class="grand-val"><span class="rup">&#8377;</span><span
-             th:text="${#strings.replace(fmt.inr(totals.grandTotal),'Rs.','')}"> 97,650</span></div>
+                th:text="${#strings.replace(fmt.inr(totals.grandTotal),'Rs.','')}"> 97,650</span></div>
         <div class="grand-sub"
              th:if="${totals.perAdult != null and customer != null and customer.adults != null}"
              th:text="${#strings.replace(fmt.inr(totals.perAdult),'Rs.','&#8377;') + ' per adult &#183; all taxes included'}">per adult</div>
