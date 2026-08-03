@@ -2,12 +2,14 @@ package com.crm.travelcrm.fleet.service;
 
 import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.auth.repository.UserRepository;
+import com.crm.travelcrm.fleet.entity.FleetComplianceDocument;
 import com.crm.travelcrm.fleet.entity.FleetDocumentAlert;
 import com.crm.travelcrm.fleet.entity.FleetDriver;
 import com.crm.travelcrm.fleet.entity.FleetVehicle;
-import com.crm.travelcrm.fleet.enums.FleetDocumentType;
+import com.crm.travelcrm.fleet.enums.FleetDocumentCategory;
 import com.crm.travelcrm.fleet.enums.FleetDriverStatus;
 import com.crm.travelcrm.fleet.enums.FleetRefType;
+import com.crm.travelcrm.fleet.repository.FleetComplianceDocumentRepository;
 import com.crm.travelcrm.fleet.repository.FleetDocumentAlertRepository;
 import com.crm.travelcrm.fleet.repository.FleetDriverRepository;
 import com.crm.travelcrm.fleet.repository.FleetVehicleRepository;
@@ -39,6 +41,7 @@ public class FleetExpiryScanService {
 
     private final FleetVehicleRepository vehicleRepository;
     private final FleetDriverRepository driverRepository;
+    private final FleetComplianceDocumentRepository documentRepository;
     private final FleetDocumentAlertRepository alertRepository;
     private final UserRepository userRepository;
     private final ApplicationEventPublisher eventPublisher;
@@ -52,34 +55,32 @@ public class FleetExpiryScanService {
                 .findByTenantIdAndRoleInAndIsActiveTrue(tenantId, List.of("TENANT_ADMIN", "MANAGER"))
                 .stream().map(User::getId).toList();
 
+        // ONE sweep, over fleet_compliance_documents.
+        //
+        // This used to walk the four date columns on the vehicle plus the licence date on the driver.
+        // Those columns still exist, but every one of them was migrated into a document row, so
+        // scanning documents covers everything the old loop covered AND the fourteen categories it
+        // could not see at all. Running both loops would double-alert on insurance, RC, permit and
+        // PUC; running only the old one means a Green Card, a fitness certificate or a PSV badge
+        // lapses in silence — which is the failure this table exists to prevent.
         int fired = 0;
-        for (FleetVehicle v : vehicleRepository.findWithDocumentsExpiringBy(tenantId, limit)) {
+        for (FleetComplianceDocument doc : documentRepository.findExpiringBy(tenantId, limit)) {
+            boolean isVehicle = doc.getVehicle() != null;
             fired += process(tenantId, thresholdsDesc, today, limit, recipientIds,
-                    FleetRefType.VEHICLE, v.getId(), v.getPublicId(), "Vehicle " + v.getVehicleNumber(),
-                    FleetDocumentType.INSURANCE, v.getInsuranceExpiry());
-            fired += process(tenantId, thresholdsDesc, today, limit, recipientIds,
-                    FleetRefType.VEHICLE, v.getId(), v.getPublicId(), "Vehicle " + v.getVehicleNumber(),
-                    FleetDocumentType.RC, v.getRcExpiry());
-            fired += process(tenantId, thresholdsDesc, today, limit, recipientIds,
-                    FleetRefType.VEHICLE, v.getId(), v.getPublicId(), "Vehicle " + v.getVehicleNumber(),
-                    FleetDocumentType.PERMIT, v.getPermitExpiry());
-            fired += process(tenantId, thresholdsDesc, today, limit, recipientIds,
-                    FleetRefType.VEHICLE, v.getId(), v.getPublicId(), "Vehicle " + v.getVehicleNumber(),
-                    FleetDocumentType.PUC, v.getPucExpiry());
-        }
-        for (FleetDriver d : driverRepository
-                .findByTenantIdAndStatusAndLicenseExpiryLessThanEqualAndDeletedAtIsNull(
-                        tenantId, FleetDriverStatus.ACTIVE, limit)) {
-            fired += process(tenantId, thresholdsDesc, today, limit, recipientIds,
-                    FleetRefType.DRIVER, d.getId(), d.getPublicId(), "Driver " + d.getName(),
-                    FleetDocumentType.DRIVER_LICENSE, d.getLicenseExpiry());
+                    isVehicle ? FleetRefType.VEHICLE : FleetRefType.DRIVER,
+                    isVehicle ? doc.getVehicle().getId() : doc.getDriver().getId(),
+                    isVehicle ? doc.getVehicle().getPublicId() : doc.getDriver().getPublicId(),
+                    isVehicle ? "Vehicle " + doc.getVehicle().getVehicleNumber()
+                              : "Driver " + doc.getDriver().getName(),
+                    doc.getCategory(), doc.getValidUntil(), doc.getId());
         }
         return fired;
     }
 
     private int process(Long tenantId, List<Integer> thresholdsDesc, LocalDate today, LocalDate limit,
                         List<Long> recipientIds, FleetRefType refType, Long refId, UUID refPublicId,
-                        String refLabel, FleetDocumentType docType, LocalDate expiryDate) {
+                        String refLabel, FleetDocumentCategory docType, LocalDate expiryDate,
+                        Long documentId) {
         if (expiryDate == null || expiryDate.isAfter(limit)) return 0;
 
         long daysLeft = ChronoUnit.DAYS.between(today, expiryDate);
@@ -96,7 +97,7 @@ public class FleetExpiryScanService {
         alertRepository.save(FleetDocumentAlert.builder()
                 .tenantId(tenantId)
                 .refType(refType).refId(refId).refPublicId(refPublicId).refLabel(refLabel)
-                .docType(docType).expiryDate(expiryDate)
+                .docType(docType).documentId(documentId).expiryDate(expiryDate)
                 .daysLeft(daysLeft).thresholdDays(threshold)
                 .build());
 

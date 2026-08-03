@@ -26,8 +26,18 @@ public interface FleetTripMapper {
     @Mapping(target = "driverName", source = "driver.name")
     FleetTripResponseDto toDto(FleetTrip trip);
 
+    /**
+     * Legacy total, from the three scalars on the trip.
+     *
+     * <p><b>This is NOT the trip's cost any more</b> — {@code FleetTripServiceImpl} overwrites it
+     * with the sum of the expense ledger straight after mapping. It stays here only so a trip that
+     * predates the ledger, and whose scalars have not yet been migrated, still shows the number it
+     * always showed instead of a sudden zero.
+     *
+     * <p>Once the historical backfill has run and reconciled, this method and the three columns go.
+     */
     @AfterMapping
-    default void computeTotalExpense(FleetTrip trip, @MappingTarget FleetTripResponseDto dto) {
+    default void computeLegacyTotal(FleetTrip trip, @MappingTarget FleetTripResponseDto dto) {
         BigDecimal total = null;
         for (BigDecimal cost : new BigDecimal[]{
                 trip.getFuelCost(), trip.getTollCost(), trip.getDriverAllowance()}) {

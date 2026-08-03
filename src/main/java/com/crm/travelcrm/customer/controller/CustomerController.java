@@ -7,6 +7,7 @@ import com.crm.travelcrm.customer.dto.request.StatusUpdateRequest;
 import com.crm.travelcrm.customer.dto.request.TierUpdateRequest;
 import com.crm.travelcrm.customer.dto.request.UpdateCustomerRequest;
 import com.crm.travelcrm.customer.dto.response.CustomerBookingResponse;
+import com.crm.travelcrm.customer.dto.response.CustomerMatchResponse;
 import com.crm.travelcrm.customer.dto.response.CustomerResponse;
 import com.crm.travelcrm.customer.dto.response.CustomerStatsResponse;
 import com.crm.travelcrm.customer.service.CustomerService;
@@ -71,6 +72,33 @@ public class CustomerController {
     public ResponseEntity<ApiResponse<CustomerResponse>> searchByPhone(@RequestParam String phone) {
         return ResponseEntity.ok(
                 ApiResponse.success("Customer found", customerService.searchByPhone(phone)));
+    }
+
+    /**
+     * "Do we already know this person?" — the probe behind the lead form's
+     * <b>"Customer found with this email / phone"</b> popup.
+     *
+     * <p>Deliberately NOT {@code /search}, which is a different contract: that one is a strict
+     * phone-only fetch that 404s when nothing matches. A no-match here is the ordinary answer — most
+     * new leads are genuinely new people — so this returns 200 with {@code matched: false}. A 404
+     * would force the frontend to treat the common case as a failed request, and an interceptor that
+     * toasts 404s would then shout at the clerk on every new customer.
+     *
+     * <p>At least one of the two parameters must be present; both may be, in which case phone wins
+     * (it is the per-tenant natural key). The match runs through {@code CustomerMatcher} — the same
+     * code that links the lead at creation — so the popup can never promise a link that the
+     * subsequent create does not make.
+     */
+    @GetMapping("/lookup")
+    @PreAuthorize("hasAuthority('CUSTOMER_READ')")
+    public ResponseEntity<ApiResponse<CustomerMatchResponse>> lookup(
+            @RequestParam(required = false) String phone,
+            @RequestParam(required = false) String email) {
+
+        CustomerMatchResponse match = customerService.lookup(phone, email);
+        return ResponseEntity.ok(ApiResponse.success(
+                match.isMatched() ? match.getMessage() : "No existing customer for this contact",
+                match));
     }
 
     @GetMapping("/search-name")

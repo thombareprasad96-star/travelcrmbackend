@@ -1,6 +1,8 @@
 // ─── CreateLeadRequest.java ───────────────────────────────────────────────────
 package com.crm.travelcrm.lead.dto;
 
+import com.crm.travelcrm.customer.enums.CommunicationPreference;
+import com.crm.travelcrm.lead.enums.DepartureMode;
 import com.crm.travelcrm.lead.enums.LeadSource;
 import com.crm.travelcrm.lead.enums.LeadStage;
 import com.crm.travelcrm.lead.enums.LeadType;
@@ -11,6 +13,8 @@ import lombok.Data;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.List;
 import java.util.UUID;
 
@@ -51,8 +55,70 @@ public class CreateLeadRequestDto {
 
     @JsonFormat(pattern = "yyyy-MM-dd")
     private LocalDate birthDate;
+
+    @JsonFormat(pattern = "yyyy-MM-dd")
+    private LocalDate anniversaryDate;
+
+    /** Same vocabulary as {@code Customer.commPref} so conversion can copy it across unchanged. */
+    private CommunicationPreference preferredCommunication;
+
+    /** Intended call-back date. The create screen also posts a follow-up log to raise the Reminder. */
+    @JsonFormat(pattern = "yyyy-MM-dd")
+    private LocalDate followUpDate;
+
+    @Size(max = 50, message = "Package type must not exceed 50 characters")
+    private String packageType;
+
     @JsonFormat(pattern = "yyyy-MM-dd")
     private LocalDate travelDate;
+
+    // ── Departure / transport ────────────────────────────────────────────────
+    // departureMode gates which of the three groups below is filled in. No cross-field validation
+    // here on purpose: a clerk who picks Flight, types an airport, then switches to Train must not
+    // be blocked by the now-irrelevant airport value — the service clears the unused groups instead.
+
+    private DepartureMode departureMode;
+
+    @Size(max = 150, message = "Departure airport must not exceed 150 characters")
+    private String departureAirport;
+
+    @Size(max = 10, message = "Airport code must not exceed 10 characters")
+    private String airportCode;
+
+    /** {@code <input type="time">} — sends "HH:mm". */
+    @JsonFormat(pattern = "HH:mm")
+    private LocalTime preferredFlightTime;
+
+    @Size(max = 150, message = "Railway station must not exceed 150 characters")
+    private String railwayStation;
+
+    @Size(max = 50, message = "Train class must not exceed 50 characters")
+    private String trainClass;
+
+    @JsonFormat(pattern = "HH:mm")
+    private LocalTime preferredTrainTime;
+
+    @Size(max = 1000, message = "Pickup address must not exceed 1000 characters")
+    private String pickupAddress;
+
+    /** {@code <input type="datetime-local">} — sends "yyyy-MM-dd'T'HH:mm", no seconds, no zone. */
+    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm")
+    private LocalDateTime pickupDateTime;
+
+    @Size(max = 150, message = "Vehicle preference must not exceed 150 characters")
+    private String vehiclePreference;
+
+    // ── Accessibility ────────────────────────────────────────────────────────
+
+    private Boolean specialAssistanceRequired;
+
+    @Min(value = 0, message = "Assistance passenger count cannot be negative")
+    private Integer assistancePassengerCount;
+
+    private List<String> specialAssistanceTypes;
+
+    @Size(max = 2000, message = "Assistance notes must not exceed 2000 characters")
+    private String specialAssistanceNotes;
 
     // Customer budget in INR. Frontend Kanban sends this as `budget`.
     @DecimalMin(value = "0.0", message = "Budget cannot be negative")
@@ -70,6 +136,20 @@ public class CreateLeadRequestDto {
 
     @Min(value = 1, message = "At least 1 adult is required")
     private Integer adults;
+
+    @Min(value = 0, message = "Male count cannot be negative")
+    private Integer male;
+
+    @Min(value = 0, message = "Female count cannot be negative")
+    private Integer female;
+
+    /**
+     * The form sends the adult total under BOTH {@code adults} and {@code totalAdults}. Bound here
+     * purely so the two stay interchangeable; the service prefers {@code adults} and falls back to
+     * this. Not persisted separately — {@code Lead.adults} is the one column.
+     */
+    @Min(value = 0, message = "Adult count cannot be negative")
+    private Integer totalAdults;
 
     @Min(value = 0, message = "Children count cannot be negative")
     private Integer children;

@@ -3,6 +3,8 @@ package com.crm.travelcrm.lead.entity;
 import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.common.entity.BaseEntity;
 import com.crm.travelcrm.common.entity.BaseTenantEntity;
+import com.crm.travelcrm.customer.enums.CommunicationPreference;
+import com.crm.travelcrm.lead.enums.DepartureMode;
 import com.crm.travelcrm.lead.enums.LeadOrigin;
 import com.crm.travelcrm.lead.enums.LeadSource;
 import com.crm.travelcrm.lead.enums.LeadStage;
@@ -15,6 +17,7 @@ import org.hibernate.annotations.BatchSize;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -129,8 +132,93 @@ public class Lead extends BaseTenantEntity {
     @Column(name = "birth_date")
     private LocalDate birthDate;
 
+    @Column(name = "anniversary_date")
+    private LocalDate anniversaryDate;
+
+    /**
+     * Preferred channel to reach this lead. Deliberately the SAME enum the customer master uses
+     * rather than a lead-local copy: conversion copies this straight onto {@code Customer.commPref},
+     * and two vocabularies that must map onto each other always drift.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "preferred_communication", length = 30)
+    private CommunicationPreference preferredCommunication;
+
+    /**
+     * When the agent intends to call back. Stored on the lead so the value survives a reopen of the
+     * form; the actual Reminder is raised separately by the follow-up log the create screen posts
+     * after a successful save.
+     */
+    @Column(name = "follow_up_date")
+    private LocalDate followUpDate;
+
+    /** Free-text-ish trip category ("Honeymoon", "Family", …). Kept a String on purpose — see DDL. */
+    @Column(name = "package_type", length = 50)
+    private String packageType;
+
     @Column(name = "travel_date")
     private LocalDate travelDate;
+
+    // ── Departure / transport ────────────────────────────────────────────────
+    // departureMode is the discriminator: the trio of columns below it that applies is decided by
+    // this value, and the other two trios stay null. It must round-trip or the edit form reopens
+    // with the whole transport section unset and every field under it orphaned.
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "departure_mode", length = 20)
+    private DepartureMode departureMode;
+
+    @Column(name = "departure_airport", length = 150)
+    private String departureAirport;
+
+    /** IATA code, upper-cased by the frontend before send. */
+    @Column(name = "airport_code", length = 10)
+    private String airportCode;
+
+    @Column(name = "preferred_flight_time")
+    private LocalTime preferredFlightTime;
+
+    @Column(name = "railway_station", length = 150)
+    private String railwayStation;
+
+    @Column(name = "train_class", length = 50)
+    private String trainClass;
+
+    @Column(name = "preferred_train_time")
+    private LocalTime preferredTrainTime;
+
+    @Column(name = "pickup_address", columnDefinition = "TEXT")
+    private String pickupAddress;
+
+    @Column(name = "pickup_date_time")
+    private LocalDateTime pickupDateTime;
+
+    @Column(name = "vehicle_preference", length = 150)
+    private String vehiclePreference;
+
+    // ── Accessibility ────────────────────────────────────────────────────────
+
+    @Column(name = "special_assistance_required")
+    private Boolean specialAssistanceRequired;
+
+    @Column(name = "assistance_passenger_count")
+    private Integer assistancePassengerCount;
+
+    /**
+     * Which assistances are needed ("Wheelchair Assistance", …). A join table exactly like
+     * {@link #services} rather than a delimited string — the vocabulary is open (the form offers a
+     * starting set and more will be added), and a delimited column cannot be queried or counted.
+     */
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "lead_special_assistance_types",
+            joinColumns = @JoinColumn(name = "lead_id"))
+    @Column(name = "assistance_type")
+    @BatchSize(size = 50)
+    @Builder.Default
+    private List<String> specialAssistanceTypes = new ArrayList<>();
+
+    @Column(name = "special_assistance_notes", columnDefinition = "TEXT")
+    private String specialAssistanceNotes;
 
     // Budget (₹) — the customer's planned spend; drives the Kanban column totals
     // and the active-pipeline figure. Nullable: not every fresh lead has a value yet.
@@ -148,6 +236,15 @@ public class Lead extends BaseTenantEntity {
 
     @Column(name = "adults")
     private Integer adults;
+
+    // Gender split of the adults. The form derives `adults` as male + female, so these two are the
+    // authored values and `adults` is the total — keep all three: every downstream reader
+    // (quotation pax block, reports, the leads grid) reads `adults`.
+    @Column(name = "male")
+    private Integer male;
+
+    @Column(name = "female")
+    private Integer female;
 
     @Column(name = "children")
     private Integer children;
@@ -169,6 +266,41 @@ public class Lead extends BaseTenantEntity {
 
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
+
+    // ── Existing-customer link ────────────────────────────────────────────────
+    /**
+     * The customer master row this lead was matched to at creation, by phone or email.
+     *
+     * <p>A LOGICAL FK (plain Long, no {@code @ManyToOne}) for the same reason
+     * {@code Booking.customerId} is one: the customer can be moved to Trash independently, and a
+     * real association would either block that or cascade into the lead. Resolution is always
+     * tenant-scoped through the repository, never a bare {@code findById}.
+     *
+     * <p>Null means "no existing customer had this phone or email when the lead was created" —
+     * <b>not</b> "never checked". {@link #customerLinkedAt} distinguishes the two.
+     */
+    @Column(name = "customer_id")
+    private Long customerId;
+
+    /**
+     * The same customer as {@link #customerId}, by publicId. Denormalised deliberately — the exact
+     * idiom {@link #convertedBookingPublicId} already uses — so the mapper can return the UUID the
+     * API is keyed by without a repository lookup on every single lead it maps.
+     */
+    @Column(name = "customer_public_id")
+    private UUID customerPublicId;
+
+    /**
+     * When the customer probe last ran — set on a match AND on a no-match, so it records that the
+     * lookup happened rather than that it succeeded. That is what lets {@link #customerId} being
+     * null mean "checked, nobody matched" here and "never checked" on a row written before this
+     * feature (where both columns are null).
+     *
+     * <p>Also re-stamped when a booking back-links its customer onto the lead, since that is the
+     * same question being answered later by a different door.
+     */
+    @Column(name = "customer_linked_at")
+    private LocalDateTime customerLinkedAt;
 
     // ── Conversion traceability (Lead → Booking) ──────────────────────────────
     // Stamped when the lead is converted to a booking. The lead is NEVER deleted on

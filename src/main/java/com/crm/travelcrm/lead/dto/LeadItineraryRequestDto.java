@@ -23,4 +23,11 @@ public class LeadItineraryRequestDto {
 
     @Min(value = 1, message = "Day number must be at least 1")
     private Integer dayNumber;   // ← optional, sequence order in itinerary
+
+    // Optional master ids behind `destination` / `city`. The names remain authoritative; these are
+    // stored only so the edit form can re-select its cascading dropdowns. The create form's
+    // transformer does not send them today — accepting them costs nothing and lets it start.
+    private Long destinationId;
+
+    private Long cityId;
 }

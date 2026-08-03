@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.UUID;
 
 @Getter
-@Builder
+@Builder(toBuilder = true)
 @NoArgsConstructor
 @AllArgsConstructor
 public class BookingResponseDTO {
@@ -24,14 +24,21 @@ public class BookingResponseDTO {
     private String bookingCode;
 
     // Customer info
-    private Long   customerId;
+    /**
+     * The customer's publicId — was an internal {@code Long}, despite the comment above promising
+     * otherwise. That leak also broke the booking detail screen's customer card: it fetches
+     * {@code GET /api/customers/{id}}, which takes a UUID, and the booking only ever handed it a
+     * number no endpoint accepts.
+     */
+    private UUID   customerId;
     private String customerNameSnapshot;   // name as it was at booking time
 
     // Destination info
-    private Long   destinationId;
+    private UUID   destinationId;
     private String destinationSnapshot;
 
-    private Long leadId;
+    /** Source lead's publicId. Same reason as {@code customerId} — a Long here is unusable by the UI. */
+    private UUID leadId;
 
     // Traceability — source lead/quotation this booking was converted from (UUIDs, nullable)
     private UUID sourceLeadPublicId;
@@ -84,6 +91,9 @@ public class BookingResponseDTO {
 
     // Services
     private List<String> services;
+
+    /** Traveller / departure / itinerary detail. Null on bookings taken without it. */
+    private TripSnapshotResponse tripSnapshot;
 
     // Audit
     private String createdBy;

@@ -1,0 +1,315 @@
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8" />
+    <title>Driver Settlement</title>
+    <!--
+      DRIVER SETTLEMENT SHEET (Flying Saucer + OpenPDF / Thymeleaf, XML mode)
+      FS-safe: tables + inline-block only. NO flex / grid / calc() / var() / box-shadow.
+      Model: ${doc} (FleetSettlementSheetModel) + company* vars + ${fmt} (FleetPdfFormat)
+
+      The totals printed here are the SETTLEMENT's stored figures — never recomputed from the lines
+      below. The lines are supporting evidence; a sheet that derives its own totals is a second
+      source of truth and will eventually contradict the screen the driver was shown.
+
+      An unsigned (OPEN/RECONCILED) sheet prints a DRAFT marker: signing a sheet whose cash has not
+      squared is exactly the mistake this document exists to prevent.
+
+      Entities: XML mode knows only the five XML built-ins — use &#160;, never &nbsp;.
+    -->
+    <style th:inline="none">
+        @page { size: A4; margin: 12mm 12mm 14mm 12mm; }
+        * { box-sizing: border-box; }
+        body { font-family: "DejaVu Sans", Helvetica, Arial, sans-serif;
+               font-size: 10px; line-height: 1.45; color: #1f2937; margin: 0; padding: 0; }
+        table { border-collapse: collapse; width: 100%; }
+        td, th { vertical-align: top; }
+        .r { text-align: right; } .c { text-align: center; }
+
+        .band { border: 2px solid #1d4ed8; border-radius: 8px; padding: 12px 14px; }
+        .band td { vertical-align: middle; }
+        .brand-name { font-size: 18px; font-weight: bold; color: #1e3a8a; }
+        .brand-logo { height: 40px; }
+        .brand-sub { font-size: 8px; color: #64748b; margin-top: 2px; }
+        .d-kicker { font-size: 7.5px; font-weight: bold; letter-spacing: 3px;
+                    color: #1d4ed8; text-transform: uppercase; }
+        .d-title { font-size: 20px; font-weight: bold; color: #1e3a8a; letter-spacing: 1px; }
+        .stamp { display: inline-block; border: 2px solid #15803d; color: #15803d; border-radius: 5px;
+                 font-size: 10px; font-weight: bold; letter-spacing: 1.5px; padding: 2px 9px;
+                 text-transform: uppercase; margin-top: 4px; }
+        .stamp-draft { border-color: #92600b; color: #92600b; }
+
+        .draftbar { border: 1.5px solid #f0c674; background-color: #fffaf0; border-radius: 7px;
+                    padding: 7px 11px; margin-top: 10px; font-size: 9px; color: #92600b; }
+        .movedbar { border: 1.5px solid #fca5a5; background-color: #fef2f2; border-radius: 7px;
+                    padding: 7px 11px; margin-top: 8px; font-size: 9px; color: #b91c1c; }
+
+        .refline { margin-top: 9px; }
+        .refline td { font-size: 8.5px; color: #64748b; padding: 2px 0; }
+        .refline b { color: #1f2937; }
+
+        .sec { border-left: 4px solid #1d4ed8; padding-left: 9px; margin: 14px 0 6px 0; }
+        .sec-t { font-size: 10.5px; font-weight: bold; color: #1e3a8a;
+                 text-transform: uppercase; letter-spacing: 0.8px; }
+
+        .grid td { padding: 5px 6px 5px 0; width: 25%; }
+        .lbl { font-size: 7px; font-weight: bold; letter-spacing: 0.8px;
+               text-transform: uppercase; color: #94a3b8; }
+        .val { font-size: 11px; font-weight: bold; color: #1f2937; margin-top: 2px; }
+
+        .tbl { margin-top: 5px; }
+        .tbl th { background-color: #f1f5f9; font-size: 7px; font-weight: bold; letter-spacing: 0.7px;
+                  text-transform: uppercase; color: #475569; padding: 6px 7px; text-align: left;
+                  border-bottom: 1px solid #cbd5e1; }
+        .tbl td { padding: 6px 7px; border-bottom: 1px solid #eef2f6; font-size: 9.5px; }
+        .muted { color: #94a3b8; }
+        .plus { color: #b45309; font-weight: bold; }
+        .minus { color: #15803d; font-weight: bold; }
+
+        /* Reckoning */
+        .reck { margin-top: 6px; border: 1px solid #cbd5e1; border-radius: 7px; }
+        .reck td { padding: 7px 12px; border-bottom: 1px solid #eef2f6; font-size: 10px; }
+        .reck tr:last-child td { border-bottom: none; }
+        .reck .k { color: #475569; }
+        .reck .v { text-align: right; font-weight: bold; }
+        .reck .grp td { background-color: #f8fafc; font-size: 7px; font-weight: bold;
+                        letter-spacing: 1px; text-transform: uppercase; color: #64748b; padding: 5px 12px; }
+        .net { border: 2px solid #1d4ed8; border-radius: 7px; background-color: #eff6ff;
+               margin-top: 9px; }
+        .net td { padding: 11px 13px; }
+        .net-l { font-size: 8px; font-weight: bold; letter-spacing: 1px;
+                 text-transform: uppercase; color: #1d4ed8; }
+        .net-v { font-size: 19px; font-weight: bold; color: #1e3a8a; }
+        .net-note { font-size: 8px; color: #64748b; margin-top: 2px; }
+
+        .note { border: 1px solid #e2e8f0; border-radius: 7px; background-color: #f8fafc;
+                padding: 9px 11px; margin-top: 6px; font-size: 9.5px; color: #475569; }
+
+        .sign { margin-top: 26px; }
+        .sign td { width: 50%; padding: 0 14px; }
+        .sign-line { border-top: 1px solid #64748b; padding-top: 5px; font-size: 8px;
+                     font-weight: bold; letter-spacing: 0.6px; text-transform: uppercase;
+                     color: #475569; text-align: center; }
+        .sign-hint { font-size: 7px; color: #94a3b8; text-align: center; margin-top: 2px; }
+        .foot { margin-top: 16px; border-top: 1px solid #e2e8f0; padding-top: 6px;
+                font-size: 7.5px; color: #94a3b8; }
+    </style>
+</head>
+<body>
+
+<!-- ── Header ───────────────────────────────────────────────────────────── -->
+<table class="band">
+    <tr>
+        <td style="width:58%;">
+            <img class="brand-logo" th:if="${companyLogoUrl != null and !companyLogoUrl.isEmpty()}"
+                 th:src="${companyLogoUrl}" alt="" />
+            <div class="brand-name" th:if="${companyLogoUrl == null or companyLogoUrl.isEmpty()}"
+                 th:text="${companyName}">Company</div>
+            <div class="brand-sub" th:text="${companyTagline}">Tagline</div>
+        </td>
+        <td style="width:42%;" class="r">
+            <div class="d-kicker">Vehicle Diary</div>
+            <div class="d-title">DRIVER SETTLEMENT</div>
+            <span class="stamp" th:classappend="${doc.draft} ? 'stamp-draft' : ''"
+                  th:text="${doc.draft} ? 'DRAFT' : ${doc.statusLabel}">SETTLED</span>
+        </td>
+    </tr>
+</table>
+
+<div class="draftbar" th:if="${doc.draft}">
+    <b>Not settled yet.</b> This is a working copy — the figures below can still change, and the
+    sheet must not be signed until the driver's cash squares to exactly zero.
+</div>
+
+<div class="movedbar" th:if="${doc.postSettlementMovement}">
+    <b>Recorded after signing.</b> A bill or reversal for this duty was entered after the sheet was
+    signed off. The totals below are the ones the driver agreed to and have deliberately not been
+    changed — which is why they may not tally with the itemised lines.
+</div>
+
+<table class="refline">
+    <tr>
+        <td style="width:34%;">Sheet No: <b th:text="${doc.sheetNo}">—</b></td>
+        <td style="width:33%;" class="c">Job Ref: <b th:text="${fmt.orElse(doc.jobReference, '—')}">—</b></td>
+        <td style="width:33%;" class="r">Printed: <b th:text="${fmt.date(generatedOn)}">—</b></td>
+    </tr>
+</table>
+
+<!-- ── Who / which duty ─────────────────────────────────────────────────── -->
+<div class="sec"><div class="sec-t">Driver &amp; Duty</div></div>
+<table class="grid">
+    <tr>
+        <td>
+            <div class="lbl">Driver</div>
+            <div class="val" th:text="${doc.driverName}">—</div>
+        </td>
+        <td>
+            <div class="lbl">Mobile</div>
+            <div class="val" th:text="${fmt.orElse(doc.driverPhone, '—')}">—</div>
+        </td>
+        <td>
+            <div class="lbl">Vehicle</div>
+            <div class="val" th:text="${fmt.orElse(doc.vehicleNumber, '—')}">—</div>
+        </td>
+        <td>
+            <div class="lbl">Route</div>
+            <div class="val" th:text="${fmt.orElse(doc.routeFrom, '—')} + ' → ' + ${fmt.orElse(doc.routeTo, '—')}">—</div>
+        </td>
+    </tr>
+    <tr>
+        <td>
+            <div class="lbl">Duty From</div>
+            <div class="val" th:text="${fmt.dateTime(doc.tripStart)}">—</div>
+        </td>
+        <td>
+            <div class="lbl">Duty To</div>
+            <div class="val" th:text="${fmt.dateTime(doc.tripEnd)}">—</div>
+        </td>
+        <td th:if="${doc.settledAt != null}">
+            <div class="lbl">Settled On</div>
+            <div class="val" th:text="${fmt.dateTime(doc.settledAt)}">—</div>
+        </td>
+        <td th:if="${doc.settledAt != null}">
+            <div class="lbl">Settled By</div>
+            <div class="val" th:text="${fmt.orElse(doc.settledBy, '—')}">—</div>
+        </td>
+    </tr>
+</table>
+
+<!-- ── Cash movements ───────────────────────────────────────────────────── -->
+<div th:if="${doc.cashLines != null and !doc.cashLines.isEmpty()}">
+    <div class="sec"><div class="sec-t">Cash Movements</div></div>
+    <table class="tbl">
+        <tr>
+            <th style="width:13%;">Date</th>
+            <th style="width:26%;">Movement</th>
+            <th style="width:35%;">Reason / Reference</th>
+            <th style="width:12%;" class="c">Effect</th>
+            <th style="width:14%;" class="r">Amount</th>
+        </tr>
+        <tr th:each="c : ${doc.cashLines}">
+            <td th:text="${fmt.date(c.date)}">—</td>
+            <td th:text="${c.direction}">—</td>
+            <td class="muted">
+                <span th:text="${fmt.orElse(c.reason, '—')}">—</span>
+                <span th:if="${c.reference != null and !c.reference.isEmpty()}" th:text="' · ' + ${c.reference}">-</span>
+                <span th:if="${c.partyReference != null and !c.partyReference.isEmpty()}"
+                      th:text="' · ' + ${c.partyReference}">-</span>
+            </td>
+            <!-- The word, not a sign: "owes more / owes less" is what a driver reads correctly. -->
+            <td class="c">
+                <span class="plus" th:if="${c.signum > 0}">owes more</span>
+                <span class="minus" th:if="${c.signum &lt; 0}">owes less</span>
+            </td>
+            <td class="r" th:text="${fmt.inr(c.amount)}">—</td>
+        </tr>
+    </table>
+</div>
+
+<!-- ── Spends from his own cash ─────────────────────────────────────────── -->
+<div th:if="${doc.spendLines != null and !doc.spendLines.isEmpty()}">
+    <div class="sec"><div class="sec-t">Paid From Driver's Cash</div></div>
+    <table class="tbl">
+        <tr>
+            <th style="width:14%;">Date</th>
+            <th style="width:24%;">Category</th>
+            <th style="width:44%;">Detail</th>
+            <th style="width:8%;" class="c">Rcpt</th>
+            <th style="width:10%;" class="r">Amount</th>
+        </tr>
+        <tr th:each="s : ${doc.spendLines}">
+            <td th:text="${fmt.date(s.date)}">—</td>
+            <td th:text="${s.type}">—</td>
+            <td class="muted" th:text="${fmt.orElse(s.description, '—')}">—</td>
+            <td class="c" th:text="${s.hasReceipt} ? 'Y' : 'N'">—</td>
+            <td class="r" th:text="${fmt.inr(s.amount)}">—</td>
+        </tr>
+    </table>
+</div>
+
+<!-- ── The reckoning ────────────────────────────────────────────────────── -->
+<div class="sec"><div class="sec-t">Reckoning</div></div>
+<table class="reck">
+    <tr class="grp"><td colspan="2">Money placed with the driver</td></tr>
+    <tr>
+        <td class="k">Advance given</td>
+        <td class="v" th:text="${fmt.inr(doc.advanceTotal)}">—</td>
+    </tr>
+    <tr>
+        <td class="k">Collected from customers</td>
+        <td class="v" th:text="${fmt.inr(doc.collectedTotal)}">—</td>
+    </tr>
+    <tr th:if="${doc.adjustmentTotal != null and doc.adjustmentTotal.signum() != 0}">
+        <td class="k">Adjustments</td>
+        <td class="v" th:text="${fmt.inr(doc.adjustmentTotal)}">—</td>
+    </tr>
+
+    <tr class="grp"><td colspan="2">Discharged</td></tr>
+    <tr>
+        <td class="k">Spent on the road from his own cash</td>
+        <td class="v" th:text="${fmt.inr(doc.driverCashSpend)}">—</td>
+    </tr>
+    <tr>
+        <td class="k">Allowance / bata due to him</td>
+        <td class="v" th:text="${fmt.inr(doc.allowanceTotal)}">—</td>
+    </tr>
+    <tr>
+        <td class="k">Cash returned</td>
+        <td class="v" th:text="${fmt.inr(doc.returnedTotal)}">—</td>
+    </tr>
+    <tr>
+        <td class="k">Collections deposited</td>
+        <td class="v" th:text="${fmt.inr(doc.depositedTotal)}">—</td>
+    </tr>
+</table>
+
+<table class="net">
+    <tr>
+        <td style="width:64%;">
+            <div class="net-l" th:if="${doc.squared}">Settled — nothing outstanding</div>
+            <div class="net-l" th:if="${!doc.squared and doc.netDueFromDriver.signum() > 0}">
+                Balance to be returned by the driver
+            </div>
+            <div class="net-l" th:if="${!doc.squared and doc.netDueFromDriver.signum() &lt; 0}">
+                Balance payable to the driver
+            </div>
+            <div class="net-note" th:if="${doc.squared}">
+                Every rupee given out has been accounted for.
+            </div>
+            <div class="net-note" th:if="${!doc.squared}">
+                A sheet is signed only once this reads zero.
+            </div>
+        </td>
+        <td style="width:36%;" class="r">
+            <div class="net-v" th:text="${fmt.abs(doc.netDueFromDriver)}">Rs. 0.00</div>
+        </td>
+    </tr>
+</table>
+
+<div class="note" th:if="${doc.notes != null and !doc.notes.isEmpty()}">
+    <b>Notes:</b> <span th:text="${doc.notes}">—</span>
+</div>
+
+<!-- ── Signatures ───────────────────────────────────────────────────────── -->
+<table class="sign">
+    <tr>
+        <td>
+            <div style="height:34px;">&#160;</div>
+            <div class="sign-line">Driver's Signature</div>
+            <div class="sign-hint">I have seen this account and agree to it</div>
+        </td>
+        <td>
+            <div style="height:34px;">&#160;</div>
+            <div class="sign-line">For <span th:text="${companyName}">Company</span></div>
+            <div class="sign-hint">Accounts</div>
+        </td>
+    </tr>
+</table>
+
+<div class="foot">
+    <span th:text="${companyName}">Company</span>
+    <span th:if="${companyAddress != null and !companyAddress.isEmpty()}" th:text="' · ' + ${companyAddress}">-</span>
+    <span th:text="' · Sheet ' + ${doc.sheetNo}">-</span>
+</div>
+
+</body>
+</html>

@@ -169,7 +169,7 @@ public class BookingServiceItemServiceImpl implements BookingServiceItemService 
                 .endDate(i.getEndDate())
                 .status(i.getStatus())
                 .cost(i.getCost())
-                .vendorCost(i.getVendorCost())
+                .vendorCost(canSeeProfit() ? i.getVendorCost() : null)
                 .vendorPublicId(i.getVendorPublicId())
                 .vendorName(i.getVendorNameSnapshot())
                 .confirmationNumber(i.getConfirmationNumber())
@@ -177,5 +177,12 @@ public class BookingServiceItemServiceImpl implements BookingServiceItemService 
                 .createdAt(i.getCreatedAt())
                 .updatedAt(i.getUpdatedAt())
                 .build();
+    }
+
+    private boolean canSeeProfit() {
+        var auth = org.springframework.security.core.context.SecurityContextHolder
+                .getContext().getAuthentication();
+        return auth != null && auth.getAuthorities().stream()
+                .anyMatch(a -> "BOOKING_PROFIT_READ".equals(a.getAuthority()));
     }
 }

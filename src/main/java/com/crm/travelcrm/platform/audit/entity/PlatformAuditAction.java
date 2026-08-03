@@ -86,5 +86,48 @@ public enum PlatformAuditAction {
     // ── Support / Ops (Phases: Support, Danger Zone) ─────────────────────
     ANNOUNCEMENT_SEND,
     MAINTENANCE_TOGGLE,
-    DATA_EXPORT
+    DATA_EXPORT,
+
+    // ── Hotel marketplace catalog (Phase: Marketplace catalog + sync) ────
+    // Catalog rows are global and every tenant can see a published one, so publish/unpublish are
+    // recorded separately from ordinary edits: they are the two actions that change what the whole
+    // customer base can buy.
+    PLATFORM_HOTEL_CREATE,
+    PLATFORM_HOTEL_UPDATE,
+    PLATFORM_HOTEL_PUBLISH,
+    PLATFORM_HOTEL_UNPUBLISH,
+    PLATFORM_HOTEL_DELETE,
+
+    // ── Hotel marketplace booking requests ───────────────────────────────
+    MARKETPLACE_BOOKING_REQUEST,          // tenant submitted a hotel booking request
+    MARKETPLACE_BOOKING_REVIEW,           // SuperAdmin took it under review
+    MARKETPLACE_BOOKING_APPROVE,          // confirmed with the supplier; CRM projection follows
+    MARKETPLACE_BOOKING_REJECT,
+    MARKETPLACE_BOOKING_CANCEL,
+    // The CRM projection could not be written after a CONFIRMED approval. Audited because the
+    // platform and the tenant's CRM now disagree until the scheduler drains it.
+    MARKETPLACE_BOOKING_CRM_SYNC_FAILED,
+
+    // ── Price revision (design §8 Step 6B) ───────────────────────────────
+    // Recorded as three distinct actions rather than one "revision" with a payload: who moved a
+    // price, and whether the tenant agreed, is the sequence an audit of a repricing has to answer.
+    MARKETPLACE_BOOKING_REVISION_REQUESTED,
+    MARKETPLACE_BOOKING_REVISION_ACCEPTED,
+    MARKETPLACE_BOOKING_REVISION_DECLINED,
+    MARKETPLACE_BOOKING_REVISION_EXPIRED,
+
+    // ── Cancellation ─────────────────────────────────────────────────────
+    MARKETPLACE_BOOKING_CANCEL_REQUESTED,   // tenant asked; the supplier conversation starts here
+
+    // ── Voucher (design §7) ──────────────────────────────────────────────
+    MARKETPLACE_VOUCHER_ISSUED,
+    MARKETPLACE_VOUCHER_REVOKED,
+
+    // ── Platform earning ledger (design §5.12) ───────────────────────────
+    // Append-only, so every row that lands in it is also an audited act: the ledger is the source
+    // for platform revenue reporting and must be reconstructable from the audit trail alone.
+    MARKETPLACE_COMMISSION_ACCRUED,
+    MARKETPLACE_COMMISSION_REVERSED,
+    MARKETPLACE_COMMISSION_ADJUSTED,
+    MARKETPLACE_COMMISSION_SETTLED
 }

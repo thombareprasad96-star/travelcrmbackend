@@ -45,8 +45,13 @@ public class LeadController {
     public ResponseEntity<ApiResponse<LeadResponseDto>> createLead(
             @Valid @RequestBody CreateLeadRequestDto request) {
 
-        log.info("Received create lead request for: {}", request.getEmail());
+        // No customer email/phone in the log line. The prod Log4j2 config routes INFO to a rolling
+        // FILE that is retained and backed up, so anything written here becomes a second, unguarded
+        // copy of the customer contact data the CRM is supposed to hold in one place. The service
+        // logs the lead CODE once the row exists — that identifies the record without carrying PII.
+        log.info("Create lead request received");
         LeadResponseDto response = leadService.createLead(request);
+        log.info("Lead {} created", response.getLeadCode());
         return ResponseEntity
                 .status(HttpStatus.CREATED)
                 .body(ApiResponse.success("Lead created successfully", response, 201));

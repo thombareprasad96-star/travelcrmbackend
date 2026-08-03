@@ -68,11 +68,33 @@ public class BookingExpenseServiceImpl implements BookingExpenseService {
     public List<BookingExpenseResponse> getExpenses(UUID bookingPublicId) {
         Booking booking = findActiveBooking(bookingPublicId);
         LocalDate today = LocalDate.now();
+
+        // Row-level split of the two authorities that can reach this endpoint.
+        //
+        // BOOKING_PROFIT_READ sees the whole ledger. MARKETPLACE_PAYABLE_READ sees ONLY the rows
+        // carrying a marketplace link — because a marketplace payable is a *price the tenant must
+        // know to quote its customer*, not a margin. TRAVEL_AGENT holds the latter and not the
+        // former, and without this split it can place a platform order and then not see what the
+        // order costs, which makes the feature unusable rather than merely restricted.
+        //
+        // Enforced here rather than at the controller because @PreAuthorize gates the call, not the
+        // rows it returns.
+        boolean fullLedger = hasAuthority("BOOKING_PROFIT_READ");
+
         return expenseRepository
                 .findByBookingIdAndDeletedAtIsNullOrderByExpenseDateDescIdDesc(booking.getId())
                 .stream()
+                .filter(expense -> fullLedger || expense.getMarketplaceBookingPublicId() != null)
                 .map(expense -> toResponse(expense, today))
                 .toList();
+    }
+
+    /** Authority probe against the current principal. Mirrors BookingTimelineServiceImpl:178. */
+    private static boolean hasAuthority(String authority) {
+        var auth = org.springframework.security.core.context.SecurityContextHolder
+                .getContext().getAuthentication();
+        return auth != null && auth.getAuthorities().stream()
+                .anyMatch(a -> authority.equals(a.getAuthority()));
     }
 
     @Override

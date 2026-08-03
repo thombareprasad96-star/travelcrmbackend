@@ -1,16 +1,21 @@
 package com.crm.travelcrm.lead.dto;
 
 import com.crm.travelcrm.auth.dto.UserDto;
+import com.crm.travelcrm.customer.dto.response.CustomerMatchResponse;
+import com.crm.travelcrm.customer.enums.CommunicationPreference;
+import com.crm.travelcrm.lead.enums.DepartureMode;
 import com.crm.travelcrm.lead.enums.LeadSource;
 import com.crm.travelcrm.lead.enums.LeadStage;
 import com.crm.travelcrm.lead.enums.LeadType;
 import com.crm.travelcrm.quotation.dto.QuotationRefDto;
+import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.Builder;
 import lombok.Data;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.List;
 import java.util.UUID;
 
@@ -35,13 +40,45 @@ public class LeadResponseDto {
     private LeadStage leadStage;
     private UserDto assignedUser;
     private LocalDate birthDate;
+    private LocalDate anniversaryDate;
+    private CommunicationPreference preferredCommunication;
+    private LocalDate followUpDate;
+    private String packageType;
     private LocalDate travelDate;
     private BigDecimal budget;
     private Long logCount;
     private String departCountry;
     private String departCity;
+
+    // ── Departure / transport ────────────────────────────────────────────────
+    // departureMode must be returned or the edit form reopens with the transport section unset and
+    // every field below it orphaned — it is the discriminator that decides which trio is rendered.
+    private DepartureMode departureMode;
+    private String departureAirport;
+    private String airportCode;
+    @JsonFormat(pattern = "HH:mm")
+    private LocalTime preferredFlightTime;
+    private String railwayStation;
+    private String trainClass;
+    @JsonFormat(pattern = "HH:mm")
+    private LocalTime preferredTrainTime;
+    private String pickupAddress;
+    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm")
+    private LocalDateTime pickupDateTime;
+    private String vehiclePreference;
+
+    // ── Accessibility ────────────────────────────────────────────────────────
+    private Boolean specialAssistanceRequired;
+    private Integer assistancePassengerCount;
+    private List<String> specialAssistanceTypes;
+    private String specialAssistanceNotes;
+
     private Integer rooms;
     private Integer adults;
+    /** Echoed under the second name the create form uses, so either key reads the same value. */
+    private Integer totalAdults;
+    private Integer male;
+    private Integer female;
     private Integer children;
     private Integer infants;
     private Integer extraBeds;
@@ -49,6 +86,21 @@ public class LeadResponseDto {
     private String notes;
     private List<ItineraryItem> itinerary;
     private LocalDateTime createdAt;
+
+    // ── Existing-customer link ───────────────────────────────────────────────
+
+    /** publicId of the customer this lead is linked to, or null if none matched. */
+    private UUID customerId;
+
+    /**
+     * Populated on the CREATE response when an existing customer was matched by phone or email —
+     * this is the signal the frontend renders as the "Customer found with this email / phone" popup.
+     *
+     * <p>Absent (null) on every other response, including creates that matched nothing: the popup
+     * shows if and only if this object is present, so an unconditional empty object would make it
+     * fire on every new customer.
+     */
+    private CustomerMatchResponse customerMatch;
 
     /** Ref to this lead's newest quotation (null when none) — drives the "View/Download vs Create" UI. */
     private QuotationRefDto latestQuotation;
@@ -68,5 +120,11 @@ public class LeadResponseDto {
         private String city;
         private Integer nights;
         private Integer dayNumber; // ← was missing
+
+        // The master ids behind the two names. EditLead seeds its cascading Destination -> City
+        // dropdowns from these; without them both selects reopen blank on a lead that plainly has
+        // a destination and a city, and re-saving the lead loses the linkage entirely.
+        private Long destinationId;
+        private Long cityId;
     }
 }

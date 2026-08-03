@@ -10,6 +10,7 @@ import com.crm.travelcrm.platform.audit.entity.PlatformAuditAction;
 import com.crm.travelcrm.platform.notification.api.PlatformNotificationType;
 import com.crm.travelcrm.platform.notification.api.PlatformNotifyEvent;
 import com.crm.travelcrm.platform.usage.storage.TenantStorageAssetRepository;
+import com.crm.travelcrm.fleet.repository.FleetAttachmentRepository;
 import com.crm.travelcrm.portal.document.repository.TravelerDocumentRepository;
 import com.crm.travelcrm.tenent.entity.Tenant;
 import com.crm.travelcrm.tenent.tenentsRepository.TenantRepository;
@@ -46,6 +47,7 @@ public class UsageAlertService {
     private final BookingRepository bookingRepository;
     private final TenantStorageAssetRepository storageAssetRepository;
     private final TravelerDocumentRepository travelerDocumentRepository;
+    private final FleetAttachmentRepository fleetAttachmentRepository;
     private final UsageAlertMarkerRepository markerRepository;
     private final PlatformAuditRecorder platformAuditRecorder;
     private final ApplicationEventPublisher eventPublisher;
@@ -81,7 +83,8 @@ public class UsageAlertService {
                 ? null : tenant.getMaxStorageMb();
         Long storageLimitBytes = storageMb == null ? null : storageMb * BYTES_PER_MB;
         long storageUsed = storageAssetRepository.sumBytesByTenant(tenantId)
-                + travelerDocumentRepository.sumBytesByTenant(tenantId);
+                + travelerDocumentRepository.sumBytesByTenant(tenantId)
+                + fleetAttachmentRepository.sumBytesByTenant(tenantId);
         fired += evaluate(tenant, period, recipients, "STORAGE", "storage",
                 storageUsed, storageLimitBytes, true);
 

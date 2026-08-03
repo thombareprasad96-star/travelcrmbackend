@@ -44,6 +44,14 @@ public class FleetTripResponseDto {
 
     private String remarks;
 
+    /**
+     * Trip-level foreign currency and rate. The expense form reads these to decide whether to offer
+     * an NPR/INR toggle at all, and to tell the user which rate their entry will be converted at —
+     * so the conversion is visible without ever being editable from a cost row.
+     */
+    private String fxCurrency;
+    private BigDecimal fxRate;
+
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

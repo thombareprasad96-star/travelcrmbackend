@@ -11,6 +11,9 @@ import java.util.UUID;
 @Repository
 public interface BookingPaymentRepository extends JpaRepository<BookingPayment, Long> {
 
+    /** Complete audit timeline, including soft-deleted entries that become removal events. */
+    List<BookingPayment> findByBookingIdOrderByIdAsc(Long bookingId);
+
     /** Ledger for a booking, newest receipt first. */
     List<BookingPayment> findByBookingIdAndDeletedAtIsNullOrderByPaymentDateDescIdDesc(Long bookingId);
 

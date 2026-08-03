@@ -2,6 +2,7 @@ package com.crm.travelcrm.platform.entitlement.service;
 
 import com.crm.travelcrm.platform.audit.PlatformAuditRecorder;
 import com.crm.travelcrm.platform.audit.entity.PlatformAuditAction;
+import com.crm.travelcrm.common.config.ProductMode;
 import com.crm.travelcrm.platform.entitlement.dto.MyEntitlementsResponse;
 import com.crm.travelcrm.platform.entitlement.dto.TenantModulesResponse;
 import com.crm.travelcrm.platform.subscription.entity.Plan;
@@ -29,6 +30,15 @@ public class TenantEntitlementServiceImpl implements TenantEntitlementService {
     private final TenantRepository tenantRepository;
     private final PlanRepository planRepository;
     private final PlatformAuditRecorder platformAuditRecorder;
+
+    /**
+     * Which product this deployment is. Read straight from config rather than derived from the
+     * tenant's modules: a CRM_SUITE install can legitimately sell a tenant only the FLEET module,
+     * and that tenant must still be told a CRM exists here — otherwise the client hides the very
+     * upgrade path the operator is being sold.
+     */
+    @org.springframework.beans.factory.annotation.Value("${app.product-mode:CRM_SUITE}")
+    private String productMode;
 
     // Short-TTL cache so the per-request ModuleAccessFilter doesn't hit the DB on every call.
     // Evicted immediately on updateModules; a plan change self-heals within the TTL.
@@ -72,13 +82,18 @@ public class TenantEntitlementServiceImpl implements TenantEntitlementService {
     @Transactional(readOnly = true)
     public MyEntitlementsResponse entitlementsForTenant(Long tenantId) {
         if (tenantId == null) {
-            return new MyEntitlementsResponse(Set.of(), null, null, null, null);
+            return new MyEntitlementsResponse(Set.of(), null, null, null, null, mode());
         }
         Tenant tenant = tenantRepository.findById(tenantId)
                 .orElseThrow(() -> new TenantNotFoundException(null));
         return new MyEntitlementsResponse(
                 new TreeSet<>(effectiveModulesFor(tenantId)), tenant.getMaxUsers(), tenant.getMaxLeads(),
-                tenant.getMaxBookingsPerMonth(), tenant.getMaxStorageMb());
+                tenant.getMaxBookingsPerMonth(), tenant.getMaxStorageMb(), mode());
+    }
+
+    /** Normalised through the enum, so a typo in config reaches the client as a known value. */
+    private String mode() {
+        return ProductMode.from(productMode).name();
     }
 
     @Override

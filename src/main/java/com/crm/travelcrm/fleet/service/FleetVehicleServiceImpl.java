@@ -12,11 +12,11 @@ import com.crm.travelcrm.fleet.entity.FleetVehicle;
 import com.crm.travelcrm.fleet.enums.FleetOwnerType;
 import com.crm.travelcrm.fleet.enums.FleetTripStatus;
 import com.crm.travelcrm.fleet.enums.FleetVehicleStatus;
+import com.crm.travelcrm.fleet.integration.spi.FleetParty;
+import com.crm.travelcrm.fleet.integration.spi.FleetPartyPort;
 import com.crm.travelcrm.fleet.mapper.FleetVehicleMapper;
 import com.crm.travelcrm.fleet.repository.*;
 import com.crm.travelcrm.fleet.specification.FleetVehicleSpecification;
-import com.crm.travelcrm.vendor.entity.Vendor;
-import com.crm.travelcrm.vendor.enums.VendorStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -40,7 +40,10 @@ public class FleetVehicleServiceImpl implements FleetVehicleService {
     private final FleetTripRepository tripRepository;
     private final FleetFuelLogRepository fuelLogRepository;
     private final FleetMaintenanceLogRepository maintenanceLogRepository;
-    private final FleetVendorLookupRepository vendorLookupRepository;
+    private final FleetExpenseRepository expenseRepository;
+    private final FleetComplianceDocumentRepository documentRepository;
+    private final FleetTripLegRepository legRepository;
+    private final FleetPartyPort partyPort;
     private final FleetVehicleMapper mapper;
 
     // ── Commands ────────────────────────────────────────────────────────────
@@ -146,6 +149,22 @@ public class FleetVehicleServiceImpl implements FleetVehicleService {
                     "Vehicle has diary records (trips / fuel / service logs) — mark it OUT_OF_SERVICE instead of deleting",
                     HttpStatus.CONFLICT);
         }
+        // Financial and statutory records are a HARDER stop than diary history.
+        //
+        // fleet_expenses and fleet_compliance_documents are deliberately absent from TrashableType,
+        // because their retention requirement is eight years and the 30-day purge would hard-delete
+        // them. But excluding the children is not enough on its own: this vehicle IS registered, so
+        // trashing it would let the purge reach the children through the FK — either blowing up the
+        // whole tenant's nightly purge on a constraint violation, or, worse, taking three years of
+        // records with it. The guard has to live here.
+        if (expenseRepository.existsByVehicle_IdAndDeletedAtIsNull(vehicle.getId())
+                || documentRepository.existsByVehicle_IdAndDeletedAtIsNull(vehicle.getId())
+                || legRepository.existsByVehicle_IdAndDeletedAtIsNull(vehicle.getId())) {
+            throw new BusinessException(
+                    "This vehicle carries expenses or compliance documents, which are kept for eight "
+                            + "years and can never be purged. Mark it OUT_OF_SERVICE instead.",
+                    HttpStatus.CONFLICT);
+        }
         vehicle.softDelete(FleetContext.username());
         vehicleRepository.save(vehicle);
         log.info("Fleet vehicle soft-deleted | id: {} | tenantId: {}", vehicle.getId(), vehicle.getTenantId());
@@ -188,9 +207,11 @@ public class FleetVehicleServiceImpl implements FleetVehicleService {
     @Override
     @Transactional(readOnly = true)
     public List<FleetOptionDto> vendorOptions() {
-        return vendorLookupRepository.findOptions(FleetContext.tenantId(), VendorStatus.ACTIVE)
+        // Empty in a Fleet-only deployment — the form renders without the owner dropdown rather
+        // than erroring. See StandalonePartyPort.
+        return partyPort.options(FleetContext.tenantId())
                 .stream()
-                .map(v -> new FleetOptionDto(v.getPublicId(), v.getVendorName(), null))
+                .map(p -> new FleetOptionDto(p.publicId(), p.name(), null))
                 .toList();
     }
 
@@ -201,13 +222,18 @@ public class FleetVehicleServiceImpl implements FleetVehicleService {
                 .orElseThrow(() -> new ResourceNotFoundException("Vehicle not found: " + publicId));
     }
 
+    /**
+     * Resolves the vehicle's owner through {@link FleetPartyPort} instead of importing
+     * {@code Vendor}, so this compiles and runs with no vendor module present. CRM behaviour is
+     * unchanged — the adapter runs the same tenant-scoped finder this method used to call directly.
+     */
     private void applyVendor(FleetVehicle vehicle, UUID vendorPublicId, Long tenantId) {
         if (vendorPublicId == null) return;
-        Vendor vendor = vendorLookupRepository.findByPublicIdAndTenantIdAndDeletedAtIsNull(vendorPublicId, tenantId)
+        FleetParty party = partyPort.resolve(vendorPublicId, tenantId)
                 .orElseThrow(() -> new ResourceNotFoundException("Vendor not found: " + vendorPublicId));
-        vehicle.setVendorId(vendor.getId());
-        vehicle.setVendorPublicId(vendor.getPublicId());
-        vehicle.setVendorName(vendor.getVendorName());
+        vehicle.setVendorId(party.id());
+        vehicle.setVendorPublicId(party.publicId());
+        vehicle.setVendorName(party.name());
     }
 
     /** Trim, collapse inner whitespace, uppercase — "mh 12 ab 1234" → "MH 12 AB 1234". */

@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -50,7 +51,42 @@ public class PlanCatalogueInitializer implements ApplicationRunner {
     @Override
     public void run(ApplicationArguments args) {
         seedPlans();
+        ensureFleetPlan();
         backfillPlanEntitlements();
+    }
+
+    /**
+     * The Fleet-only plan: Vehicle Diary sold as its own product.
+     *
+     * <p>Has to be its own idempotent step rather than a line in {@link #seedPlans()}, because that
+     * method returns early the moment ANY plan exists — so on every database seeded before this
+     * plan was invented (which is all of them, including the pilot) it would never appear, and
+     * there is no API to create one.
+     *
+     * <p><b>modules = {FLEET} and nothing else.</b> That single entry is the entire product
+     * boundary: {@code ModuleAccessFilter} answers 403 MODULE_NOT_ENABLED on every CRM prefix for
+     * a tenant on this plan, while its {@code ALWAYS_ALLOWED} set keeps the platform capabilities a
+     * fleet operator still needs — login, users, company profile, notifications, trash.
+     *
+     * <p>Requires V2 PART 12, which widens the seven CHECK constraints that name the plan enum.
+     * Without it this insert fails on {@code plans_code_check}.
+     */
+    private void ensureFleetPlan() {
+        if (planRepository.findByCode(TenantPlan.FLEET).isPresent()) return;
+        planRepository.save(Plan.builder()
+                .code(TenantPlan.FLEET).displayName("Vehicle Diary")
+                .monthlyPrice(new BigDecimal("1999")).currency("INR")
+                // A transport operator's seats: dispatchers, an accountant, the owner. Leads and
+                // bookings caps stay null — the modules are off, so a number there would only
+                // invite someone to read meaning into it.
+                .maxUsers(10).maxLeads(null)
+                .maxBookingsPerMonth(null)
+                // Receipt photos and certificate scans are the storage here: ~50 receipts a month
+                // at half a megabyte is 300 MB a year for a ten-vehicle fleet.
+                .maxStorageMb(2048).maxSubAgents(0)
+                .modules(new HashSet<>(Set.of("FLEET")))
+                .active(true).build());
+        log.info("[PlanCatalogue] created the FLEET plan (Vehicle Diary — modules = {FLEET})");
     }
 
     private void seedPlans() {
@@ -92,6 +128,62 @@ public class PlanCatalogueInitializer implements ApplicationRunner {
     private void backfillPlanEntitlements() {
         ensureSubAgentEntitlement(TenantPlan.PRO, 5);
         ensureSubAgentEntitlement(TenantPlan.ENTERPRISE, 50);
+        backfillUngatedModuleKeys();
+    }
+
+    /**
+     * Grants the module keys for subsystems that shipped WITHOUT an entitlement rule.
+     *
+     * <p>Accounting, Marketing, Tasks/Calendar, Reminders and the CRM Dashboard were all built after
+     * the plan catalogue was seeded and none of them was ever added to a plan. They stayed reachable
+     * only because {@code ModuleAccessFilter} is fail-open on unmapped prefixes — so today any tenant
+     * on any plan can call {@code /api/accounting/**} and {@code /api/marketing/**} regardless of what
+     * they bought.
+     *
+     * <p><b>This backfill must land BEFORE the matching rules are added to that filter</b>, or the
+     * first deploy carrying the rules would 403 every existing tenant out of screens they use daily —
+     * the same failure mode as an empty {@code plans} table. It runs on every startup, is additive,
+     * and never removes a key a SuperAdmin has configured.
+     *
+     * <p>TASKS, REMINDERS and DASHBOARD go to every plan including Basic: they are core CRM
+     * navigation, not premium capabilities, and a tenant that loses them loses the product. ACCOUNTING
+     * and MARKETING are Pro-and-above, matching how they are actually sold.
+     */
+    private void backfillUngatedModuleKeys() {
+        ensureModules(TenantPlan.STARTER, "TASKS", "REMINDERS", "DASHBOARD");
+        ensureModules(TenantPlan.PRO, "TASKS", "REMINDERS", "DASHBOARD", "ACCOUNTING", "MARKETING");
+        ensureModules(TenantPlan.ENTERPRISE, "TASKS", "REMINDERS", "DASHBOARD", "ACCOUNTING", "MARKETING");
+        backfillHotelMarketplaceKey();
+    }
+
+    /**
+     * Registers the {@code HOTEL_MARKETPLACE} module key so the SuperAdmin can grant it.
+     *
+     * <p>Unlike the backfill above, this one grants the key to NO plan. The marketplace is sold as an
+     * optional paid add-on (design doc §20.3), so switching it on for every existing tenant would be
+     * giving away the product. The key still has to EXIST, because the Feature-Flag catalogue and the
+     * plan editor both derive their module list from the union of persisted plan modules — a key no
+     * plan has ever held is invisible in the console and cannot be granted through the UI at all.</p>
+     *
+     * <p>ENTERPRISE carries it as the sellable default; STARTER and PRO get it per-tenant, either by
+     * a SuperAdmin grant or when the add-on subscription lands.</p>
+     */
+    private void backfillHotelMarketplaceKey() {
+        ensureModules(TenantPlan.ENTERPRISE, "HOTEL_MARKETPLACE");
+    }
+
+    /** Additively grant {@code keys} to {@code code}; a no-op once they are present. */
+    private void ensureModules(TenantPlan code, String... keys) {
+        planRepository.findByCode(code).ifPresent(plan -> {
+            boolean changed = false;
+            for (String key : keys) {
+                changed |= plan.getModules().add(key);   // Set.add == true only when newly added
+            }
+            if (changed) {
+                planRepository.save(plan);
+                log.info("[PlanCatalogue] backfilled module keys {} on plan {}", List.of(keys), code);
+            }
+        });
     }
 
     /** Ensure {@code plan} grants the SUBAGENT module, and give it a seat cap only if none was ever set. */

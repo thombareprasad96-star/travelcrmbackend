@@ -245,7 +245,9 @@ ALTER TABLE platform_audit_logs ADD CONSTRAINT platform_audit_logs_action_check
                 'SUBAGENT_LICENSE_CREATE','SUBAGENT_LICENSE_APPROVE','SUBAGENT_LICENSE_REJECT','SUBAGENT_LICENSE_CANCEL',
                 'IMPERSONATION_START','IMPERSONATION_END','USER_FORCE_RESET','USER_LOCK','USER_UNLOCK',
                 'FEATURE_FLAG_CHANGE','CONFIG_CHANGE','QUOTA_OVERRIDE','USAGE_LIMIT_EXCEEDED',
-                'ANNOUNCEMENT_SEND','MAINTENANCE_TOGGLE','DATA_EXPORT'));
+                'ANNOUNCEMENT_SEND','MAINTENANCE_TOGGLE','DATA_EXPORT',
+                'PLATFORM_HOTEL_CREATE','PLATFORM_HOTEL_UPDATE','PLATFORM_HOTEL_PUBLISH',
+                'PLATFORM_HOTEL_UNPUBLISH','PLATFORM_HOTEL_DELETE'));
 
 -- ── UpgradeRequest enum CHECK constraint refresh ────────────────────────────
 -- upgrade_requests is a NEW table, so Hibernate creates its *_check constraints with the current enum
@@ -689,3 +691,53 @@ ALTER TABLE lead_ingest_events ADD CONSTRAINT lead_ingest_events_status_check
 ALTER TABLE lead_logs DROP CONSTRAINT IF EXISTS fk_lead_log_lead;
 ALTER TABLE lead_logs ADD CONSTRAINT fk_lead_log_lead
         FOREIGN KEY (lead_id) REFERENCES leads (id) ON DELETE CASCADE;
+
+-- ── LeadType enum CHECK constraint refresh ──────────────────────────────────
+-- The lead_type constants were REPLACED, not extended: FRESH_LEAD / REPEAT_CUSTOMER / CORPORATE /
+-- VIP became FRESH / HOT / WARM / COLD. That makes this the most dangerous constraint in the file —
+-- a database still carrying the old CHECK rejects EVERY lead write, not just the new values.
+--
+-- The row rewrite lives in V3__lead_booking_fe_alignment.sql and is NOT repeated here: this block
+-- only refreshes the constraint, and re-running an UPDATE on every boot is not something a
+-- constraint file should do. On a database that never took V3, this ADD CONSTRAINT fails (old rows
+-- still hold the old values), spring.sql.init swallows it with continue-on-error=true, and
+-- SchemaEnumConstraintValidator then refuses to start — which is the intended outcome. It is the
+-- migration that is missing, and booting half-migrated would be worse.
+ALTER TABLE leads DROP CONSTRAINT IF EXISTS leads_lead_type_check;
+ALTER TABLE leads ADD CONSTRAINT leads_lead_type_check
+        CHECK (lead_type IN ('FRESH','HOT','WARM','COLD'));
+
+-- ── DepartureMode enum CHECK constraints ────────────────────────────────────
+-- The discriminator gating the transport sub-form, on both the lead and the booking trip snapshot.
+-- Display strings ("Flight / Airport") are the WIRE format; the column stores the constant name.
+-- NULL passes a CHECK, which is what the optional column needs.
+ALTER TABLE leads DROP CONSTRAINT IF EXISTS leads_departure_mode_check;
+ALTER TABLE leads ADD CONSTRAINT leads_departure_mode_check
+        CHECK (departure_mode IN ('FLIGHT','TRAIN','CAR','BUS','OTHER'));
+
+ALTER TABLE booking_trip_snapshot DROP CONSTRAINT IF EXISTS booking_trip_snapshot_departure_mode_check;
+ALTER TABLE booking_trip_snapshot ADD CONSTRAINT booking_trip_snapshot_departure_mode_check
+        CHECK (departure_mode IN ('FLIGHT','TRAIN','CAR','BUS','OTHER'));
+
+-- ── Lead preferred_communication CHECK ──────────────────────────────────────
+-- Deliberately the SAME vocabulary as customers.comm_pref: conversion copies the lead's value
+-- straight onto the customer, so if these two constraints ever diverge the copy fails at the DB
+-- with no clue as to why. Keep them identical.
+ALTER TABLE leads DROP CONSTRAINT IF EXISTS leads_preferred_communication_check;
+ALTER TABLE leads ADD CONSTRAINT leads_preferred_communication_check
+        CHECK (preferred_communication IN ('WHATSAPP','SMS','EMAIL','PHONE_CALL','ALL_CHANNELS'));
+
+-- ── Existing-customer match: lookup indexes ─────────────────────────────────
+-- Backing the "customer already exists with this phone OR email" rule. Both are partial and
+-- tenant-first, matching the finders in CustomerRepository. Without them the lookup probe the lead
+-- form fires while the clerk types is a sequential scan on every keystroke.
+CREATE INDEX IF NOT EXISTS idx_customers_phone_normalized
+        ON customers (tenant_id, phone_normalized)
+        WHERE phone_normalized IS NOT NULL AND deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_customers_email_lower
+        ON customers (tenant_id, lower(email))
+        WHERE email IS NOT NULL AND deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_leads_customer_id ON leads (customer_id)
+        WHERE customer_id IS NOT NULL;

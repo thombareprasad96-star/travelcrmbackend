@@ -1,5 +1,12 @@
 # Fleet / Vehicle Diary Module (`fleet/`)
 
+> **Legacy operational overview:** this file documents the pre-ledger Fleet module. The current
+> working tree additionally implements trip legs, expenses, driver cash, settlements, accounting
+> periods, normalized compliance documents, private attachments, a standalone party directory and
+> CRM/standalone ports. For the current architecture, implementation audit, known defects and release
+> gates, use `docs/FLEET_MODULE_REDESIGN.md` §0.2. The endpoint and entity lists below must not be
+> treated as complete for the redesigned module.
+
 Operational fleet management for a tenant: vehicles, drivers, trips, fuel & maintenance
 diaries, and document-expiry alerts. **Fully separate from the quotation master
 `master/vehicle/`** (zero changes there) — self-contained package, linked to the rest of

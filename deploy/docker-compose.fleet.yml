@@ -1,0 +1,103 @@
+name: vehicle-diary
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Vehicle Diary — the Fleet-only product, one host, one command.
+#
+# Deliberately NOT the same file as docker-compose.hostinger.yml. That one is the
+# CRM suite on a split-origin setup where nginx already runs on the host and TLS is
+# somebody else's job. This is the shape a fleet customer actually buys: one VPS,
+# one `docker compose up -d`, nginx inside the stack serving the SPA and proxying
+# /api, nothing to install by hand.
+#
+# What makes it the Fleet product rather than the CRM:
+#   APP_PRODUCT_MODE=FLEET_STANDALONE  → the fleet integration adapters select the
+#     standalone ports; no code path reads a booking or vendor table.
+#   Tenants provisioned on the FLEET plan (modules = {FLEET}) → ModuleAccessFilter
+#     answers 403 on every CRM prefix. The plan is the authorisation boundary; the
+#     mode is the packaging one. See docs/FLEET_STANDALONE_DEPLOY.md.
+#
+# Usage:
+#   cp fleet.env.example /etc/vehicle-diary/fleet.env   # then edit every CHANGE_ME
+#   docker compose -f docker-compose.fleet.yml --env-file .env up -d
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-vehicle_diary}
+      POSTGRES_USER: ${POSTGRES_USER:-fleet}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      TZ: ${TZ:-Asia/Kolkata}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Nightly dumps land here; back this directory up off-box. A fleet customer's
+      # settled cash ledger has an 8-year retention requirement.
+      - ${BACKUP_DIR:-./backups}:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - internal
+
+  app:
+    image: ${FLEET_IMAGE:?Set FLEET_IMAGE before running docker compose}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ${APP_ENV_FILE:-/etc/vehicle-diary/fleet.env}
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      SERVER_ADDRESS: 0.0.0.0
+      SERVER_PORT: 8080
+      # THE flag that makes this the Fleet product.
+      APP_PRODUCT_MODE: FLEET_STANDALONE
+      DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-vehicle_diary}
+      DB_USERNAME: ${POSTGRES_USER:-fleet}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      LOG_DIR: /var/log/vehicle-diary
+    volumes:
+      - app_logs:/var/log/vehicle-diary
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+    # No published port: nothing reaches the JVM except through nginx below.
+    networks:
+      - internal
+
+  web:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_started
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx-fleet.conf:/etc/nginx/conf.d/default.conf:ro
+      # The built SPA (npm run build → dist/). Same bundle as the CRM: the shell it
+      # renders is chosen at runtime from /api/me/entitlements, not at build time.
+      - ${SPA_DIST_DIR:-./dist}:/usr/share/nginx/html:ro
+      # certbot's live directory, mounted read-only. Leave empty for plain HTTP on
+      # an internal network; see the runbook for the TLS step.
+      - ${TLS_DIR:-./tls}:/etc/nginx/tls:ro
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  app_logs:

@@ -35,6 +35,28 @@ public interface CustomerRepository
 
     Optional<Customer> findByPhoneAndTenantIdAndDeletedAtIsNull(String phone, Long tenantId);
 
+    // ── Existing-customer matching (lead auto-prefill) ─────────────────────────
+    // Both finders answer "does this tenant already know this person?" and back BOTH the
+    // /customers/lookup probe and the authoritative link written at lead-create time.
+    //
+    // `findFirst...OrderByIdAsc` rather than a plain unique lookup on purpose: the uniqueness of
+    // (tenant_id, phone) is a PARTIAL index over live rows on the RAW phone, so two rows can
+    // legitimately share a canonical phone_normalized while differing in format. Oldest-first makes
+    // the choice deterministic and picks the original record rather than the later duplicate.
+
+    /**
+     * Match on the E.164 shadow key, so "+919812345678", "9812345678" and "09812345678" all find
+     * the same customer. Callers must skip a null canonical value — {@code PhoneCanonicalizer}
+     * returns null when it cannot canonicalise without guessing, and matching null to null would
+     * make every unparseable phone match every other one.
+     */
+    Optional<Customer> findFirstByPhoneNormalizedAndTenantIdAndDeletedAtIsNullOrderByIdAsc(
+            String phoneNormalized, Long tenantId);
+
+    /** Email is stored lower-cased on write; IgnoreCase guards rows that predate that. */
+    Optional<Customer> findFirstByEmailIgnoreCaseAndTenantIdAndDeletedAtIsNullOrderByIdAsc(
+            String email, Long tenantId);
+
     // ── Listing ────────────────────────────────────────────────────────────────
 
     Page<Customer> findAllByTenantIdAndDeletedAtIsNull(Long tenantId, Pageable pageable);
