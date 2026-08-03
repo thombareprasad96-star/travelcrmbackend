@@ -49,6 +49,18 @@ public interface CityRepository extends JpaRepository<City, Long> {
      */
     Optional<City> findFirstByTenantIdAndNameIgnoreCaseOrderByIdAsc(Long tenantId, String name);
 
+    /**
+     * Country-qualified name match — the safe lookup for marketplace hotel sync.
+     *
+     * <p>The catalog stores geography as an ISO country code plus a city name, and the sync resolves
+     * the country first so this can narrow by it. Country-qualified because city names repeat across
+     * countries (Hyderabad, Birmingham, Santiago): the name-only fallback above is acceptable for a
+     * lead the user typed by hand, but attaching a platform hotel to the wrong country's city
+     * produces a record that reads as correct on every screen downstream.</p>
+     */
+    Optional<City> findFirstByTenantIdAndCountryIdAndNameIgnoreCaseOrderByIdAsc(
+            Long tenantId, Long countryId, String name);
+
     List<City> findByTenantIdAndDestination_NameIgnoreCase(Long tenantId, String destinationName);
 
     /** Dropdown: all cities under a specific destination for this tenant, ordered by name. */

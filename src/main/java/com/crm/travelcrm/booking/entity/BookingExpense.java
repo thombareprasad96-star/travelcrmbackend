@@ -9,6 +9,7 @@ import lombok.experimental.SuperBuilder;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.UUID;
 
 /**
  * One cost line the agency incurred on a booking — a hotel payment, a flight ticket, a transfer,
@@ -141,6 +142,16 @@ public class BookingExpense extends BaseTenantEntity {
 
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
+
+    /**
+     * The platform hotel-marketplace booking this payable belongs to, when it came from there.
+     *
+     * <p>Marks the rows the SERVER maintains. A marketplace payable is a VENDOR line the tenant never
+     * typed, so {@code Booking.vendorCost} — which this enum's contract says already holds everything
+     * paid to suppliers — has to be kept in step with it. {@code sumMarketplacePayable} is how.</p>
+     */
+    @Column(name = "marketplace_booking_public_id")
+    private UUID marketplaceBookingPublicId;
 
     /**
      * What is still payable to the vendor on this line. Deliberately NOT a column: a stored

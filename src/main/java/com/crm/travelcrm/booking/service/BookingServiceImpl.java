@@ -1,25 +1,33 @@
 package com.crm.travelcrm.booking.service;
 
+import com.crm.travelcrm.booking.dto.request.BookingFinancialPreviewRequest;
 import com.crm.travelcrm.booking.dto.request.CancelBookingRequestDTO;
 import com.crm.travelcrm.booking.dto.request.CreateBookingRequestDTO;
 import com.crm.travelcrm.booking.dto.request.LeadConversionRequestDTO;
 import com.crm.travelcrm.booking.dto.request.PaymentUpdateRequestDTO;
 import com.crm.travelcrm.booking.dto.request.StatusUpdateRequestDTO;
+import com.crm.travelcrm.booking.dto.request.TripSnapshotRequest;
 import com.crm.travelcrm.booking.dto.request.UpdateBookingRequestDTO;
 import com.crm.travelcrm.booking.assignment.BookingAssigneeResolver;
 import com.crm.travelcrm.booking.assignment.BookingAssigneeView;
 import com.crm.travelcrm.booking.assignment.BookingAssigneeViewFactory;
+import com.crm.travelcrm.booking.api.BookingCancelledEvent;
 import com.crm.travelcrm.booking.enums.CancelAction;
 import com.crm.travelcrm.booking.dto.response.BookingAssigneeDto;
+import com.crm.travelcrm.booking.dto.response.BookingFinancialPreviewResponse;
 import com.crm.travelcrm.booking.dto.response.BookingPageSummaryResponseDTO;
 import com.crm.travelcrm.booking.dto.response.BookingResponseDTO;
 import com.crm.travelcrm.booking.dto.response.BookingStatsResponseDTO;
+import com.crm.travelcrm.booking.dto.response.TripSnapshotResponse;
 import com.crm.travelcrm.booking.entity.Booking;
 import com.crm.travelcrm.booking.entity.BookingPayment;
+import com.crm.travelcrm.booking.entity.BookingTripLeg;
+import com.crm.travelcrm.booking.entity.BookingTripSnapshot;
 import com.crm.travelcrm.booking.enums.BookingStatus;
 import com.crm.travelcrm.booking.enums.PaymentStatus;
 import com.crm.travelcrm.booking.exception.BookingNotFoundException;
 import com.crm.travelcrm.booking.mapper.BookingMapper;
+import com.crm.travelcrm.booking.repository.BookingExpenseRepository;
 import com.crm.travelcrm.booking.repository.BookingPaymentRepository;
 import com.crm.travelcrm.accounting.settings.service.AccountingSettingsService;
 import com.crm.travelcrm.booking.repository.BookingRepository;
@@ -43,8 +51,12 @@ import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.common.util.PhoneNormalizer;
 import com.crm.travelcrm.customer.entity.Customer;
 import com.crm.travelcrm.customer.repository.CustomerRepository;
+import com.crm.travelcrm.customer.service.CustomerMatcher;
+import com.crm.travelcrm.customer.service.CustomerService;
 import com.crm.travelcrm.customer.util.CustomerCodeGenerator;
 import com.crm.travelcrm.lead.entity.Lead;
+import com.crm.travelcrm.lead.entity.LeadItinerary;
+import com.crm.travelcrm.lead.enums.DepartureMode;
 import com.crm.travelcrm.lead.enums.LeadStage;
 import com.crm.travelcrm.lead.repository.LeadRepository;
 import com.crm.travelcrm.lead.service.LeadAccessGuard;
@@ -80,6 +92,7 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -106,11 +119,17 @@ public class BookingServiceImpl implements BookingService {
 
     private final BookingRepository        bookingRepository;
     private final BookingPaymentRepository paymentRepository;
+    /** Only for the marketplace-payable term of the server-owned vendorCost — see update(). */
+    private final BookingExpenseRepository expenseRepository;
     private final BookingMapper        bookingMapper;
     private final BookingCodeGenerator bookingCodeGenerator;
     private final ApplicationEventPublisher eventPublisher;
     private final CustomerRepository   customerRepository;
     private final CustomerCodeGenerator customerCodeGenerator;
+    // Owns resolve-or-create for the booking form's nested `customer` block. Re-implementing those
+    // duplicate/trashed-restore rules here is what used to 500 against uq_customers_phone_tenant.
+    private final CustomerService      customerService;
+    private final CustomerMatcher      customerMatcher;
     private final LeadRepository       leadRepository;
     private final LeadAccessGuard      leadAccessGuard;
     private final QuotationRepository  quotationRepository;
@@ -132,8 +151,6 @@ public class BookingServiceImpl implements BookingService {
     @Override
     @Transactional
     public BookingResponseDTO create(CreateBookingRequestDTO request) {
-        log.info("Creating new booking for customer: {}", request.getCustomerId());
-
         Long tenantId = requireTenantId();
 
         Booking booking = bookingMapper.toEntity(request);
@@ -141,15 +158,40 @@ public class BookingServiceImpl implements BookingService {
         booking.setBookingCode(bookingCodeGenerator.generate(tenantId));
         booking.setStatus(BookingStatus.PENDING);
 
+        // The create form may omit bookingDate (for example an older/mobile client). The column is
+        // NOT NULL and the DTO contract promises "defaults to today", so materialise that default
+        // on the entity rather than only using it transiently inside the quota check below.
+        if (booking.getBookingDate() == null) {
+            booking.setBookingDate(LocalDate.now());
+        }
+
+        // BookingMapper deliberately ignores element collections. Copy the selected inclusions
+        // here, just as update() and lead conversion do, otherwise a successful create silently
+        // drops every service chip selected on the page.
+        booking.setServices(request.getServices() == null
+                ? new ArrayList<>()
+                : new ArrayList<>(request.getServices()));
+
         // Monthly booking-quota gate (hard 403 once the plan cap for the target month is reached).
         enforceBookingQuota(tenantId, booking.getBookingDate());
 
-        // Validate cross-aggregate references (no DB FK) and snapshot the resolved values.
-        Customer customer = customerRepository
-                .findByIdAndTenantIdAndDeletedAtIsNull(request.getCustomerId(), tenantId)
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "Customer not found: " + request.getCustomerId()));
+        // Resolve the source lead FIRST — a new customer created below is stamped with its
+        // provenance, which is what lets the cancel-cleanup reclaim only the customers this flow
+        // created and never one a user typed in by hand.
+        Lead sourceLead = resolveSourceLead(request.getLeadPublicId(), tenantId);
+
+        // Resolve the customer: reuse by publicId (optionally syncing corrections) or create a new
+        // profile. Delegated to the customer module so the duplicate-phone and trashed-restore rules
+        // live in ONE place — re-implementing them here is what used to 500 against
+        // uq_customers_phone_tenant when a booking raced the phone search.
+        Customer customer = customerService.resolveOrCreate(
+                request.getCustomer(), sourceLead != null ? sourceLead.getId() : null);
+
         booking.setCustomerId(customer.getId());
+        booking.setCustomerPublicId(customer.getPublicId());
+        // Read from the RESOLVED customer, never from the request. Conversion used to take this from
+        // the request while direct create took it from the row, so the two paths could disagree about
+        // the same customer's name on the same day.
         booking.setCustomerNameSnapshot(customer.getName());
 
         // Destination is sent as a free-text name (no id); snapshot it so the NOT NULL holds.
@@ -159,12 +201,20 @@ public class BookingServiceImpl implements BookingService {
         // from on this path.
         booking.setAssignedUserId(assigneeResolver.resolveForCreate(request.getAssignedUserId(), tenantId));
 
-        if (request.getLeadId() != null) {
-            if (!leadRepository.existsByIdAndTenantIdAndDeletedAtIsNull(request.getLeadId(), tenantId)) {
-                throw new ResourceNotFoundException("Lead not found: " + request.getLeadId());
-            }
-            booking.setLeadId(request.getLeadId());
+        if (sourceLead != null) {
+            booking.setLeadId(sourceLead.getId());
+            booking.setSourceLeadPublicId(sourceLead.getPublicId());
+            // …and point the LEAD back at the customer it just became. linkExistingCustomer only
+            // runs at lead creation, when this customer usually does not exist yet — so without
+            // this the commonest journey in the product (enquiry becomes a customer through its
+            // own booking) leaves the lead's customer link empty forever.
+            backLinkCustomerToLead(sourceLead, customer);
+            leadRepository.save(sourceLead);
         }
+
+        // Traveller / departure / itinerary detail. Attached before save so the cascade persists it
+        // in the same transaction as the booking it belongs to.
+        booking.attachTripSnapshot(buildTripSnapshot(request.getTripSnapshot()));
 
         BigDecimal initialPaid = request.getPaidAmount() != null
                 ? request.getPaidAmount() : BigDecimal.ZERO;
@@ -184,11 +234,254 @@ public class BookingServiceImpl implements BookingService {
             // Broker commission accrues on payment received — an upfront payment counts too.
             commissionService.syncForBooking(saved);
         }
-        log.info("Booking created successfully with code: {}", saved.getBookingCode());
+        log.info("Booking {} created for customer {} | tenantId: {}",
+                saved.getBookingCode(), customer.getCustomerCode(), tenantId);
         publishBookingEvent(NotificationType.BOOKING_CREATED, saved,
                 "New Booking: " + saved.getBookingCode(),
                 "A new booking " + saved.getBookingCode() + " was created");
         return toResponse(saved);
+    }
+
+    /**
+     * Resolve the optional source lead by publicId, tenant-scoped.
+     *
+     * <p>Returns null when no lead was supplied — a booking taken directly, with no prior enquiry,
+     * is entirely normal. A publicId that IS supplied but does not resolve is a 404: silently
+     * ignoring it would drop the lead-to-booking traceability the reports depend on, with nothing
+     * anywhere to say it happened.
+     */
+    private Lead resolveSourceLead(UUID leadPublicId, Long tenantId) {
+        if (leadPublicId == null) return null;
+        return leadRepository.findByPublicIdAndTenantIdAndDeletedAtIsNull(leadPublicId, tenantId)
+                .orElseThrow(() -> new ResourceNotFoundException("Lead not found: " + leadPublicId));
+    }
+
+    /**
+     * Build the trip snapshot from the request block, or null when none was sent.
+     *
+     * <p>The departure section is copied through {@code mode} rather than field-by-field: the form
+     * sends the flight and train preferred times under one shared {@code preferredTime} key, and it
+     * keeps the values of whichever groups the clerk filled in before switching mode. Copying
+     * everything would produce a train journey carrying an airport code — data that reads as real to
+     * anything that does not check the mode first.
+     */
+    private BookingTripSnapshot buildTripSnapshot(TripSnapshotRequest request) {
+        if (request == null) return null;
+
+        BookingTripSnapshot snapshot = BookingTripSnapshot.builder()
+                .packageType(request.getPackageType())
+                .notes(request.getNotes())
+                .build();
+
+        TripSnapshotRequest.Departure departure = request.getDeparture();
+        if (departure != null) {
+            snapshot.setDepartCountry(departure.getCountry());
+            snapshot.setDepartCity(departure.getCity());
+
+            DepartureMode mode = departure.getMode();
+            snapshot.setDepartureMode(mode);
+            if (mode == DepartureMode.FLIGHT) {
+                snapshot.setDepartureAirport(departure.getAirport());
+                snapshot.setAirportCode(departure.getAirportCode() == null
+                        ? null : departure.getAirportCode().trim().toUpperCase());
+                snapshot.setPreferredFlightTime(departure.getPreferredTime());
+            } else if (mode == DepartureMode.TRAIN) {
+                snapshot.setRailwayStation(departure.getRailwayStation());
+                snapshot.setTrainClass(departure.getTrainClass());
+                snapshot.setPreferredTrainTime(departure.getPreferredTime());
+            } else if (mode == DepartureMode.CAR) {
+                snapshot.setPickupAddress(departure.getPickupAddress());
+                snapshot.setPickupDateTime(departure.getPickupDateTime());
+                snapshot.setVehiclePreference(departure.getVehiclePreference());
+            }
+        }
+
+        TripSnapshotRequest.Travellers travellers = request.getTravellers();
+        if (travellers != null) {
+            snapshot.setRooms(travellers.getRooms());
+            snapshot.setMale(travellers.getMale());
+            snapshot.setFemale(travellers.getFemale());
+            // Prefer the sent total, else derive it from the split. Stored either way so a later
+            // edit to male/female cannot rewrite the headcount this booking was priced against.
+            snapshot.setTotalAdults(travellers.getTotalAdults() != null
+                    ? travellers.getTotalAdults()
+                    : zero(travellers.getMale()) + zero(travellers.getFemale()));
+            snapshot.setChildren(travellers.getChildren());
+            snapshot.setInfants(travellers.getInfants());
+            snapshot.setExtraBeds(travellers.getExtraBeds());
+        }
+
+        TripSnapshotRequest.SpecialAssistance assistance = request.getSpecialAssistance();
+        if (assistance != null && Boolean.TRUE.equals(assistance.getRequired())) {
+            snapshot.setSpecialAssistanceRequired(true);
+            snapshot.setAssistancePassengerCount(assistance.getPassengerCount());
+            snapshot.setSpecialAssistanceNotes(assistance.getNotes());
+            if (assistance.getTypes() != null) {
+                snapshot.getSpecialAssistanceTypes().addAll(assistance.getTypes());
+            }
+        } else {
+            // Unticked means unticked: never carry the detail of an assistance request that was
+            // turned off, or the voucher prints a wheelchair nobody asked for.
+            snapshot.setSpecialAssistanceRequired(false);
+            snapshot.setAssistancePassengerCount(0);
+        }
+
+        if (request.getItinerary() != null) {
+            int day = 1;
+            for (TripSnapshotRequest.TripLeg leg : request.getItinerary()) {
+                snapshot.addLeg(BookingTripLeg.builder()
+                        .destination(leg.getDestination())
+                        .city(leg.getCity())
+                        .nights(leg.getNights())
+                        // Renumber from position rather than trusting the sent dayNumber: rows can be
+                        // added and removed on the form, and a stale index would order the printed
+                        // itinerary wrongly.
+                        .dayNumber(day++)
+                        .build());
+            }
+        }
+
+        return snapshot;
+    }
+
+    /**
+     * Update the owned trip snapshot in place. Replacing a one-to-one orphan with a new row can
+     * insert before Hibernate deletes the old row and violate the unique booking_id constraint;
+     * mutating the existing aggregate avoids that ordering hazard while preserving orphan cleanup
+     * for itinerary rows.
+     */
+    private void applyTripSnapshotUpdate(Booking booking, TripSnapshotRequest request) {
+        if (request == null) return;
+
+        BookingTripSnapshot incoming = buildTripSnapshot(request);
+        BookingTripSnapshot target = booking.getTripSnapshot();
+        if (target == null) {
+            booking.attachTripSnapshot(incoming);
+            return;
+        }
+
+        target.setPackageType(incoming.getPackageType());
+        target.setDepartCountry(incoming.getDepartCountry());
+        target.setDepartCity(incoming.getDepartCity());
+        target.setDepartureMode(incoming.getDepartureMode());
+        target.setDepartureAirport(incoming.getDepartureAirport());
+        target.setAirportCode(incoming.getAirportCode());
+        target.setPreferredFlightTime(incoming.getPreferredFlightTime());
+        target.setRailwayStation(incoming.getRailwayStation());
+        target.setTrainClass(incoming.getTrainClass());
+        target.setPreferredTrainTime(incoming.getPreferredTrainTime());
+        target.setPickupAddress(incoming.getPickupAddress());
+        target.setPickupDateTime(incoming.getPickupDateTime());
+        target.setVehiclePreference(incoming.getVehiclePreference());
+        target.setRooms(incoming.getRooms());
+        target.setMale(incoming.getMale());
+        target.setFemale(incoming.getFemale());
+        target.setTotalAdults(incoming.getTotalAdults());
+        target.setChildren(incoming.getChildren());
+        target.setInfants(incoming.getInfants());
+        target.setExtraBeds(incoming.getExtraBeds());
+        target.setSpecialAssistanceRequired(incoming.getSpecialAssistanceRequired());
+        target.setAssistancePassengerCount(incoming.getAssistancePassengerCount());
+        target.setSpecialAssistanceNotes(incoming.getSpecialAssistanceNotes());
+        target.setNotes(incoming.getNotes());
+
+        target.getSpecialAssistanceTypes().clear();
+        target.getSpecialAssistanceTypes().addAll(incoming.getSpecialAssistanceTypes());
+        target.getItinerary().clear();
+        incoming.getItinerary().forEach(target::addLeg);
+    }
+
+    private static int zero(Integer value) {
+        return value == null ? 0 : value;
+    }
+
+    /**
+     * Point a lead at the customer its booking resolved to.
+     *
+     * <p>Mutates only — the caller saves, because the conversion path already writes the lead a
+     * line later and a save in here would make that two round-trips for one row.
+     *
+     * <p>Set unconditionally rather than fill-if-empty: this is not a prefill guess, it is the
+     * customer the booking was actually raised for. If an older match pointed somewhere else the
+     * phone has since changed, and the booking is the more recent truth.
+     */
+    private void backLinkCustomerToLead(Lead lead, Customer customer) {
+        if (lead == null || customer == null) return;
+        lead.setCustomerId(customer.getId());
+        lead.setCustomerPublicId(customer.getPublicId());
+        lead.setCustomerLinkedAt(LocalDateTime.now());
+    }
+
+    /**
+     * Build the booking's trip snapshot from the lead being converted.
+     *
+     * <p>Deliberately routed through the same {@link TripSnapshotRequest} shape the direct-create
+     * path uses instead of copying field-by-field onto the entity: the mode gating (only the group
+     * matching {@code departureMode} is kept), the adults fallback and the assistance-unticked rule
+     * all live in {@link #buildTripSnapshot} already, and a second hand-rolled copy of them would
+     * drift from the first the next time one of those rules changes.
+     */
+    private BookingTripSnapshot buildTripSnapshotFromLead(Lead lead) {
+        if (lead == null) return null;
+
+        TripSnapshotRequest.Departure departure = new TripSnapshotRequest.Departure();
+        departure.setCountry(lead.getDepartCountry());
+        departure.setCity(lead.getDepartCity());
+        departure.setMode(lead.getDepartureMode());
+        departure.setAirport(lead.getDepartureAirport());
+        departure.setAirportCode(lead.getAirportCode());
+        departure.setRailwayStation(lead.getRailwayStation());
+        departure.setTrainClass(lead.getTrainClass());
+        departure.setPickupAddress(lead.getPickupAddress());
+        departure.setPickupDateTime(lead.getPickupDateTime());
+        departure.setVehiclePreference(lead.getVehiclePreference());
+        // The lead keeps flight and train times in separate columns; the request carries one
+        // `preferredTime` that buildTripSnapshot files under whichever mode is set.
+        departure.setPreferredTime(lead.getDepartureMode() == DepartureMode.TRAIN
+                ? lead.getPreferredTrainTime()
+                : lead.getPreferredFlightTime());
+
+        TripSnapshotRequest.Travellers travellers = new TripSnapshotRequest.Travellers();
+        travellers.setRooms(lead.getRooms());
+        travellers.setMale(lead.getMale());
+        travellers.setFemale(lead.getFemale());
+        travellers.setTotalAdults(lead.getAdults());
+        travellers.setChildren(lead.getChildren());
+        travellers.setInfants(lead.getInfants());
+        travellers.setExtraBeds(lead.getExtraBeds());
+
+        TripSnapshotRequest.SpecialAssistance assistance = new TripSnapshotRequest.SpecialAssistance();
+        assistance.setRequired(lead.getSpecialAssistanceRequired());
+        assistance.setPassengerCount(lead.getAssistancePassengerCount());
+        assistance.setNotes(lead.getSpecialAssistanceNotes());
+        assistance.setTypes(lead.getSpecialAssistanceTypes() == null
+                ? null : new ArrayList<>(lead.getSpecialAssistanceTypes()));
+
+        List<TripSnapshotRequest.TripLeg> legs = new ArrayList<>();
+        if (lead.getItinerary() != null) {
+            // Day order is the lead's own, not list order: an itinerary edited on the lead can hold
+            // its rows in any sequence, and buildTripSnapshot renumbers from position.
+            lead.getItinerary().stream()
+                    .sorted(Comparator.comparing(LeadItinerary::getDayNumber,
+                            Comparator.nullsLast(Comparator.naturalOrder())))
+                    .forEach(item -> {
+                        TripSnapshotRequest.TripLeg leg = new TripSnapshotRequest.TripLeg();
+                        leg.setDestination(item.getDestination());
+                        leg.setCity(item.getCity());
+                        leg.setNights(item.getNights());
+                        leg.setDayNumber(item.getDayNumber());
+                        legs.add(leg);
+                    });
+        }
+
+        TripSnapshotRequest request = new TripSnapshotRequest();
+        request.setPackageType(lead.getPackageType());
+        request.setNotes(lead.getNotes());
+        request.setDeparture(departure);
+        request.setTravellers(travellers);
+        request.setSpecialAssistance(assistance);
+        request.setItinerary(legs);
+        return buildTripSnapshot(request);
     }
 
     /**
@@ -266,14 +559,19 @@ public class BookingServiceImpl implements BookingService {
         }
 
         // Resolve or create the customer from the lead (phone is the per-tenant natural key).
-        Customer customer = resolveOrCreateCustomer(lead, request.getCustomerName(), tenantId);
+        Customer customer = resolveOrCreateCustomer(
+                lead, request.getCustomerName(), request.getCustomerEmail(), tenantId);
 
         // Build the booking, carrying over the reviewed details + source back-links.
         Booking booking = Booking.builder()
                 .tenantId(tenantId)
                 .bookingCode(bookingCodeGenerator.generate(tenantId))
                 .customerId(customer.getId())
-                .customerNameSnapshot(request.getCustomerName())
+                .customerPublicId(customer.getPublicId())
+                // From the RESOLVED customer, not the request. Direct create reads the row while this
+                // path used to read the request, so the same customer could end up with two different
+                // name snapshots depending on which door the booking came through.
+                .customerNameSnapshot(customer.getName())
                 .destinationSnapshot(request.getDestination())
                 .leadId(lead.getId())
                 .sourceLeadPublicId(lead.getPublicId())
@@ -297,6 +595,13 @@ public class BookingServiceImpl implements BookingService {
         BigDecimal paid = request.getPaidAmount() != null ? request.getPaidAmount() : BigDecimal.ZERO;
         calculateAndApplyFinancials(booking, request.getCustomerAmount(), request.getVendorCost(), paid);
 
+        // Traveller / departure / itinerary detail, carried over from the lead. The conversion form
+        // sends no snapshot block of its own, and this path used to build none — so converting an
+        // enquiry silently dropped every field V2 PART 2 was added to store, through the very door
+        // most bookings come in by. Attached before save so the cascade persists it in this
+        // transaction.
+        booking.attachTripSnapshot(buildTripSnapshotFromLead(lead));
+
         // Pin the governing cancellation policy: the exact version the quotation was priced under
         // (so the customer is charged the terms they were quoted), else the company default.
         pinCancellationPolicy(booking, quotationPolicyPublicId, tenantId);
@@ -314,6 +619,9 @@ public class BookingServiceImpl implements BookingService {
         lead.setLeadStage(LeadStage.CONVERTED);
         lead.setConvertedAt(LocalDateTime.now());
         lead.setConvertedBookingPublicId(saved.getPublicId());
+        // The customer resolved above IS the customer this lead became; record it, so the lead's
+        // customer card resolves even when the match could not be made at creation time.
+        backLinkCustomerToLead(lead, customer);
         leadRepository.save(lead);
 
         log.info("Lead {} converted to booking {} (tenant {})",
@@ -338,7 +646,7 @@ public class BookingServiceImpl implements BookingService {
      * spawns a duplicate of an otherwise-identical customer, and a blank phone is rejected up
      * front instead of creating an unmatchable / NOT-NULL-violating row.
      */
-    private Customer resolveOrCreateCustomer(Lead lead, String name, Long tenantId) {
+    private Customer resolveOrCreateCustomer(Lead lead, String name, String email, Long tenantId) {
         String phone = PhoneNormalizer.normalize(lead.getPhone());
         if (PhoneNormalizer.isBlank(phone)) {
             throw new BusinessException(
@@ -347,12 +655,19 @@ public class BookingServiceImpl implements BookingService {
                     HttpStatus.BAD_REQUEST);
         }
         String resolvedName = (name != null && !name.isBlank()) ? name : lead.getCustomerName();
+        String resolvedEmail = (email != null && !email.isBlank()) ? email.trim().toLowerCase()
+                : lead.getEmail();
 
-        // 1. Live customer — reuse.
+        // 1. Live customer — reuse, and sync across what the agent just reviewed on the form.
+        //    Previously this branch synced NOTHING: a corrected name, a newly-collected birthday and
+        //    the email the modal has always sent were all discarded, so converting a lead could not
+        //    improve the customer record no matter what the agent typed.
         Optional<Customer> live = customerRepository
                 .findByPhoneAndTenantIdAndDeletedAtIsNull(phone, tenantId);
         if (live.isPresent()) {
-            return live.get();
+            Customer existing = live.get();
+            syncFromLead(existing, lead, resolvedName, resolvedEmail);
+            return customerRepository.save(existing);
         }
 
         // 2. Trashed customer with the same phone — restore rather than insert a colliding row.
@@ -361,6 +676,7 @@ public class BookingServiceImpl implements BookingService {
         if (trashed.isPresent()) {
             Customer revived = trashed.get();
             revived.restore();
+            syncFromLead(revived, lead, resolvedName, resolvedEmail);
             Customer saved = customerRepository.save(revived);
             log.info("Restored trashed customer {} for conversion of lead {}",
                     saved.getCustomerCode(), lead.getPublicId());
@@ -368,18 +684,69 @@ public class BookingServiceImpl implements BookingService {
         }
 
         // 3. Brand-new customer — stamp provenance so cancel-cleanup can reclaim it later.
+        //    Carries the profile the lead collected: birthday, anniversary and origin city were all
+        //    being thrown away here, which is why Lead.birthDate had no reader anywhere in the app
+        //    and the marketing birthday automations never fired for a converted lead.
         Customer customer = Customer.builder()
                 .tenantId(tenantId)
                 .customerCode(customerCodeGenerator.generate(tenantId))
                 .name(resolvedName)
                 .phone(phone)
-                .email(lead.getEmail())
+                .phoneNormalized(customerMatcher.canonicalPhone(phone))
+                .email(resolvedEmail)
+                .birthday(lead.getBirthDate())
+                .anniversary(lead.getAnniversaryDate())
+                .city(cityOrNull(lead.getDepartCity()))
+                .commPref(lead.getPreferredCommunication())
                 .createdFromLeadId(lead.getId())
                 .build();
         Customer created = customerRepository.save(customer);
         log.info("Created customer {} from lead {} during conversion",
                 created.getCustomerCode(), lead.getPublicId());
         return created;
+    }
+
+    /**
+     * Fold what the lead knows into an existing customer record.
+     *
+     * <p>The asymmetry is the point:
+     * <ul>
+     *   <li><b>{@code name} — last-write-wins.</b> The agent has just confirmed it with the customer
+     *       while converting.</li>
+     *   <li><b>everything else — fill-if-empty.</b> A lead form is thinner than a customer master
+     *       record; letting it write over a populated field would erase a richer profile with a
+     *       sparser one.</li>
+     *   <li><b>{@code phone} — never written.</b> It is the per-tenant natural key this customer was
+     *       just <em>found</em> by, and {@code uq_customers_phone_tenant} would reject a collision
+     *       anyway.</li>
+     * </ul>
+     */
+    private void syncFromLead(Customer customer, Lead lead, String resolvedName, String resolvedEmail) {
+        if (resolvedName != null && !resolvedName.isBlank()) {
+            customer.setName(resolvedName);
+        }
+        if (isBlank(customer.getEmail()) && resolvedEmail != null && !resolvedEmail.isBlank()) {
+            customer.setEmail(resolvedEmail.trim().toLowerCase());
+        }
+        if (customer.getBirthday() == null)    customer.setBirthday(lead.getBirthDate());
+        if (customer.getAnniversary() == null) customer.setAnniversary(lead.getAnniversaryDate());
+        if (isBlank(customer.getCity()))       customer.setCity(cityOrNull(lead.getDepartCity()));
+        if (customer.getCommPref() == null)    customer.setCommPref(lead.getPreferredCommunication());
+        // Backfill the canonical key on rows that predate the column, so this customer becomes
+        // findable by the lead auto-prefill from now on.
+        if (isBlank(customer.getPhoneNormalized())) {
+            customer.setPhoneNormalized(customerMatcher.canonicalPhone(customer.getPhone()));
+        }
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    /** "Not Specified" is the lead form's placeholder for an untouched origin — not a real city. */
+    private static String cityOrNull(String city) {
+        if (isBlank(city) || "Not Specified".equalsIgnoreCase(city.trim())) return null;
+        return city.trim();
     }
 
     // ── Get by ID ────────────────────────────────────────────────────────────
@@ -438,9 +805,41 @@ public class BookingServiceImpl implements BookingService {
 
         bookingMapper.updateEntity(request, booking);   // applies non-null DTO fields → entity
 
+        // ── vendorCost is SERVER-OWNED on a marketplace-linked booking ───────────────────────────
+        //
+        // Invariant: vendorCost = what the tenant typed + every marketplace payable on this booking.
+        // BookingExpense's own javadoc states it — VENDOR rows are excluded from totalInternalCosts
+        // precisely "because Booking.vendorCost already represents everything paid to suppliers".
+        //
+        // Without this, an ordinary edit clobbers it: the mapper above applies the client's
+        // vendorCost verbatim and recomputeTotals then re-derives from that, silently dropping the
+        // platform payable. netProfit is overstated by exactly that amount — and because
+        // BookingProfitService FREEZES the figure on cancellation, the error becomes permanent in
+        // the credit note. The marketplace cannot fix this from its side; it does not own the field.
+        //
+        // Only when the client actually sent a value: a null means "unchanged", and the stored value
+        // is already typed + marketplace, so adding the sum again would double-count it.
+        if (request.getVendorCost() != null) {
+            BigDecimal marketplacePayable = nz(expenseRepository.sumMarketplacePayable(booking.getId()));
+            if (marketplacePayable.signum() != 0) {
+                booking.setVendorCost(request.getVendorCost().add(marketplacePayable));
+            }
+        }
+
         // Destination is a free-text snapshot (mapper ignores it) — apply it explicitly.
         if (request.getDestination() != null) {
             booking.setDestinationSnapshot(request.getDestination());
+        }
+
+        applyTripSnapshotUpdate(booking, request.getTripSnapshot());
+
+        if (request.getAssignedUserId() != null) {
+            booking.setAssignedUserId(assigneeResolver.resolveForUpdate(
+                    request.getAssignedUserId(), booking.getAssignedUserId(), booking.getTenantId()));
+        }
+
+        if (request.getServices() != null) {
+            booking.setServices(new ArrayList<>(request.getServices()));
         }
 
         // Status is server-owned (mapper ignores it). Apply here behind lifecycle guards so an
@@ -639,6 +1038,13 @@ public class BookingServiceImpl implements BookingService {
                         + (quote.isCustomerOwes()
                             ? "customer owes " + quote.getCustomerBalanceOwed()
                             : "refund due " + quote.getRefundToCustomer()));
+
+        // Domain fact, separate from the notification above. Anything riding on this booking — today
+        // a hotel-marketplace order still holding a room with a supplier — learns about it here.
+        // This module does not know or care who listens; see BookingCancelledEvent.
+        publishAfterCommit(new BookingCancelledEvent(
+                saved.getPublicId(), saved.getId(), saved.getTenantId(), saved.getBookingCode(),
+                request == null ? null : request.getReason()));
         log.info("Booking {} cancelled (tenant {}) — retained {}, refundDue {} [{}]",
                 saved.getBookingCode(), tenantId, quote.getTotalRetained(),
                 quote.getRefundDue(), record.getRefundStatus());
@@ -1020,8 +1426,78 @@ public class BookingServiceImpl implements BookingService {
      * rows being rendered so nothing downstream has to remember to; every {@code toResponse} in this
      * class goes through here or {@link #toResponses(List)}.
      */
+    /**
+     * Single-booking response. Attaches the trip snapshot, which the list variant deliberately omits
+     * — it is a LAZY association whose own itinerary and assistance collections are lazy too, so
+     * mapping it per row would cost three extra queries for every booking on a page.
+     */
     private BookingResponseDTO toResponse(Booking booking) {
-        return bookingMapper.toResponse(booking, assigneeViewFactory.of(booking));
+        BookingResponseDTO response = bookingMapper.toResponse(booking, assigneeViewFactory.of(booking))
+                .toBuilder()
+                .tripSnapshot(toTripSnapshotResponse(booking.getTripSnapshot()))
+                .build();
+        return maskProfitUnlessAuthorized(response);
+    }
+
+    /**
+     * Flat entity → the nested shape the form posts and the detail screen reads.
+     *
+     * <p>{@code preferredTime} folds the flight and train columns back onto the single key the
+     * request uses, so a round-trip through create and read returns what was sent.
+     *
+     * <p>Must be called with the session open (it touches lazy collections) — every caller is inside
+     * a {@code @Transactional} service method.
+     */
+    private TripSnapshotResponse toTripSnapshotResponse(BookingTripSnapshot snapshot) {
+        if (snapshot == null) return null;
+
+        DepartureMode mode = snapshot.getDepartureMode();
+        TripSnapshotResponse.Departure departure = TripSnapshotResponse.Departure.builder()
+                .country(snapshot.getDepartCountry())
+                .city(snapshot.getDepartCity())
+                .mode(mode)
+                .airport(snapshot.getDepartureAirport())
+                .airportCode(snapshot.getAirportCode())
+                .railwayStation(snapshot.getRailwayStation())
+                .trainClass(snapshot.getTrainClass())
+                .preferredTime(mode == DepartureMode.TRAIN
+                        ? snapshot.getPreferredTrainTime()
+                        : snapshot.getPreferredFlightTime())
+                .pickupAddress(snapshot.getPickupAddress())
+                .pickupDateTime(snapshot.getPickupDateTime())
+                .vehiclePreference(snapshot.getVehiclePreference())
+                .build();
+
+        return TripSnapshotResponse.builder()
+                .packageType(snapshot.getPackageType())
+                .departure(departure)
+                .travellers(TripSnapshotResponse.Travellers.builder()
+                        .rooms(snapshot.getRooms())
+                        .male(snapshot.getMale())
+                        .female(snapshot.getFemale())
+                        .totalAdults(snapshot.getTotalAdults())
+                        .children(snapshot.getChildren())
+                        .infants(snapshot.getInfants())
+                        .extraBeds(snapshot.getExtraBeds())
+                        .build())
+                .specialAssistance(TripSnapshotResponse.SpecialAssistance.builder()
+                        .required(snapshot.getSpecialAssistanceRequired())
+                        .types(snapshot.getSpecialAssistanceTypes() == null
+                                ? List.of() : new ArrayList<>(snapshot.getSpecialAssistanceTypes()))
+                        .passengerCount(snapshot.getAssistancePassengerCount())
+                        .notes(snapshot.getSpecialAssistanceNotes())
+                        .build())
+                .itinerary(snapshot.getItinerary() == null ? List.of()
+                        : snapshot.getItinerary().stream()
+                                .map(leg -> TripSnapshotResponse.TripLeg.builder()
+                                        .destination(leg.getDestination())
+                                        .city(leg.getCity())
+                                        .nights(leg.getNights())
+                                        .dayNumber(leg.getDayNumber())
+                                        .build())
+                                .toList())
+                .notes(snapshot.getNotes())
+                .build();
     }
 
     /**
@@ -1031,8 +1507,24 @@ public class BookingServiceImpl implements BookingService {
     private List<BookingResponseDTO> toResponses(List<Booking> bookings) {
         BookingAssigneeView assignees = assigneeViewFactory.of(bookings);
         return bookings.stream()
-                .map(b -> bookingMapper.toResponse(b, assignees))
+                .map(b -> maskProfitUnlessAuthorized(bookingMapper.toResponse(b, assignees)))
                 .toList();
+    }
+
+    /** Supplier rates and margin are not ordinary booking-read data. */
+    private BookingResponseDTO maskProfitUnlessAuthorized(BookingResponseDTO response) {
+        if (hasAuthority("BOOKING_PROFIT_READ")) return response;
+        return response.toBuilder()
+                .vendorCost(null)
+                .totalInternalCosts(null)
+                .netProfit(null)
+                .build();
+    }
+
+    private boolean hasAuthority(String authority) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        return auth != null && auth.getAuthorities().stream()
+                .anyMatch(a -> authority.equals(a.getAuthority()));
     }
 
     private Booking findActiveByPublicId(UUID publicId) {
@@ -1090,6 +1582,21 @@ public class BookingServiceImpl implements BookingService {
     private void publishBookingEventAfterCommit(NotificationType type, Booking booking,
                                                 String title, String message) {
         NotifyEvent event = buildBookingEvent(type, booking, title, message);
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override public void afterCommit() { eventPublisher.publishEvent(event); }
+            });
+        } else {
+            eventPublisher.publishEvent(event);
+        }
+    }
+
+    /**
+     * Publish an arbitrary domain event once the surrounding transaction commits, with the same
+     * rollback safety as {@link #publishBookingEventAfterCommit} — a listener must never act on a
+     * cancellation the database went on to roll back.
+     */
+    private void publishAfterCommit(Object event) {
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override public void afterCommit() { eventPublisher.publishEvent(event); }
@@ -1220,6 +1727,48 @@ public class BookingServiceImpl implements BookingService {
                                              BigDecimal paidAmount) {
         booking.setPaidAmount(paidAmount);
         recomputeTotals(booking, customerAmount, vendorCost);
+        if (paidAmount.compareTo(booking.getTotalPayable()) > 0) {
+            throw new BusinessException(
+                    "Paid amount ₹" + paidAmount
+                            + " exceeds total payable ₹" + booking.getTotalPayable());
+        }
+    }
+
+    /**
+     * The create form's live preview. Runs the SAME pieces {@link #recomputeTotals} runs — the
+     * tenant's settings through {@link BookingTaxCalculator}, then the payment-status derivation —
+     * against the posted amounts, without a Booking entity. The internal-costs term is zero for the
+     * same reason it is zero on create: an unsaved booking has no expense ledger.
+     *
+     * <p>Not {@code readOnly}: {@code accountingSettings.loadOrCreate} seeds the tenant's settings
+     * row on first access, and a brand-new tenant's very first preview may be that first access.
+     */
+    @Override
+    @Transactional
+    public BookingFinancialPreviewResponse previewFinancials(BookingFinancialPreviewRequest request) {
+        BigDecimal customerAmount = request.getCustomerAmount().setScale(2, RoundingMode.HALF_UP);
+        BigDecimal vendorCost = request.getVendorCost() != null ? request.getVendorCost() : BigDecimal.ZERO;
+        BigDecimal paidAmount = request.getPaidAmount() != null ? request.getPaidAmount() : BigDecimal.ZERO;
+
+        BookingTaxCalculator.BookingTax tax = bookingTaxCalculator.compute(
+                customerAmount,
+                Boolean.TRUE.equals(request.getOverseasTourPackage()),
+                accountingSettings.loadOrCreate(requireTenantId()));
+
+        BigDecimal totalPayable = customerAmount.add(tax.gst()).add(tax.tcs())
+                .setScale(2, RoundingMode.HALF_UP);
+        BigDecimal pending = totalPayable.subtract(paidAmount).max(BigDecimal.ZERO)
+                .setScale(2, RoundingMode.HALF_UP);
+
+        return BookingFinancialPreviewResponse.builder()
+                .gst(tax.gst())
+                .tcs(tax.tcs())
+                .totalPayable(totalPayable)
+                .netProfit(customerAmount.subtract(vendorCost).setScale(2, RoundingMode.HALF_UP))
+                .pendingAmount(pending)
+                // null current status: a preview has no row, so REFUNDED-preservation cannot apply.
+                .paymentStatus(derivePaymentStatus(paidAmount, totalPayable, null))
+                .build();
     }
 
     /**

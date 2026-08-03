@@ -33,4 +33,19 @@ final class FleetContext {
     static String username() {
         return user().getUsername();
     }
+
+    /**
+     * Whether the caller may see fleet money.
+     *
+     * <p>Needed because two endpoints are gated on plain {@code FLEET_READ} — they are operational,
+     * and a dispatcher must reach them — yet the response would otherwise carry cost figures. The
+     * duty slip is the case in point: printing it is the dispatcher's job, but the office-use cost
+     * block on it is not for his eyes. The gate therefore has to live INSIDE the response, not only
+     * on the route.
+     */
+    static boolean canSeeMoney() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        return auth != null && auth.getAuthorities().stream()
+                .anyMatch(a -> "FLEET_MONEY_READ".equals(a.getAuthority()));
+    }
 }

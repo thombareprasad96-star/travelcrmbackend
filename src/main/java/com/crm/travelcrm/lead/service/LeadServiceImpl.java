@@ -4,6 +4,9 @@ import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.auth.repository.UserRepository;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.event.LeadSoftDeletedEvent;
+import com.crm.travelcrm.customer.dto.response.CustomerMatchResponse;
+import com.crm.travelcrm.customer.entity.Customer;
+import com.crm.travelcrm.customer.service.CustomerMatcher;
 import com.crm.travelcrm.lead.dto.CreateLeadRequestDto;
 import com.crm.travelcrm.lead.dto.LeadBoardColumnDto;
 import com.crm.travelcrm.lead.dto.LeadResponseDto;
@@ -47,10 +50,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -72,6 +78,7 @@ public class LeadServiceImpl implements LeadService {
     private final TenantRepository tenantRepository;
     private final LeadAssignmentService leadAssignmentService;
     private final LeadAssignmentAuditRecorder leadAssignmentAuditRecorder;
+    private final CustomerMatcher customerMatcher;
 
     // Terminal (closed) stages. A lead here no longer blocks a fresh lead for the same
     // contact, and CONVERTED specifically is owned by the booking lifecycle — it may be
@@ -96,8 +103,10 @@ public class LeadServiceImpl implements LeadService {
         Long tenantId = currentTenantId();
         enforceLeadQuota(tenantId);
 
-        log.info("Creating lead for email: {} | tenantId: {} | actor: {}",
-                request.getEmail(), tenantId, actor);
+        // Deliberately no email/phone: INFO goes to a retained rolling file in prod, and a CRM must
+        // not scatter customer contact details across its logs. tenantId + actor is what an operator
+        // actually needs to trace this; the lead code is logged on the success line below.
+        log.info("Creating lead | tenantId: {} | actor: {}", tenantId, actor);
 
         validateNoDuplicates(request, tenantId, null);
         // Active duplicates errored above; a match that lives ONLY in Trash becomes a
@@ -131,6 +140,12 @@ public class LeadServiceImpl implements LeadService {
         };
         lead.setAssignedUser(outcome.finalUser());
 
+        // ── Existing-customer match + auto-prefill ───────────────────────────
+        // Runs on EVERY creation path — manual form, inbound integration, sub-agent portal — because
+        // it sits inside the single create method rather than in the controller. An IVR-sourced lead
+        // for a customer of eight years should link just as reliably as a typed one.
+        CustomerMatchResponse customerMatch = linkExistingCustomer(lead, tenantId);
+
         Lead savedLead = leadRepository.save(lead);
         log.info("Lead created | id: {} | tenantId: {} | strategy: {} | override: {}",
                 savedLead.getPublicId(), tenantId, outcome.strategyUsed(), outcome.manualOverride());
@@ -143,7 +158,97 @@ public class LeadServiceImpl implements LeadService {
         // below. Publish last, and keep it last.
         recordAssignmentAudit(savedLead, outcome, tenantId, actor);
         publishLeadCreatedNotification(savedLead, tenantId);
-        return leadMapper.toResponse(savedLead);
+
+        LeadResponseDto response = leadMapper.toResponse(savedLead);
+        // The popup signal rides on the CREATE response only. Deliberately not set by toResponse():
+        // re-attaching it to every subsequent read would make the frontend re-raise "Customer found"
+        // each time the lead is opened, long after the clerk has acknowledged it once.
+        response.setCustomerMatch(customerMatch);
+        return response;
+    }
+
+    /**
+     * The one rule this feature exists for: <b>if a customer already exists with the same email OR
+     * the same phone number, link the lead to them and fill in what the form left blank.</b>
+     *
+     * <p>Done here — server-side, inside the creation transaction — rather than in the browser,
+     * because a client-side prefill is only as reliable as the clerk's connection and can be skipped
+     * entirely by anything that is not the form (the inbound integrations, the sub-agent portal, a
+     * direct API call). Doing it at the point of persistence is what makes the link a property of
+     * the data instead of a property of the UI.
+     *
+     * <p><b>Prefill never overwrites.</b> Only fields the request left empty are filled. The person
+     * typing has just spoken to the customer; the stored profile may be years old. A "prefill" that
+     * clobbers the email the clerk was given on the phone is a data-loss bug wearing a helpful hat.
+     * The returned {@code prefilledFields} names exactly what was touched, so the popup can say so.
+     *
+     * @return the popup payload when a customer matched, else {@code null} (no popup)
+     */
+    private CustomerMatchResponse linkExistingCustomer(Lead lead, Long tenantId) {
+        Optional<CustomerMatcher.Match> found =
+                customerMatcher.find(lead.getPhone(), lead.getEmail(), tenantId);
+        if (found.isEmpty()) {
+            // Stamp the probe even on a MISS. Without this, "we looked and nobody matched"
+            // (customerId null, customerLinkedAt set) is indistinguishable from "never looked"
+            // (both null) — the distinction Lead.customerId's javadoc promises this field makes.
+            // Rows written before this change keep both null and so still read as never checked,
+            // which is exactly what they were.
+            lead.setCustomerLinkedAt(LocalDateTime.now());
+            return null;   // ordinary outcome — a brand-new contact, no popup
+        }
+
+        CustomerMatcher.Match match = found.get();
+        Customer customer = match.customer();
+
+        lead.setCustomerId(customer.getId());
+        lead.setCustomerPublicId(customer.getPublicId());
+        lead.setCustomerLinkedAt(LocalDateTime.now());
+
+        List<String> prefilled = new ArrayList<>();
+        // Fill-if-empty, field by field. Phone is never touched: it is the identifier the clerk
+        // just keyed in and the per-tenant natural key on both sides — rewriting it would silently
+        // re-point the lead at a different person than the one on the phone.
+        if (isBlank(lead.getCustomerName()) && !isBlank(customer.getName())) {
+            lead.setCustomerName(customer.getName());
+            prefilled.add("customerName");
+        }
+        if (isBlank(lead.getEmail()) && !isBlank(customer.getEmail())) {
+            lead.setEmail(customer.getEmail().toLowerCase());
+            prefilled.add("email");
+        }
+        if (lead.getBirthDate() == null && customer.getBirthday() != null) {
+            lead.setBirthDate(customer.getBirthday());
+            prefilled.add("birthDate");
+        }
+        if (lead.getAnniversaryDate() == null && customer.getAnniversary() != null) {
+            lead.setAnniversaryDate(customer.getAnniversary());
+            prefilled.add("anniversaryDate");
+        }
+        if (lead.getPreferredCommunication() == null && customer.getCommPref() != null) {
+            lead.setPreferredCommunication(customer.getCommPref());
+            prefilled.add("preferredCommunication");
+        }
+        // departCity is the traveller's origin city and the customer's own city is the best default
+        // for it. "Not Specified" counts as blank — that is the literal the form sends for an
+        // untouched field, so treating it as a real value would block the prefill on every lead.
+        if (isUnset(lead.getDepartCity()) && !isBlank(customer.getCity())) {
+            lead.setDepartCity(customer.getCity());
+            prefilled.add("departCity");
+        }
+
+        log.info("Lead linked to existing customer {} (matched on {}) | prefilled: {} | tenantId: {}",
+                customer.getCustomerCode(), match.matchedOn(), prefilled, tenantId);
+
+        return customerMatcher.toResponse(match, tenantId, prefilled);
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    /** Blank, or the "Not Specified" placeholder the lead form sends for an untouched origin field. */
+    private static boolean isUnset(String value) {
+        return isBlank(value) || "Not Specified".equalsIgnoreCase(value.trim());
     }
 
     /**
@@ -300,16 +405,50 @@ public class LeadServiceImpl implements LeadService {
         // Assignment & personal
         lead.setAssignedUser(resolveAssignedUser(request.getAssignedUserId(), tenantId));
         lead.setBirthDate(request.getBirthDate());
+        lead.setAnniversaryDate(request.getAnniversaryDate());
+        lead.setPreferredCommunication(request.getPreferredCommunication());
+        lead.setFollowUpDate(request.getFollowUpDate());
 
         // Travel details
+        lead.setPackageType(request.getPackageType());
         lead.setTravelDate(request.getTravelDate());
         lead.setBudget(request.getBudget());
         lead.setDepartCountry(request.getDepartCountry());
         lead.setDepartCity(request.getDepartCity());
 
+        // Departure / transport. Every one of these has to be assigned unconditionally, including
+        // to null: the mode can be switched from Flight to Train on an edit, and skipping the
+        // now-irrelevant setters would leave the old airport on the row forever.
+        lead.setDepartureMode(request.getDepartureMode());
+        lead.setDepartureAirport(request.getDepartureAirport());
+        lead.setAirportCode(request.getAirportCode() == null
+                ? null : request.getAirportCode().trim().toUpperCase());
+        lead.setPreferredFlightTime(request.getPreferredFlightTime());
+        lead.setRailwayStation(request.getRailwayStation());
+        lead.setTrainClass(request.getTrainClass());
+        lead.setPreferredTrainTime(request.getPreferredTrainTime());
+        lead.setPickupAddress(request.getPickupAddress());
+        lead.setPickupDateTime(request.getPickupDateTime());
+        lead.setVehiclePreference(request.getVehiclePreference());
+        // Same rule create applies — drop whatever does not belong to the selected mode.
+        leadMapper.clearUnusedTransport(lead);
+
+        // Accessibility
+        lead.setSpecialAssistanceRequired(request.getSpecialAssistanceRequired());
+        lead.setAssistancePassengerCount(request.getAssistancePassengerCount());
+        lead.setSpecialAssistanceNotes(request.getSpecialAssistanceNotes());
+        // Mutate the managed collection, never replace it (same rule as services below).
+        lead.getSpecialAssistanceTypes().clear();
+        if (request.getSpecialAssistanceTypes() != null) {
+            lead.getSpecialAssistanceTypes().addAll(request.getSpecialAssistanceTypes());
+        }
+        leadMapper.clearUnusedAssistance(lead);
+
         // Passenger counts
         lead.setRooms(request.getRooms());
-        lead.setAdults(request.getAdults());
+        lead.setAdults(leadMapper.resolveAdults(request));
+        lead.setMale(request.getMale());
+        lead.setFemale(request.getFemale());
         lead.setChildren(request.getChildren());
         lead.setInfants(request.getInfants());
         lead.setExtraBeds(request.getExtraBeds());
@@ -329,6 +468,8 @@ public class LeadServiceImpl implements LeadService {
                 itinerary.setCity(item.getCity());
                 itinerary.setNights(item.getNights());
                 itinerary.setDayNumber(item.getDayNumber());
+                itinerary.setDestinationId(item.getDestinationId());
+                itinerary.setCityId(item.getCityId());
                 itinerary.setLead(lead);
                 lead.getItinerary().add(itinerary);
             });

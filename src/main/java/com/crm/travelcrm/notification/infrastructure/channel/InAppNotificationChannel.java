@@ -21,9 +21,17 @@ import java.util.List;
  * Persists the notification to the DB (in-app feed) and immediately pushes
  * it to any live SSE connections for that user.
  *
- * <p>Runs within the same transaction as the event listener so that if the
- * persist fails the event is not silently dropped — the listener can catch
- * and log the error.
+ * <p><b>REQUIRES_NEW, not REQUIRED.</b> Publishers raise their event from an {@code afterCommit}
+ * callback whenever the notification must not outrun the row it describes
+ * ({@code BookingServiceImpl.cancel()} is the live example). Inside that callback the transaction
+ * has already committed but its resources are still bound to the thread, so a REQUIRED save
+ * <em>participates</em> in a transaction that will never commit again: no flush, no row, no error,
+ * nothing in the log. Every {@code BOOKING_CANCELLED} in-app row was being lost that way. A private
+ * transaction always commits on its own, whatever it was called from.
+ *
+ * <p>The trade-off is accepted knowingly: a notification can now outlive a publisher that rolls
+ * back afterwards. A stray "your booking was cancelled" is visible and dismissable; a missing one is
+ * invisible, and nobody goes looking for a row that was never written.
  *
  * <p>TenantContext is set by {@code NotifyEventListener} before this method
  * is called, satisfying {@code TenantEntityListener.prePersist()}.
@@ -43,7 +51,7 @@ public class InAppNotificationChannel implements NotificationChannel {
     }
 
     @Override
-    @Transactional(propagation = Propagation.REQUIRED)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void send(NotifyEvent event, Notification ignored) {
         // Explicit recipients win; otherwise fan out to the tenant's admins (ACTOR excluded below).
         List<Long> recipients = (event.getRecipientUserIds() != null && !event.getRecipientUserIds().isEmpty())

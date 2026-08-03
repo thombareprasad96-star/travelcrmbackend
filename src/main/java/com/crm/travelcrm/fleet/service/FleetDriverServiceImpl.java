@@ -11,6 +11,7 @@ import com.crm.travelcrm.fleet.entity.FleetDriver;
 import com.crm.travelcrm.fleet.enums.FleetDriverStatus;
 import com.crm.travelcrm.fleet.enums.FleetTripStatus;
 import com.crm.travelcrm.fleet.mapper.FleetDriverMapper;
+import com.crm.travelcrm.fleet.repository.*;
 import com.crm.travelcrm.fleet.repository.FleetDriverRepository;
 import com.crm.travelcrm.fleet.repository.FleetTripRepository;
 import com.crm.travelcrm.fleet.specification.FleetDriverSpecification;
@@ -36,6 +37,10 @@ public class FleetDriverServiceImpl implements FleetDriverService {
 
     private final FleetDriverRepository driverRepository;
     private final FleetTripRepository tripRepository;
+    private final FleetCashEntryRepository cashRepository;
+    private final FleetExpenseRepository expenseRepository;
+    private final FleetComplianceDocumentRepository documentRepository;
+    private final FleetTripLegRepository legRepository;
     private final FleetDriverMapper mapper;
 
     // ── Commands ────────────────────────────────────────────────────────────
@@ -92,6 +97,20 @@ public class FleetDriverServiceImpl implements FleetDriverService {
         if (tripRepository.existsByDriver_IdAndDeletedAtIsNull(driver.getId())) {
             throw new BusinessException(
                     "Driver has trip history — mark them INACTIVE instead of deleting", HttpStatus.CONFLICT);
+        }
+        // Money and statutory records are a harder stop. fleet_cash_entries carries this driver's
+        // imprest — the record of company cash he held — and fleet_compliance_documents his licence,
+        // PSV badge and medical. Both are kept for eight years and are absent from TrashableType, so
+        // nothing purges them; but this DRIVER row is registered, and trashing it would let the
+        // nightly purge reach them through the FK.
+        if (cashRepository.existsByDriver_IdAndDeletedAtIsNull(driver.getId())
+                || expenseRepository.existsByDriver_IdAndDeletedAtIsNull(driver.getId())
+                || documentRepository.existsByDriver_IdAndDeletedAtIsNull(driver.getId())
+                || legRepository.existsByDriver_IdAndDeletedAtIsNull(driver.getId())) {
+            throw new BusinessException(
+                    "This driver has cash or compliance records, which are kept for eight years and "
+                            + "can never be purged. Mark them INACTIVE instead.",
+                    HttpStatus.CONFLICT);
         }
         driver.softDelete(FleetContext.username());
         driverRepository.save(driver);

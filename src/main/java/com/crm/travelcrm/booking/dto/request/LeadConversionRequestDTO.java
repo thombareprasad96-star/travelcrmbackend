@@ -50,6 +50,18 @@ public class LeadConversionRequestDTO {
     @Size(max = 20, message = "Customer phone is too long")
     private String customerPhone;
 
+    /**
+     * Email as reviewed on the conversion form. Optional — a lead can reach conversion with only a
+     * phone number.
+     *
+     * <p>The modal has always sent this field and the backend has always dropped it, so an email
+     * collected or corrected at conversion time never reached the customer record. It is applied
+     * fill-if-empty, never overwriting an address the customer master already holds.
+     */
+    @Email(message = "Enter a valid email address")
+    @Size(max = 150, message = "Email must not exceed 150 characters")
+    private String customerEmail;
+
     @NotBlank(message = "Destination is required")
     @Size(max = 255, message = "Destination too long")
     private String destination;

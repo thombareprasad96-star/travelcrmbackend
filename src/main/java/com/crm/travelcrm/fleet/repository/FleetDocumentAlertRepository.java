@@ -1,7 +1,7 @@
 package com.crm.travelcrm.fleet.repository;
 
 import com.crm.travelcrm.fleet.entity.FleetDocumentAlert;
-import com.crm.travelcrm.fleet.enums.FleetDocumentType;
+import com.crm.travelcrm.fleet.enums.FleetDocumentCategory;
 import com.crm.travelcrm.fleet.enums.FleetRefType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -17,7 +17,7 @@ public interface FleetDocumentAlertRepository extends JpaRepository<FleetDocumen
      * thresholds strictly below it, so each threshold alerts at most once per expiry date.
      */
     Optional<FleetDocumentAlert> findFirstByTenantIdAndRefTypeAndRefIdAndDocTypeAndExpiryDateOrderByThresholdDaysAsc(
-            Long tenantId, FleetRefType refType, Long refId, FleetDocumentType docType, LocalDate expiryDate);
+            Long tenantId, FleetRefType refType, Long refId, FleetDocumentCategory docType, LocalDate expiryDate);
 
     Page<FleetDocumentAlert> findByTenantIdAndDeletedAtIsNull(Long tenantId, Pageable pageable);
 }

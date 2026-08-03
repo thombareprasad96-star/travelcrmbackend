@@ -11,6 +11,21 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 
+/**
+ * Fans a {@link NotifyEvent} out to the channels it names.
+ *
+ * <p><b>Save/restore on {@link TenantContext}, never set/clear.</b> {@code @EventListener} is
+ * synchronous, so this runs on the publisher's own thread — usually a tenant request thread that has
+ * plenty of work left to do. Clearing here would leave the rest of that request with a null tenant,
+ * and {@code TenantFilterAspect} fails OPEN on null: every subsequent query silently spans all
+ * tenants, with no error and no log. {@code ReminderScheduler} hand-rolls a re-set immediately after
+ * publishing to work around exactly this; it is left as it is, since restoring here makes it
+ * harmless rather than necessary.
+ *
+ * <p>{@code TenantScope} is the natural home for save/restore, but it deliberately refuses to be
+ * entered inside an active transaction — and a publish very often is one — so the semantics are
+ * repeated here instead.
+ */
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -20,7 +35,8 @@ public class NotifyEventListener {
 
     @EventListener
     public void onNotifyEvent(NotifyEvent event) {
-        // TenantContext set karo — InAppNotificationChannel ke prePersist ke liye zaroori
+        // The context is what satisfies TenantEntityListener.prePersist() in InAppNotificationChannel.
+        Long previous = TenantContext.getTenantId();
         TenantContext.setTenantId(event.getTenantId());
 
         try {
@@ -35,7 +51,11 @@ public class NotifyEventListener {
                         }
                     });
         } finally {
-            TenantContext.clear(); // ThreadLocal leak prevent karo
+            if (previous == null) {
+                TenantContext.clear();          // nothing to restore, and no ThreadLocal left behind
+            } else {
+                TenantContext.setTenantId(previous);
+            }
         }
     }
 }

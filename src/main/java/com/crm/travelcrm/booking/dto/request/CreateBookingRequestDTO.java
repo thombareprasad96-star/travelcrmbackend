@@ -2,6 +2,8 @@
 
 package com.crm.travelcrm.booking.dto.request;
 
+import com.crm.travelcrm.customer.dto.request.CustomerResolveRequest;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 import lombok.Getter;
 import lombok.Setter;
@@ -16,13 +18,18 @@ import java.util.UUID;
 @Setter
 public class CreateBookingRequestDTO {
 
-    // Customer resolved via FK — service fetches name for snapshot
+    /**
+     * Which customer this booking is for — either an existing one by publicId (optionally with a
+     * {@code sync} patch) or a new profile to create.
+     *
+     * <p>Replaces the old flat {@code customerId} (internal Long) + {@code customerName} pair. That
+     * shape could not express what the form actually does: the phone search either finds somebody or
+     * it does not, and the two outcomes need different data. It also required the client to know an
+     * internal database id, which is never exposed by any endpoint — so the field was unfillable.
+     */
     @NotNull(message = "Customer is required")
-    private Long customerId;
-
-    @NotBlank(message = "Customer name is required")        // ✅ added
-    @Size(max = 255, message = "Customer name too long")    // ✅ added
-    private String customerName;
+    @Valid
+    private CustomerResolveRequest customer;
 
     // Service resolves this to destination_id and stores snapshot
     @NotBlank(message = "Destination is required")
@@ -63,8 +70,22 @@ public class CreateBookingRequestDTO {
     @Digits(integer = 10, fraction = 2, message = "Invalid amount format")
     private BigDecimal paidAmount = BigDecimal.ZERO;
 
-    // Lead this booking was created from — optional
-    private Long leadId;
+    /**
+     * Lead this booking was created from — optional.
+     *
+     * <p>A UUID publicId, not the internal {@code Long leadId} this used to be: the lead list the
+     * form populates its dropdown from exposes only publicIds, so the old field could never be
+     * filled from the UI.
+     */
+    private UUID leadPublicId;
+
+    /**
+     * Traveller / departure / itinerary detail. Optional, and persisted to
+     * {@code booking_trip_snapshot} — accepting it and dropping it would repeat exactly the silent
+     * data loss this whole change set exists to fix.
+     */
+    @Valid
+    private TripSnapshotRequest tripSnapshot;
 
     /**
      * publicId of the staff member who will service this booking. Optional — defaults to the
@@ -78,5 +99,7 @@ public class CreateBookingRequestDTO {
 
     // ── Removed from your original ────────────────────────────────────────────
     // createdBy     → comes from JWT SecurityContext, never from client
-    // customerName  → resolved server-side from customerId
+    // customerName  → resolved server-side from the customer this booking resolves to
+    // customerId    → replaced by the nested `customer` block (publicId or newCustomer)
+    // leadId        → replaced by leadPublicId (UUID)
 }

@@ -20,7 +20,7 @@ public interface GeoReportRepository extends Repository<Lead, Long> {
 
     @Query("""
             SELECT l.departCity, l.departCountry, COUNT(l),
-                   SUM(CASE WHEN l.leadType  = com.crm.travelcrm.lead.enums.LeadType.FRESH_LEAD THEN 1L ELSE 0L END),
+                   SUM(CASE WHEN l.leadType  = com.crm.travelcrm.lead.enums.LeadType.FRESH THEN 1L ELSE 0L END),
                    SUM(CASE WHEN l.leadStage = com.crm.travelcrm.lead.enums.LeadStage.CONVERTED THEN 1L ELSE 0L END)
             FROM Lead l
             WHERE l.tenantId = :tenantId
@@ -42,7 +42,7 @@ public interface GeoReportRepository extends Repository<Lead, Long> {
 
     @Query("""
             SELECT l.departCountry, l.departCountry, COUNT(l),
-                   SUM(CASE WHEN l.leadType  = com.crm.travelcrm.lead.enums.LeadType.FRESH_LEAD THEN 1L ELSE 0L END),
+                   SUM(CASE WHEN l.leadType  = com.crm.travelcrm.lead.enums.LeadType.FRESH THEN 1L ELSE 0L END),
                    SUM(CASE WHEN l.leadStage = com.crm.travelcrm.lead.enums.LeadStage.CONVERTED THEN 1L ELSE 0L END)
             FROM Lead l
             WHERE l.tenantId = :tenantId
@@ -64,7 +64,7 @@ public interface GeoReportRepository extends Repository<Lead, Long> {
 
     @Query("""
             SELECT COUNT(l),
-                   SUM(CASE WHEN l.leadType  = com.crm.travelcrm.lead.enums.LeadType.FRESH_LEAD THEN 1L ELSE 0L END),
+                   SUM(CASE WHEN l.leadType  = com.crm.travelcrm.lead.enums.LeadType.FRESH THEN 1L ELSE 0L END),
                    SUM(CASE WHEN l.leadStage = com.crm.travelcrm.lead.enums.LeadStage.CONVERTED THEN 1L ELSE 0L END)
             FROM Lead l
             WHERE l.tenantId = :tenantId

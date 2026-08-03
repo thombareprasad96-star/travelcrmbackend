@@ -1,5 +1,6 @@
 package com.crm.travelcrm.booking.service;
 
+import com.crm.travelcrm.booking.dto.request.BookingFinancialPreviewRequest;
 import com.crm.travelcrm.booking.dto.request.CancelBookingRequestDTO;
 import com.crm.travelcrm.booking.dto.request.CreateBookingRequestDTO;
 import com.crm.travelcrm.booking.dto.request.LeadConversionRequestDTO;
@@ -7,6 +8,7 @@ import com.crm.travelcrm.booking.dto.request.PaymentUpdateRequestDTO;
 import com.crm.travelcrm.booking.dto.request.StatusUpdateRequestDTO;
 import com.crm.travelcrm.booking.dto.request.UpdateBookingRequestDTO;
 import com.crm.travelcrm.booking.dto.response.BookingAssigneeDto;
+import com.crm.travelcrm.booking.dto.response.BookingFinancialPreviewResponse;
 import com.crm.travelcrm.booking.dto.response.BookingPageSummaryResponseDTO;
 import com.crm.travelcrm.booking.dto.response.BookingResponseDTO;
 import com.crm.travelcrm.booking.dto.response.BookingStatsResponseDTO;
@@ -22,6 +24,14 @@ import java.util.UUID;
 
 public interface BookingService {
     BookingResponseDTO create(CreateBookingRequestDTO request);
+
+    /**
+     * Dry-run of the money a create would stamp — GST/TCS/total/netProfit/paymentStatus for the
+     * posted amounts under the current tenant's accounting settings. Computes exactly what
+     * {@code create} would; writes nothing (beyond lazily seeding the tenant's settings row,
+     * which any first read of accounting settings does).
+     */
+    BookingFinancialPreviewResponse previewFinancials(BookingFinancialPreviewRequest request);
 
     /**
      * Convert a qualified lead (optionally carrying an accepted quotation) into a booking.

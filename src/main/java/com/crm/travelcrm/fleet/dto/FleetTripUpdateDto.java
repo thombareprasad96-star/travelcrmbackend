@@ -1,5 +1,6 @@
 package com.crm.travelcrm.fleet.dto;
 
+import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 import lombok.Getter;
@@ -53,4 +54,18 @@ public class FleetTripUpdateDto {
     private BigDecimal driverAllowance;
 
     private String remarks;
+
+    /**
+     * Trip-level foreign currency and its rate — see {@code FleetTripCreateDto}.
+     *
+     * <p>Editing the rate here does NOT restate costs already recorded: each expense freezes the
+     * rate onto its own row at write time, so a correction to this field only affects rows entered
+     * afterwards. That is deliberate — a rate that retroactively rewrote reported figures would be
+     * the same defect as a status-flip void.
+     */
+    @Size(max = 3)
+    private String fxCurrency;
+
+    @Positive
+    private BigDecimal fxRate;
 }

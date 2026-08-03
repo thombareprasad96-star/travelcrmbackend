@@ -10,6 +10,14 @@
 This document is an implementation plan, not a claim that all listed features already exist.
 Section 2 and Section 3 explicitly separate **present**, **partial**, and **missing** behavior.
 
+> **Implementation status update — 3 August 2026:** this plan is now superseded by
+> `docs/FLEET_MODULE_REDESIGN.md`. A substantial portion of the redesigned backend exists in the
+> current working tree (trip legs, expense/cash ledgers, settlements, periods, compliance documents,
+> attachments, parties and standalone adapters), so the 31 July "current state" tables below are a
+> historical baseline rather than a description of the current code. The canonical implementation
+> audit, release blockers and verification state are in
+> `FLEET_MODULE_REDESIGN.md` §0.2. Do not use this document alone for a release decision.
+
 > Terminology: user ke “Bansar” ko product/API me `BHANSAR_NEPAL` code aur UI me
 > **Bhansar / Bansar (Nepal Border)** label diya jayega. Toll aur Parking alag expense types
 > rahenge; “Toll Parking” ko ek combined type nahi banaya jayega, warna reporting inaccurate hogi.
@@ -1181,7 +1189,8 @@ so a retry cannot duplicate a Booking expense.
 ### API/UI acceptance tests
 
 - create and approve each of the seven required expense types;
-- upload/download JPEG, PNG and PDF receipts;
+- upload/download JPEG, PNG and PDF re
+- ceipts;
 - record a Nepal expense in NPR and verify INR dashboard total;
 - create fine, pay authority, recover from driver and verify both balances;
 - renew India/Nepal permit and verify old history remains;

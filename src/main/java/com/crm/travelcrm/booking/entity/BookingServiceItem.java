@@ -88,4 +88,17 @@ public class BookingServiceItem extends BaseTenantEntity {
 
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
+
+    /**
+     * The platform hotel-marketplace booking this line projects, when it came from there.
+     *
+     * <p>The link lives on this child table rather than on {@code Booking} on purpose: {@code Booking}
+     * is {@code @Audited}, so a column added there needs its twin in {@code bookings_aud} or every
+     * write to every booking fails. This entity is not audited.</p>
+     *
+     * <p>Unique per marketplace booking via a partial index, which is what makes the approval-time
+     * projection a true UPSERT rather than an append.</p>
+     */
+    @Column(name = "marketplace_booking_public_id")
+    private UUID marketplaceBookingPublicId;
 }

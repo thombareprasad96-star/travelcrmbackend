@@ -11,6 +11,7 @@ import com.crm.travelcrm.platform.usage.dto.UpdateTenantQuotaRequest;
 import com.crm.travelcrm.platform.usage.dto.UsageDashboardResponse;
 import com.crm.travelcrm.platform.usage.dto.UsageOverviewResponse;
 import com.crm.travelcrm.platform.usage.storage.TenantStorageAssetRepository;
+import com.crm.travelcrm.fleet.repository.FleetAttachmentRepository;
 import com.crm.travelcrm.portal.document.repository.TravelerDocumentRepository;
 import com.crm.travelcrm.subagent.repository.SubAgentProfileRepository;
 import com.crm.travelcrm.tenent.entity.Tenant;
@@ -50,6 +51,7 @@ public class UsageServiceImpl implements UsageService {
     private final BookingRepository bookingRepository;
     private final TenantStorageAssetRepository storageAssetRepository;
     private final TravelerDocumentRepository travelerDocumentRepository;
+    private final FleetAttachmentRepository fleetAttachmentRepository;
     private final SubAgentProfileRepository subAgentProfileRepository;
     private final PlanRepository planRepository;
     private final PlatformAuditRecorder platformAuditRecorder;
@@ -165,7 +167,8 @@ public class UsageServiceImpl implements UsageService {
 
     private long currentStorage(Long tenantId) {
         return storageAssetRepository.sumBytesByTenant(tenantId)
-                + travelerDocumentRepository.sumBytesByTenant(tenantId);
+                + travelerDocumentRepository.sumBytesByTenant(tenantId)
+                + fleetAttachmentRepository.sumBytesByTenant(tenantId);
     }
 
     private long currentSubAgents(Long tenantId) {

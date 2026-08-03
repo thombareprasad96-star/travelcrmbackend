@@ -81,8 +81,10 @@ public class DashboardAnalyticsService {
         long convertedLeads = leads.stream()
                 .filter(lead -> lead.getLeadStage() == LeadStage.CONVERTED)
                 .count();
+        // Was LeadType.VIP — a stand-in from back when the vocabulary had no notion of "hot". The
+        // priority vocabulary has the real thing now, so this counts what its name always claimed.
         long hotLeads = leads.stream()
-                .filter(lead -> lead.getLeadType() == LeadType.VIP)
+                .filter(lead -> lead.getLeadType() == LeadType.HOT)
                 .count();
         long wins = activeBookings.stream()
                 .filter(this::isWonBooking)

@@ -25,6 +25,9 @@ import java.util.UUID;
 @Repository
 public interface BookingExpenseRepository extends JpaRepository<BookingExpense, Long> {
 
+    /** Complete audit timeline, including soft-deleted entries that become removal events. */
+    List<BookingExpense> findByBookingIdOrderByIdAsc(Long bookingId);
+
     /** The ledger for a booking, most recent cost first. */
     List<BookingExpense> findByBookingIdAndDeletedAtIsNullOrderByExpenseDateDescIdDesc(Long bookingId);
 
@@ -55,4 +58,31 @@ public interface BookingExpenseRepository extends JpaRepository<BookingExpense, 
              AND e.deletedAt IS NULL
            """)
     BigDecimal sumInternalCosts(@Param("bookingId") Long bookingId);
+
+    /**
+     * The marketplace payable rows on a booking — VENDOR lines carrying a marketplace link.
+     *
+     * <p>Sibling of {@link #sumInternalCosts} and it runs in the same places, so its cost profile is
+     * the one that query already accepts ("on every expense write and every booking edit").</p>
+     *
+     * <p>Why it exists: {@code ExpenseCostType}'s contract is that {@code Booking.vendorCost}
+     * "already represents everything paid to suppliers", which is exactly why VENDOR rows are kept
+     * out of {@code totalInternalCosts}. A marketplace payable is a VENDOR row the tenant never
+     * typed, so the scalar has to be maintained for it — otherwise {@code netProfit} is overstated
+     * by the payable, and {@code CancellationCalculator} freezes {@code sunkVendorCost} wrong,
+     * permanently.</p>
+     */
+    @Query("""
+           SELECT COALESCE(SUM(e.amount), 0) FROM BookingExpense e
+           WHERE e.bookingId = :bookingId
+             AND e.marketplaceBookingPublicId IS NOT NULL
+             AND e.deletedAt IS NULL
+           """)
+    BigDecimal sumMarketplacePayable(@Param("bookingId") Long bookingId);
+
+    /**
+     * The marketplace payable row, INCLUDING a soft-deleted one — see the note on the matching
+     * finder in {@code BookingServiceItemRepository}. A replay must un-delete rather than insert.
+     */
+    Optional<BookingExpense> findByMarketplaceBookingPublicId(UUID marketplaceBookingPublicId);
 }

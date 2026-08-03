@@ -188,7 +188,7 @@ public class LeadIngestService {
         request.setLeadSource(normalized.sourceOverride() != null
                 ? normalized.sourceOverride()
                 : channel.leadSource());
-        request.setLeadType(LeadType.FRESH_LEAD);
+        request.setLeadType(LeadType.FRESH);
         request.setLeadStage(LeadStage.NEW_LEAD);    // the pipeline decides, not sixteen adapters
         request.setNotes(normalized.message());
         applyTravelIntent(request, normalized.travel());

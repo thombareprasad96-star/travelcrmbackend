@@ -75,6 +75,18 @@ public class Booking extends BaseTenantEntity implements Ownable {
     @Column(name = "destination_snapshot", nullable = false, length = 255)
     private String destinationSnapshot;
 
+    /**
+     * The same customer as {@code customerId}, by publicId — denormalised on purpose, exactly as
+     * {@link #sourceLeadPublicId} is.
+     *
+     * <p>The API must return the UUID (the internal Long is never exposed and no endpoint accepts
+     * it), and resolving it per row at response time would be an N+1 across every booking list,
+     * export and report in the system. Stamped wherever {@code customerId} is stamped; the two are
+     * always written together.
+     */
+    @Column(name = "customer_public_id")
+    private java.util.UUID customerPublicId;
+
     // No DB-level FK — cross-aggregate reference to leads.id, enforced at the application layer.
     @Column(name = "lead_id")
     private Long leadId;
@@ -92,6 +104,29 @@ public class Booking extends BaseTenantEntity implements Ownable {
     // Nullable — every booking created before this column existed has none.
     @Column(name = "assigned_user_id")
     private Long assignedUserId;
+
+    // ── Trip detail (who is travelling, from where, the route) ────────────────
+    /**
+     * Point-in-time snapshot of the traveller/departure/itinerary detail this booking was sold with.
+     * Optional — a booking taken over the phone may carry only money and a destination.
+     *
+     * <p>{@code @NotAudited} on the FIELD as well as on the target entity: Envers refuses an audited
+     * entity holding an audited-by-default association to a non-audited one, and revisioning an
+     * immutable snapshot on every booking change would store copies of a thing that never changes.
+     *
+     * <p>{@code orphanRemoval} + {@code CascadeType.ALL} so the snapshot lives and dies with its
+     * booking; nothing else references it.
+     */
+    @org.hibernate.envers.NotAudited
+    @OneToOne(mappedBy = "booking", cascade = CascadeType.ALL,
+            orphanRemoval = true, fetch = FetchType.LAZY)
+    private BookingTripSnapshot tripSnapshot;
+
+    /** Keeps the two sides of the association consistent — set one, get both. */
+    public void attachTripSnapshot(BookingTripSnapshot snapshot) {
+        if (snapshot != null) snapshot.setBooking(this);
+        this.tripSnapshot = snapshot;
+    }
 
     // ── Conversion traceability (Lead → Quotation → Booking) ──────────────────
     // Set only when this booking was produced by converting a lead. They store the

@@ -1,7 +1,7 @@
 package com.crm.travelcrm.fleet.entity;
 
 import com.crm.travelcrm.common.entity.BaseTenantEntity;
-import com.crm.travelcrm.fleet.enums.FleetDocumentType;
+import com.crm.travelcrm.fleet.enums.FleetDocumentCategory;
 import com.crm.travelcrm.fleet.enums.FleetRefType;
 import jakarta.persistence.*;
 import lombok.*;
@@ -44,8 +44,19 @@ public class FleetDocumentAlert extends BaseTenantEntity {
     private String refLabel;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "doc_type", nullable = false, length = 20)
-    private FleetDocumentType docType;
+    // Widened from 20 to 32 when the five-value FleetDocumentType was retired in favour of the
+    // nineteen-value FleetDocumentCategory. Two enums for "kind of document" was one vocabulary too
+    // many, and the shorter one had no room for the papers a vehicle is actually stopped for.
+    @Column(name = "doc_type", nullable = false, length = 32)
+    private FleetDocumentCategory docType;
+
+    /**
+     * The compliance document this alert is about. Null on rows written before the document table
+     * existed — those were keyed on a vehicle/driver plus one of four date columns, and there is
+     * nothing to point at.
+     */
+    @Column(name = "document_id")
+    private Long documentId;
 
     @Column(name = "expiry_date", nullable = false)
     private LocalDate expiryDate;

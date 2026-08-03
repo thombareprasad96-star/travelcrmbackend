@@ -8,11 +8,13 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -78,11 +80,54 @@ public class FleetTripController {
                 tripService.close(publicId, request)));
     }
 
+    /**
+     * Hand a running trip over to another vehicle and/or driver — breakdown, relief driver,
+     * reallocation. Rides FLEET_UPDATE like the rest of the lifecycle: it is an operational act, not
+     * a financial one, and it happens at 3am at Devprayag by whoever is awake.
+     */
+    @PatchMapping("/{publicId}/swap")
+    @PreAuthorize("hasAuthority('FLEET_UPDATE')")
+    public ResponseEntity<ApiResponse<FleetTripResponseDto>> swap(
+            @PathVariable UUID publicId, @Valid @RequestBody FleetTripSwapDto request) {
+        return ResponseEntity.ok(ApiResponse.success("Trip handed over",
+                tripService.swap(publicId, request)));
+    }
+
     @PatchMapping("/{publicId}/cancel")
     @PreAuthorize("hasAuthority('FLEET_UPDATE')")
     public ResponseEntity<ApiResponse<FleetTripResponseDto>> cancel(@PathVariable UUID publicId) {
         return ResponseEntity.ok(ApiResponse.success("Trip cancelled",
                 tripService.cancel(publicId)));
+    }
+
+    /**
+     * The trip's legs, in order. A single-leg trip reads like the trip itself; more than one means the
+     * duty changed hands, and these rows are the only place the earlier vehicle, its odometer span and
+     * its driver survive — the trip's own fields always point at the CURRENT leg.
+     */
+    @GetMapping("/{publicId}/legs")
+    public ResponseEntity<ApiResponse<List<FleetTripLegDto>>> legs(@PathVariable UUID publicId) {
+        return ResponseEntity.ok(ApiResponse.success("Legs fetched", tripService.legs(publicId)));
+    }
+
+    /**
+     * The printable duty slip. Rides plain FLEET_READ: this is the paper an office prints for a
+     * driver leaving at 5am, and gating it on the money grant would put it out of reach of exactly
+     * the person whose job it is.
+     */
+    @GetMapping("/{publicId}/duty-slip")
+    public ResponseEntity<byte[]> dutySlip(@PathVariable UUID publicId) {
+        byte[] pdf = tripService.dutySlip(publicId);
+        return ResponseEntity.ok()
+                .header("Content-Disposition", "inline; filename=duty-slip-" + publicId + ".pdf")
+                .contentType(MediaType.APPLICATION_PDF)
+                .body(pdf);
+    }
+
+    /** Handover reason catalogue for the swap form. */
+    @GetMapping("/leg-change-reasons")
+    public ResponseEntity<ApiResponse<List<FleetLegChangeReasonDto>>> legChangeReasons() {
+        return ResponseEntity.ok(ApiResponse.success("Reasons fetched", tripService.legChangeReasons()));
     }
 
     @DeleteMapping("/{publicId}")
