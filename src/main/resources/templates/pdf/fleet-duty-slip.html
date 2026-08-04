@@ -1,0 +1,302 @@
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8" />
+    <title>Duty Slip</title>
+    <!--
+      DUTY SLIP (Flying Saucer + OpenPDF / Thymeleaf, XML mode)
+      FS-safe: tables + inline-block only. NO flex / grid / calc() / var() / box-shadow.
+      Model: ${doc} (FleetDutySlipModel) + company* vars + ${fmt} (FleetPdfFormat)
+
+      Printed BLANK on purpose for a PLANNED trip: the slip goes out with the vehicle, the driver
+      writes the readings in by hand and the guest signs at release. Unknown values therefore render
+      as a ruled line to write on, never as "0" or "—".
+
+      Entities: XML mode knows only the five XML built-ins — use &#160;, never &nbsp;.
+    -->
+    <style th:inline="none">
+        @page { size: A4; margin: 12mm 12mm 14mm 12mm; }
+        * { box-sizing: border-box; }
+        body { font-family: "DejaVu Sans", Helvetica, Arial, sans-serif;
+               font-size: 10px; line-height: 1.45; color: #1f2937; margin: 0; padding: 0; }
+        table { border-collapse: collapse; width: 100%; }
+        td, th { vertical-align: top; }
+        .r { text-align: right; } .c { text-align: center; }
+
+        /* Header */
+        .band { border: 2px solid #1d4ed8; border-radius: 8px; padding: 12px 14px; }
+        .band td { vertical-align: middle; }
+        .brand-name { font-size: 18px; font-weight: bold; color: #1e3a8a; }
+        .brand-logo { height: 40px; }
+        .brand-sub { font-size: 8px; color: #64748b; margin-top: 2px; }
+        .d-kicker { font-size: 7.5px; font-weight: bold; letter-spacing: 3px;
+                    color: #1d4ed8; text-transform: uppercase; }
+        .d-title { font-size: 21px; font-weight: bold; color: #1e3a8a; letter-spacing: 1px; }
+        .stamp { display: inline-block; border: 2px solid #1d4ed8; color: #1d4ed8; border-radius: 5px;
+                 font-size: 10px; font-weight: bold; letter-spacing: 1.5px; padding: 2px 9px;
+                 text-transform: uppercase; margin-top: 4px; }
+        .stamp-done { border-color: #15803d; color: #15803d; }
+        .stamp-cancel { border-color: #b91c1c; color: #b91c1c; }
+
+        .refline { margin-top: 9px; }
+        .refline td { font-size: 8.5px; color: #64748b; padding: 2px 0; }
+        .refline b { color: #1f2937; }
+
+        /* Sections */
+        .sec { border-left: 4px solid #1d4ed8; padding-left: 9px; margin: 14px 0 6px 0; }
+        .sec-t { font-size: 10.5px; font-weight: bold; color: #1e3a8a;
+                 text-transform: uppercase; letter-spacing: 0.8px; }
+
+        /* Field grid */
+        .grid td { padding: 5px 6px 5px 0; width: 25%; }
+        .lbl { font-size: 7px; font-weight: bold; letter-spacing: 0.8px;
+               text-transform: uppercase; color: #94a3b8; }
+        .val { font-size: 11px; font-weight: bold; color: #1f2937; margin-top: 2px; }
+        /* A ruled blank the driver writes on — the whole point of an unfilled slip. */
+        .fill { border-bottom: 1px dotted #94a3b8; min-height: 13px; margin-top: 4px; }
+
+        /* Journey box */
+        .jbox { border: 1px solid #cbd5e1; border-radius: 7px; margin-top: 4px; }
+        .jbox td { padding: 8px 10px; border-right: 1px solid #e2e8f0; border-bottom: 1px solid #e2e8f0; }
+        .jbox tr td:last-child { border-right: none; }
+        .jbox tr:last-child td { border-bottom: none; }
+        .jhead td { background-color: #eff6ff; font-size: 7px; font-weight: bold;
+                    letter-spacing: 1px; text-transform: uppercase; color: #1d4ed8; padding: 5px 10px; }
+
+        /* Data tables */
+        .tbl { margin-top: 5px; }
+        .tbl th { background-color: #f1f5f9; font-size: 7px; font-weight: bold; letter-spacing: 0.7px;
+                  text-transform: uppercase; color: #475569; padding: 6px 7px; text-align: left;
+                  border-bottom: 1px solid #cbd5e1; }
+        .tbl td { padding: 6px 7px; border-bottom: 1px solid #eef2f6; font-size: 9.5px; }
+        .tbl .tot td { border-top: 1.5px solid #1d4ed8; border-bottom: none;
+                       font-weight: bold; font-size: 11px; color: #1e3a8a; padding-top: 8px; }
+        .pill { display: inline-block; background-color: #eff6ff; color: #1d4ed8; font-size: 7px;
+                font-weight: bold; letter-spacing: 0.5px; text-transform: uppercase;
+                padding: 2px 6px; border-radius: 8px; }
+        .muted { color: #94a3b8; }
+
+        .note { border: 1px solid #e2e8f0; border-radius: 7px; background-color: #f8fafc;
+                padding: 9px 11px; margin-top: 6px; font-size: 9.5px; color: #475569; }
+
+        /* Signatures */
+        .sign { margin-top: 24px; }
+        .sign td { width: 33%; padding: 0 9px; }
+        .sign-line { border-top: 1px solid #64748b; padding-top: 5px; font-size: 8px;
+                     font-weight: bold; letter-spacing: 0.6px; text-transform: uppercase;
+                     color: #475569; text-align: center; }
+        .sign-hint { font-size: 7px; color: #94a3b8; text-align: center; margin-top: 2px; }
+        .foot { margin-top: 16px; border-top: 1px solid #e2e8f0; padding-top: 6px;
+                font-size: 7.5px; color: #94a3b8; }
+    </style>
+</head>
+<body>
+
+<!-- ── Header ───────────────────────────────────────────────────────────── -->
+<table class="band">
+    <tr>
+        <td style="width:58%;">
+            <img class="brand-logo" th:if="${companyLogoUrl != null and !companyLogoUrl.isEmpty()}"
+                 th:src="${companyLogoUrl}" alt="" />
+            <div class="brand-name" th:if="${companyLogoUrl == null or companyLogoUrl.isEmpty()}"
+                 th:text="${companyName}">Company</div>
+            <div class="brand-sub" th:text="${companyTagline}">Tagline</div>
+            <div class="brand-sub">
+                <span th:if="${companyPhone != null and !companyPhone.isEmpty()}" th:text="${companyPhone}">-</span>
+                <span th:if="${companyEmail != null and !companyEmail.isEmpty()}"
+                      th:text="'  |  ' + ${companyEmail}">-</span>
+            </div>
+        </td>
+        <td style="width:42%;" class="r">
+            <div class="d-kicker">Vehicle Diary</div>
+            <div class="d-title">DUTY SLIP</div>
+            <span class="stamp"
+                  th:classappend="${doc.status == 'COMPLETED'} ? 'stamp-done' : (${doc.status == 'CANCELLED'} ? 'stamp-cancel' : '')"
+                  th:text="${doc.statusLabel}">PLANNED</span>
+        </td>
+    </tr>
+</table>
+
+<table class="refline">
+    <tr>
+        <td style="width:34%;">Slip No: <b th:text="${doc.slipNo}">—</b></td>
+        <td style="width:33%;" class="c">
+            Job Ref: <b th:text="${fmt.orElse(doc.jobReference, '—')}">—</b>
+        </td>
+        <td style="width:33%;" class="r">Printed: <b th:text="${fmt.date(generatedOn)}">—</b></td>
+    </tr>
+</table>
+
+<!-- ── Vehicle & driver ─────────────────────────────────────────────────── -->
+<div class="sec"><div class="sec-t">Vehicle &amp; Driver</div></div>
+<table class="grid">
+    <tr>
+        <td>
+            <div class="lbl">Vehicle No.</div>
+            <div class="val" th:text="${fmt.orElse(doc.vehicleNumber, '')}">—</div>
+        </td>
+        <td>
+            <div class="lbl">Type</div>
+            <div class="val" th:text="${fmt.orElse(doc.vehicleType, '—')}">—</div>
+        </td>
+        <td>
+            <div class="lbl">Driver</div>
+            <div class="val" th:text="${fmt.orElse(doc.driverName, '')}">—</div>
+        </td>
+        <td>
+            <div class="lbl">Driver Mobile</div>
+            <div class="val" th:text="${fmt.orElse(doc.driverPhone, '—')}">—</div>
+        </td>
+    </tr>
+    <tr>
+        <td>
+            <div class="lbl">Licence No.</div>
+            <div class="val" th:text="${fmt.orElse(doc.driverLicense, '—')}">—</div>
+        </td>
+        <td>
+            <div class="lbl">From</div>
+            <div class="val" th:text="${fmt.orElse(doc.routeFrom, '—')}">—</div>
+        </td>
+        <td>
+            <div class="lbl">To</div>
+            <div class="val" th:text="${fmt.orElse(doc.routeTo, '—')}">—</div>
+        </td>
+        <td>
+            <div class="lbl">Purpose</div>
+            <div class="val" th:text="${fmt.orElse(doc.purpose, '—')}">—</div>
+        </td>
+    </tr>
+</table>
+
+<!-- ── Journey record ───────────────────────────────────────────────────── -->
+<div class="sec"><div class="sec-t">Journey Record</div></div>
+<table class="jbox">
+    <tr class="jhead">
+        <td style="width:34%;">&#160;</td>
+        <td style="width:33%;">Reporting (Start)</td>
+        <td style="width:33%;">Release (End)</td>
+    </tr>
+    <tr>
+        <td><div class="lbl">Date &amp; Time</div></td>
+        <td>
+            <div class="val" th:if="${doc.startDatetime != null}" th:text="${fmt.dateTime(doc.startDatetime)}">—</div>
+            <div class="fill" th:if="${doc.startDatetime == null}">&#160;</div>
+        </td>
+        <td>
+            <div class="val" th:if="${doc.endDatetime != null}" th:text="${fmt.dateTime(doc.endDatetime)}">—</div>
+            <div class="fill" th:if="${doc.endDatetime == null}">&#160;</div>
+        </td>
+    </tr>
+    <tr>
+        <td><div class="lbl">Odometer (km)</div></td>
+        <td>
+            <div class="val" th:if="${doc.startOdometer != null}" th:text="${fmt.km(doc.startOdometer)}">—</div>
+            <div class="fill" th:if="${doc.startOdometer == null}">&#160;</div>
+        </td>
+        <td>
+            <div class="val" th:if="${doc.endOdometer != null}" th:text="${fmt.km(doc.endOdometer)}">—</div>
+            <div class="fill" th:if="${doc.endOdometer == null}">&#160;</div>
+        </td>
+    </tr>
+    <tr>
+        <td><div class="lbl">Total</div></td>
+        <td>
+            <div class="lbl">Distance</div>
+            <div class="val" th:if="${doc.distanceKm != null}" th:text="${fmt.km(doc.distanceKm)} + ' km'">—</div>
+            <div class="fill" th:if="${doc.distanceKm == null}">&#160;</div>
+        </td>
+        <td>
+            <div class="lbl">Duration</div>
+            <div class="val" th:text="${fmt.duration(doc.startDatetime, doc.endDatetime)}">—</div>
+        </td>
+    </tr>
+</table>
+
+<!-- ── Legs — printed only when the duty actually changed hands ─────────── -->
+<div th:if="${doc.legs != null and doc.legs.size() > 1}">
+    <div class="sec"><div class="sec-t">Vehicle / Driver Changes</div></div>
+    <table class="tbl">
+        <tr>
+            <th style="width:5%;">#</th>
+            <th style="width:16%;">Vehicle</th>
+            <th style="width:19%;">Driver</th>
+            <th style="width:20%;">From</th>
+            <th style="width:20%;">To</th>
+            <th style="width:10%;" class="r">Km</th>
+            <th style="width:10%;">Reason</th>
+        </tr>
+        <tr th:each="l : ${doc.legs}">
+            <td th:text="${l.seq}">1</td>
+            <td th:text="${l.vehicleNumber}">—</td>
+            <td th:text="${l.driverName}">—</td>
+            <td th:text="${fmt.dateTime(l.startDatetime)}">—</td>
+            <td th:text="${l.endDatetime != null} ? ${fmt.dateTime(l.endDatetime)} : 'running'">—</td>
+            <td class="r" th:text="${l.distanceKm != null} ? ${fmt.km(l.distanceKm)} : '—'">—</td>
+            <td><span class="pill" th:if="${l.changeReason != null}" th:text="${l.changeReason}">—</span></td>
+        </tr>
+    </table>
+</div>
+
+<!-- ── Office use ───────────────────────────────────────────────────────── -->
+<div th:if="${doc.expenses != null and !doc.expenses.isEmpty()}">
+    <div class="sec"><div class="sec-t">For Office Use — Costs Recorded</div></div>
+    <table class="tbl">
+        <tr>
+            <th style="width:13%;">Date</th>
+            <th style="width:18%;">Category</th>
+            <th style="width:28%;">Detail</th>
+            <th style="width:23%;">Paid by</th>
+            <th style="width:8%;" class="c">Rcpt</th>
+            <th style="width:10%;" class="r">Amount</th>
+        </tr>
+        <tr th:each="e : ${doc.expenses}">
+            <td th:text="${fmt.date(e.date)}">—</td>
+            <td th:text="${e.type}">—</td>
+            <td class="muted" th:text="${fmt.orElse(e.description, '—')}">—</td>
+            <td>
+                <span th:text="${e.paidBy}">—</span>
+                <span class="muted" th:if="${e.driverName != null}" th:text="' — ' + ${e.driverName}">—</span>
+            </td>
+            <td class="c" th:text="${e.hasReceipt} ? 'Y' : 'N'">—</td>
+            <td class="r" th:text="${fmt.inr(e.amount)}">—</td>
+        </tr>
+        <tr class="tot">
+            <td colspan="5" class="r">Total</td>
+            <td class="r" th:text="${fmt.inr(doc.expenseTotal)}">—</td>
+        </tr>
+    </table>
+</div>
+
+<div class="note" th:if="${doc.remarks != null and !doc.remarks.isEmpty()}">
+    <b>Remarks:</b> <span th:text="${doc.remarks}">—</span>
+</div>
+
+<!-- ── Signatures ───────────────────────────────────────────────────────── -->
+<table class="sign">
+    <tr>
+        <td>
+            <div style="height:34px;">&#160;</div>
+            <div class="sign-line">Driver's Signature</div>
+            <div class="sign-hint">Readings above are correct</div>
+        </td>
+        <td>
+            <div style="height:34px;">&#160;</div>
+            <div class="sign-line">Guest's Signature</div>
+            <div class="sign-hint">Duty completed as recorded</div>
+        </td>
+        <td>
+            <div style="height:34px;">&#160;</div>
+            <div class="sign-line">Checked By</div>
+            <div class="sign-hint">Office</div>
+        </td>
+    </tr>
+</table>
+
+<div class="foot">
+    <span th:text="${companyName}">Company</span>
+    <span th:if="${companyAddress != null and !companyAddress.isEmpty()}" th:text="' · ' + ${companyAddress}">-</span>
+    <span th:if="${companyGst != null and !companyGst.isEmpty()}" th:text="' · GSTIN ' + ${companyGst}">-</span>
+    <span th:text="' · Slip ' + ${doc.slipNo}">-</span>
+</div>
+
+</body>
+</html>

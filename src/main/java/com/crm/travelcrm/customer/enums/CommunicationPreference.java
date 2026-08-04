@@ -36,6 +36,13 @@ public enum CommunicationPreference {
                 return pref;
             }
         }
+        // Accepted alias. The lead form shipped "Call" for this option while the canonical display
+        // value is "Phone Call", so every lead saved with it 400'd. The form now sends the canonical
+        // string; this alias stays so any payload already in flight — a queued retry, an integration
+        // built against the old list — resolves instead of failing.
+        if ("Call".equalsIgnoreCase(value.trim())) {
+            return PHONE_CALL;
+        }
         throw new IllegalArgumentException("Unknown communication preference: " + value);
     }
 }

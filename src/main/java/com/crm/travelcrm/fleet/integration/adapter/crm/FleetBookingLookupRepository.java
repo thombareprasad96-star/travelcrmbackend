@@ -1,4 +1,4 @@
-package com.crm.travelcrm.fleet.repository;
+package com.crm.travelcrm.fleet.integration.adapter.crm;
 
 import com.crm.travelcrm.booking.entity.Booking;
 import org.springframework.data.repository.Repository;

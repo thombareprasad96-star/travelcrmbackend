@@ -3,6 +3,7 @@ package com.crm.travelcrm.platform.usage.storage;
 import com.crm.travelcrm.common.cloudinary.StorageQuota;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.exception.BusinessException;
+import com.crm.travelcrm.fleet.repository.FleetAttachmentRepository;
 import com.crm.travelcrm.portal.document.repository.TravelerDocumentRepository;
 import com.crm.travelcrm.tenent.entity.Tenant;
 import com.crm.travelcrm.tenent.tenentsRepository.TenantRepository;
@@ -12,10 +13,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Hard storage-quota gate. Sums the tenant's Cloudinary asset bytes ({@code TenantStorageAsset}) and
- * traveler-document bytes ({@code TravelerDocument}) — exactly the two sources the SuperAdmin usage
- * dashboard totals — and blocks an upload that would exceed {@code Tenant.maxStorageMb}. Mirrors the
- * user-seat and booking-per-month hard gates; storage was previously only metered + alerted.
+ * Hard storage-quota gate. Sums the tenant's Cloudinary asset bytes ({@code TenantStorageAsset}),
+ * traveler-document bytes ({@code TravelerDocument}) and fleet-attachment bytes
+ * ({@code FleetAttachment}) — exactly the three sources the SuperAdmin usage dashboard totals —
+ * and blocks an upload that would exceed {@code Tenant.maxStorageMb}. Mirrors the user-seat and
+ * booking-per-month hard gates; storage was previously only metered + alerted.
+ *
+ * <p>The three consumers of this sum (this gate, {@code UsageServiceImpl},
+ * {@code UsageAlertService}) MUST stay term-for-term identical — a byte source visible to the gate
+ * but not the dashboard is how a tenant gets blocked at a number the SuperAdmin cannot see.
  */
 @Service
 @RequiredArgsConstructor
@@ -26,6 +32,7 @@ public class StorageQuotaGuard implements StorageQuota {
     private final TenantRepository tenantRepository;
     private final TenantStorageAssetRepository storageAssetRepository;
     private final TravelerDocumentRepository travelerDocumentRepository;
+    private final FleetAttachmentRepository fleetAttachmentRepository;
 
     @Override
     public void enforceWithinQuota(long incomingBytes) {
@@ -35,6 +42,12 @@ public class StorageQuotaGuard implements StorageQuota {
     @Override
     @Transactional(readOnly = true)
     public void enforceWithinQuota(Long tenantId, long incomingBytes) {
+        enforceWithinQuota(tenantId, incomingBytes, 1.0);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public void enforceWithinQuota(Long tenantId, long incomingBytes, double graceFactor) {
         if (tenantId == null) {
             return;   // no tenant (platform/unauthenticated) — not enforced
         }
@@ -46,9 +59,10 @@ public class StorageQuotaGuard implements StorageQuota {
         if (maxMb == null || maxMb <= 0) {
             return;   // unlimited
         }
-        long limit = maxMb * BYTES_PER_MB;
+        long limit = (long) (maxMb * BYTES_PER_MB * Math.max(1.0, graceFactor));
         long used = storageAssetRepository.sumBytesByTenant(tenantId)
-                + travelerDocumentRepository.sumBytesByTenant(tenantId);
+                + travelerDocumentRepository.sumBytesByTenant(tenantId)
+                + fleetAttachmentRepository.sumBytesByTenant(tenantId);
         if (used + Math.max(0, incomingBytes) > limit) {
             throw new BusinessException(
                     "Storage limit reached (" + maxMb + " MB). Remove files or upgrade the plan "

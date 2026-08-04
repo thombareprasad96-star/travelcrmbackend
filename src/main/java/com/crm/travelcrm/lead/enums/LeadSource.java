@@ -125,7 +125,11 @@ public enum LeadSource {
 
     @JsonCreator
     public static LeadSource fromValue(String value) {
-        if (value == null) return null;
+        // Blank joins null in yielding null. An untouched dropdown posts "", and throwing on it
+        // happens during Jackson deserialization — before bean validation — so the client got an
+        // opaque HttpMessageNotReadableException 400 carrying no fieldErrors, and the friendly
+        // @NotNull("Lead source is required") could never fire.
+        if (value == null || value.isBlank()) return null;
         for (LeadSource source : values()) {
             if (source.displayName.equalsIgnoreCase(value) || source.name().equalsIgnoreCase(value)) {
                 return source;

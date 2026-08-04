@@ -1,0 +1,236 @@
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8" />
+    <title>Hotel Voucher</title>
+    <!--
+      HOTEL VOUCHER — marketplace booking (Flying Saucer + OpenPDF / Thymeleaf, XML mode)
+      FS-safe: tables + inline-block only. NO flex / grid / calc() / var() / box-shadow.
+      Model: ${doc} (MarketplaceVoucherModel) + ${fmt} (PdfFormat).
+      Palette: gold #eeda92 (band) + deep gold #b8891f (accents), matching pdf/voucher.html.
+
+      A GUEST HOLDS THIS PAGE. IT CARRIES NO MONEY — no supplier net, no platform earning, no tenant
+      payable, no customer selling price, no totals of any kind (design §7). The model has no money
+      field to print, so do not add one here either; a priced document is a different document with a
+      different audience.
+    -->
+    <style th:inline="none">
+        @page { size: A4; margin: 14mm 13mm 16mm 13mm; }
+        * { box-sizing: border-box; }
+        body { font-family: "DejaVu Sans", Helvetica, Arial, sans-serif;
+               font-size: 10px; line-height: 1.5; color: #2b2b2b; margin: 0; padding: 0; }
+        table { border-collapse: collapse; width: 100%; }
+        td, th { vertical-align: top; }
+        .r { text-align: right; } .c { text-align: center; }
+
+        /* Header band */
+        .band { background-color: #eeda92; border-radius: 10px; padding: 16px 18px; }
+        .band td { vertical-align: middle; }
+        .brand-name { font-size: 20px; font-weight: bold; color: #4a370c; letter-spacing: 0.3px; }
+        .brand-logo { height: 44px; }
+        .brand-sub  { font-size: 8.5px; color: #6b5518; margin-top: 3px; }
+        .v-kicker { font-size: 8px; font-weight: bold; letter-spacing: 3px; color: #6b4e12; text-transform: uppercase; }
+        .v-title  { font-size: 22px; font-weight: bold; color: #4a370c; letter-spacing: 1px; }
+        .stamp { display: inline-block; border: 2px solid #15803d; color: #15803d; border-radius: 6px;
+                 font-size: 11px; font-weight: bold; letter-spacing: 2px; padding: 4px 12px;
+                 text-transform: uppercase; margin-top: 5px; }
+        .stamp-void { border-color: #b91c1c; color: #b91c1c; }
+
+        /* Ref line */
+        .refline { margin-top: 12px; }
+        .refline td { font-size: 9px; color: #555; padding: 3px 0; width: 50%; }
+        .refline b { color: #1f2937; }
+
+        /* Section */
+        .sec { border-left: 4px solid #b8891f; padding-left: 10px; margin: 18px 0 8px 0; }
+        .sec-t { font-size: 11px; font-weight: bold; color: #1f2937; text-transform: uppercase; letter-spacing: 0.8px; }
+
+        /* Tiles */
+        .tiles td { width: 33%; padding: 5px; }
+        .tile { border: 1px solid #ece3c9; border-left: 4px solid #b8891f; border-radius: 8px;
+                background-color: #fdf9ec; padding: 10px 12px; }
+        .tile-l { font-size: 7px; font-weight: bold; letter-spacing: 1px; text-transform: uppercase; color: #b8891f; }
+        .tile-v { font-size: 12px; font-weight: bold; color: #1f2937; margin-top: 3px; }
+
+        /* Detail card */
+        .card { border: 1px solid #e7e0cb; border-radius: 8px; padding: 11px 13px; page-break-inside: avoid; }
+        .card-title { font-size: 13px; font-weight: bold; color: #1f2937; }
+        .card-sub { font-size: 9px; color: #555; margin-top: 3px; line-height: 1.55; }
+        .kv { margin-top: 8px; }
+        .kv td { width: 50%; padding: 4px 0; vertical-align: top; }
+        .kv-l { font-size: 7px; font-weight: bold; letter-spacing: 0.8px; text-transform: uppercase; color: #999; }
+        .kv-v { font-size: 9.5px; color: #1f2937; font-weight: bold; }
+
+        /* Notes */
+        .note { border: 1px solid #ece3c9; border-radius: 8px; background-color: #fdf9ec;
+                padding: 10px 13px; margin-top: 9px; font-size: 9px; color: #4a4a4a; line-height: 1.6; }
+
+        /* Support strip */
+        .support { border: 1px solid #ece3c9; border-radius: 8px; margin-top: 16px; background-color: #fcfaf2; }
+        .support td { width: 33%; padding: 11px; text-align: center; border-right: 1px solid #ece3c9; }
+        .support td.last { border-right: none; }
+        .sup-l { font-size: 7.5px; font-weight: bold; letter-spacing: 0.8px; text-transform: uppercase; color: #b8891f; }
+        .sup-v { font-size: 10px; font-weight: bold; color: #1f2937; margin-top: 4px; }
+
+        /* Footer */
+        .foot { margin-top: 20px; border-top: 1px solid #e7e0cb; padding-top: 10px; }
+        .foot-note { font-size: 8px; color: #8a8a8a; line-height: 1.6; }
+        .foot-ty { font-size: 12px; font-weight: bold; color: #b8891f; letter-spacing: 1px; }
+    </style>
+</head>
+<body>
+
+<!-- HEADER BAND -->
+<table class="band">
+    <tr>
+        <td style="width:58%;">
+            <img class="brand-logo" th:if="${doc.platformLogoUrl != null and !doc.platformLogoUrl.isEmpty()}" th:src="${doc.platformLogoUrl}" />
+            <div class="brand-name" th:if="${doc.platformLogoUrl == null or doc.platformLogoUrl.isEmpty()}" th:text="${doc.platformName}">Platform</div>
+            <div class="brand-sub" th:text="${doc.platformTagline}">Hotel Reservation Confirmation</div>
+        </td>
+        <td class="r" style="width:42%;">
+            <div class="v-kicker">Hotel</div>
+            <div class="v-title">VOUCHER</div>
+            <div class="stamp" th:classappend="${doc.issued} ? '' : 'stamp-void'" th:text="${doc.statusLabel}">Confirmed</div>
+        </td>
+    </tr>
+</table>
+
+<!-- REFERENCES -->
+<table class="refline">
+    <tr>
+        <td><b>Voucher No:</b> <span th:text="${fmt.orElse(doc.voucherNumber, 'Not issued')}">HV-2026-1A2B3C4D</span></td>
+        <td class="r"><b>Booking Ref:</b> <span th:text="${fmt.orElse(doc.bookingCode, '-')}">MHB-0001</span></td>
+    </tr>
+    <tr>
+        <td><b>Hotel Confirmation No:</b> <span th:text="${fmt.orElse(doc.supplierConfirmationNumber, 'On arrival')}">-</span></td>
+        <td class="r"><b>Issued On:</b> <span th:text="${fmt.date(doc.issuedOn)}">01 Jan 2026</span></td>
+    </tr>
+</table>
+
+<!-- STAY DATES -->
+<table class="tiles">
+    <tr>
+        <td>
+            <div class="tile">
+                <div class="tile-l">Check-in</div>
+                <div class="tile-v" th:text="${fmt.date(doc.checkIn)}">-</div>
+            </div>
+        </td>
+        <td>
+            <div class="tile">
+                <div class="tile-l">Check-out</div>
+                <div class="tile-v" th:text="${fmt.date(doc.checkOut)}">-</div>
+            </div>
+        </td>
+        <td>
+            <div class="tile">
+                <div class="tile-l">Nights</div>
+                <div class="tile-v" th:text="${doc.nights} ?: '-'">-</div>
+            </div>
+        </td>
+    </tr>
+</table>
+
+<!-- HOTEL -->
+<div class="sec"><span class="sec-t">Hotel</span></div>
+<div class="card">
+    <div class="card-title" th:text="${doc.hotelName}">Hotel</div>
+    <div class="card-sub" th:if="${doc.address != null and !doc.address.isEmpty()}" th:text="${doc.address}">Address</div>
+    <div class="card-sub" th:if="${doc.cityName != null and !doc.cityName.isEmpty()}"
+         th:text="${doc.countryCode != null and !doc.countryCode.isEmpty()} ? |${doc.cityName}, ${doc.countryCode}| : ${doc.cityName}">City</div>
+    <table class="kv">
+        <tr>
+            <td>
+                <div class="kv-l">Room</div>
+                <div class="kv-v" th:text="${fmt.orElse(doc.roomName, 'As confirmed')}">-</div>
+            </td>
+            <td>
+                <div class="kv-l">Meal Plan</div>
+                <div class="kv-v" th:text="${fmt.orElse(doc.mealPlan, 'Room only')}">-</div>
+            </td>
+        </tr>
+        <tr>
+            <td>
+                <div class="kv-l">Rooms</div>
+                <div class="kv-v" th:text="${doc.rooms} ?: '1'">1</div>
+            </td>
+            <td>
+                <div class="kv-l">Occupancy</div>
+                <div class="kv-v" th:text="${fmt.travellers(doc.adults, doc.children, null)}">-</div>
+            </td>
+        </tr>
+    </table>
+</div>
+
+<!-- GUEST -->
+<div class="sec"><span class="sec-t">Lead Guest</span></div>
+<div class="card">
+    <div class="card-title" th:text="${fmt.orElse(doc.leadGuestName, 'Guest')}">Guest</div>
+    <table class="kv">
+        <tr>
+            <td>
+                <div class="kv-l">Phone</div>
+                <div class="kv-v" th:text="${fmt.orElse(doc.leadGuestPhone, '-')}">-</div>
+            </td>
+            <td>
+                <div class="kv-l">Email</div>
+                <div class="kv-v" th:text="${fmt.orElse(doc.leadGuestEmail, '-')}">-</div>
+            </td>
+        </tr>
+    </table>
+    <div class="note" th:if="${doc.specialRequests != null and !doc.specialRequests.isEmpty()}">
+        <b>Special requests:</b> <span th:text="${fmt.plain(doc.specialRequests)}">-</span>
+        <br />
+        Requests are passed to the hotel and are subject to availability on arrival. They are not guaranteed.
+    </div>
+</div>
+
+<!-- TERMS -->
+<div class="sec"><span class="sec-t">Cancellation &amp; Usage</span></div>
+<div class="note" th:if="${doc.cancellationTerms != null and !doc.cancellationTerms.isEmpty()}"
+     th:text="${fmt.plain(doc.cancellationTerms)}">Terms</div>
+<div class="note" th:if="${doc.cancellationTerms == null or doc.cancellationTerms.isEmpty()}">
+    Cancellation terms for this reservation are as agreed at the time of confirmation. Contact the
+    support desk below before making any change to this booking.
+</div>
+<div class="note">
+    Present this voucher along with a government-issued photo ID for each guest at check-in. The hotel
+    may require a card or deposit for incidentals; anything not listed above is payable by the guest
+    directly to the hotel.
+</div>
+
+<!-- SUPPORT -->
+<table class="support">
+    <tr>
+        <td>
+            <div class="sup-l">Support Phone</div>
+            <div class="sup-v" th:text="${fmt.orElse(doc.platformSupportPhone, '-')}">-</div>
+        </td>
+        <td>
+            <div class="sup-l">Support Email</div>
+            <div class="sup-v" th:text="${fmt.orElse(doc.platformSupportEmail, '-')}">-</div>
+        </td>
+        <td class="last">
+            <div class="sup-l">Website</div>
+            <div class="sup-v" th:text="${fmt.orElse(doc.platformWebsite, '-')}">-</div>
+        </td>
+    </tr>
+</table>
+
+<!-- FOOTER -->
+<div class="foot">
+    <div class="foot-ty">Have a pleasant stay</div>
+    <div class="foot-note" style="margin-top:6px;">
+        This is a computer-generated hotel voucher and does not require a physical signature. It is
+        valid only while the reservation remains confirmed; quote the voucher number above in any
+        correspondence. This document carries no pricing — all charges are settled between the booking
+        agency and <span th:text="${doc.platformName}">the platform</span>.
+    </div>
+    <div class="foot-note" th:if="${!doc.issued}" style="margin-top:6px; color:#b91c1c;">
+        <b>This copy is not a valid voucher.</b> It has either not been issued yet or has been
+        withdrawn, and must not be presented at the hotel.
+    </div>
+</div>
+
+</body>
+</html>

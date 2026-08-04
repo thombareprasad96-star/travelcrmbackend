@@ -14,4 +14,14 @@ public interface StorageQuota {
 
     /** Enforce for an explicit tenant — for realms (e.g. the traveler portal) that pass it directly. */
     void enforceWithinQuota(Long tenantId, long incomingBytes);
+
+    /**
+     * Enforce against {@code limit × graceFactor} instead of the plain limit. For uploads that must
+     * not be refused at the line — a fleet compliance certificate that has to be on file beats a
+     * full disk — while still stopping gross overage. {@code graceFactor} ≤ 1 behaves exactly like
+     * the plain gate; the default keeps existing implementations working unchanged.
+     */
+    default void enforceWithinQuota(Long tenantId, long incomingBytes, double graceFactor) {
+        enforceWithinQuota(tenantId, incomingBytes);
+    }
 }

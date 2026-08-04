@@ -1,6 +1,6 @@
 package com.crm.travelcrm.fleet.dto;
 
-import com.crm.travelcrm.fleet.enums.FleetDocumentType;
+import com.crm.travelcrm.fleet.enums.FleetDocumentCategory;
 import com.crm.travelcrm.fleet.enums.FleetRefType;
 
 import java.time.LocalDate;
@@ -11,7 +11,7 @@ public record FleetExpiringDocumentDto(
         FleetRefType refType,
         UUID refPublicId,
         String refLabel,
-        FleetDocumentType docType,
+        FleetDocumentCategory docType,
         String docLabel,
         LocalDate expiryDate,
         long daysLeft

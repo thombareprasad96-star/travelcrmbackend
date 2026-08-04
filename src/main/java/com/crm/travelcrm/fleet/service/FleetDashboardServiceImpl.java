@@ -5,12 +5,13 @@ import com.crm.travelcrm.common.dto.PaginationMeta;
 import com.crm.travelcrm.fleet.dto.*;
 import com.crm.travelcrm.fleet.entity.FleetDriver;
 import com.crm.travelcrm.fleet.entity.FleetVehicle;
-import com.crm.travelcrm.fleet.enums.FleetDocumentType;
+
 import com.crm.travelcrm.fleet.enums.FleetDriverStatus;
 import com.crm.travelcrm.fleet.enums.FleetRefType;
 import com.crm.travelcrm.fleet.enums.FleetTripStatus;
 import com.crm.travelcrm.fleet.enums.FleetVehicleStatus;
 import com.crm.travelcrm.fleet.mapper.FleetTripMapper;
+import com.crm.travelcrm.fleet.repository.FleetComplianceDocumentRepository;
 import com.crm.travelcrm.fleet.repository.FleetDocumentAlertRepository;
 import com.crm.travelcrm.fleet.repository.FleetDriverRepository;
 import com.crm.travelcrm.fleet.repository.FleetFuelLogRepository;
@@ -44,6 +45,7 @@ public class FleetDashboardServiceImpl implements FleetDashboardService {
     private final FleetTripRepository tripRepository;
     private final FleetFuelLogRepository fuelLogRepository;
     private final FleetMaintenanceLogRepository maintenanceLogRepository;
+    private final FleetComplianceDocumentRepository documentRepository;
     private final FleetDocumentAlertRepository alertRepository;
     private final FleetTripMapper tripMapper;
 
@@ -146,38 +148,31 @@ public class FleetDashboardServiceImpl implements FleetDashboardService {
         return PagedApiResponse.of("Alerts fetched successfully", data, PaginationMeta.from(result));
     }
 
-    /** Explodes each vehicle's four document dates + active drivers' licences into dashboard rows. */
+    /**
+     * Expiring papers, read from the compliance table.
+     *
+     * <p>This used to explode the vehicle's four date columns and the driver's licence date. Those
+     * columns were migrated into document rows, so reading documents covers everything the old code
+     * covered plus the fourteen categories it had no room for — fitness, Green Card, VLTD, PSV badge
+     * and the rest. Keeping the old reads alongside would list insurance twice.
+     */
     private List<FleetExpiringDocumentDto> collectExpiringDocuments(Long tenantId, LocalDate today) {
         LocalDate limit = today.plusDays(expiryWindowDays);
         List<FleetExpiringDocumentDto> items = new ArrayList<>();
 
-        for (FleetVehicle v : vehicleRepository.findWithDocumentsExpiringBy(tenantId, limit)) {
-            addIfExpiring(items, today, limit, FleetRefType.VEHICLE, v.getPublicId(), v.getVehicleNumber(),
-                    FleetDocumentType.INSURANCE, v.getInsuranceExpiry());
-            addIfExpiring(items, today, limit, FleetRefType.VEHICLE, v.getPublicId(), v.getVehicleNumber(),
-                    FleetDocumentType.RC, v.getRcExpiry());
-            addIfExpiring(items, today, limit, FleetRefType.VEHICLE, v.getPublicId(), v.getVehicleNumber(),
-                    FleetDocumentType.PERMIT, v.getPermitExpiry());
-            addIfExpiring(items, today, limit, FleetRefType.VEHICLE, v.getPublicId(), v.getVehicleNumber(),
-                    FleetDocumentType.PUC, v.getPucExpiry());
-        }
-        for (FleetDriver d : driverRepository
-                .findByTenantIdAndStatusAndLicenseExpiryLessThanEqualAndDeletedAtIsNull(
-                        tenantId, FleetDriverStatus.ACTIVE, limit)) {
-            addIfExpiring(items, today, limit, FleetRefType.DRIVER, d.getPublicId(), d.getName(),
-                    FleetDocumentType.DRIVER_LICENSE, d.getLicenseExpiry());
+        for (var doc : documentRepository.findExpiringBy(tenantId, limit)) {
+            boolean isVehicle = doc.getVehicle() != null;
+            items.add(new FleetExpiringDocumentDto(
+                    isVehicle ? FleetRefType.VEHICLE : FleetRefType.DRIVER,
+                    isVehicle ? doc.getVehicle().getPublicId() : doc.getDriver().getPublicId(),
+                    isVehicle ? doc.getVehicle().getVehicleNumber() : doc.getDriver().getName(),
+                    doc.getCategory(), doc.getCategory().label(),
+                    doc.getValidUntil(),
+                    ChronoUnit.DAYS.between(today, doc.getValidUntil())));
         }
 
         items.sort(Comparator.comparingLong(FleetExpiringDocumentDto::daysLeft));
         return items;
-    }
-
-    private void addIfExpiring(List<FleetExpiringDocumentDto> items, LocalDate today, LocalDate limit,
-                               FleetRefType refType, java.util.UUID refPublicId, String refLabel,
-                               FleetDocumentType docType, LocalDate expiry) {
-        if (expiry == null || expiry.isAfter(limit)) return;
-        items.add(new FleetExpiringDocumentDto(refType, refPublicId, refLabel, docType, docType.label(),
-                expiry, ChronoUnit.DAYS.between(today, expiry)));
     }
 
     /** {@code [status, count]} group-by rows → typed map. */

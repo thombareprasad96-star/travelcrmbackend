@@ -1,8 +1,11 @@
 package com.crm.travelcrm.common.config;
 
 import com.crm.travelcrm.lead.enums.LeadOrigin;
+import com.crm.travelcrm.customer.enums.CommunicationPreference;
+import com.crm.travelcrm.lead.enums.DepartureMode;
 import com.crm.travelcrm.lead.enums.LeadSource;
 import com.crm.travelcrm.lead.enums.LeadStage;
+import com.crm.travelcrm.lead.enums.LeadType;
 import com.crm.travelcrm.leadsource.entity.LeadIngestStatus;
 import com.crm.travelcrm.platform.audit.entity.PlatformAuditAction;
 import org.apache.logging.log4j.LogManager;
@@ -71,6 +74,17 @@ public class SchemaEnumConstraintValidator implements ApplicationRunner {
             new GuardedColumn("leads", "lead_source", "leads_lead_source_check", LeadSource.class),
             new GuardedColumn("leads", "lead_stage", "leads_lead_stage_check", LeadStage.class),
             new GuardedColumn("leads", "origin", "leads_origin_check", LeadOrigin.class),
+            // lead_type is the highest-risk entry in this list: its constants were REPLACED, not
+            // extended (FRESH_LEAD/REPEAT_CUSTOMER/CORPORATE/VIP -> FRESH/HOT/WARM/COLD), so a
+            // database that missed V3 rejects every single lead write rather than just the new
+            // values. Guarded so that failure surfaces at boot instead of at the first save.
+            new GuardedColumn("leads", "lead_type", "leads_lead_type_check", LeadType.class),
+            new GuardedColumn("leads", "departure_mode", "leads_departure_mode_check",
+                    DepartureMode.class),
+            new GuardedColumn("leads", "preferred_communication",
+                    "leads_preferred_communication_check", CommunicationPreference.class),
+            new GuardedColumn("booking_trip_snapshot", "departure_mode",
+                    "booking_trip_snapshot_departure_mode_check", DepartureMode.class),
             new GuardedColumn("quotations", "template_style", "quotations_template_style_check",
                     com.crm.travelcrm.quotation.enums.TemplateStyle.class),
             new GuardedColumn("lead_ingest_events", "status", "lead_ingest_events_status_check",

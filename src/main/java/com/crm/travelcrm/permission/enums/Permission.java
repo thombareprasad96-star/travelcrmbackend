@@ -42,6 +42,7 @@ public enum Permission {
     BOOKING_UPDATE ("Bookings",       "Edit booking"),
     BOOKING_CANCEL ("Bookings",       "Cancel booking"),
     BOOKING_DELETE ("Bookings",       "Delete booking"),
+    BOOKING_PROFIT_READ ("Bookings",  "View supplier costs, expenses and booking profit"),
     // High-privilege financial gate: disburse a refund AND override/waive a computed cancellation
     // charge. Like LEAD_PERMANENT_DELETE it is in no role default — only TENANT_ADMIN holds it (via
     // the resolver bypass) until explicitly granted, since it moves money and overrides the books.
@@ -88,9 +89,48 @@ public enum Permission {
     FLEET_UPDATE ("Fleet",            "Edit fleet records / trip lifecycle (start, close, cancel)"),
     FLEET_DELETE ("Fleet",            "Delete fleet records"),
 
+    // Fleet MONEY is a separate authority from fleet operations: a dispatcher creates trips and
+    // records costs all day without ever being able to settle a driver's cash or close a period.
+    // Deliberately THREE keys, not the ten the standalone plan proposed — recording a cost is part
+    // of the trip diary (FLEET_CREATE/UPDATE), and approval happens ONCE on the trip settlement
+    // rather than per expense row. See docs/FLEET_MODULE_REDESIGN.md §4.3.
+    FLEET_MONEY_READ   ("Fleet",      "View fleet expenses, driver cash balances & settlements"),
+    FLEET_MONEY_SETTLE ("Fleet",      "Settle a trip: approve costs, reconcile driver cash, record payout"),
+    FLEET_PERIOD_CLOSE ("Fleet",      "Lock a fleet accounting period (financial year / month)"),
+
     // ── Master data (coarse: read vs manage) ────────────────────────────────
     MASTER_READ   ("Master Data",     "View master data"),
     MASTER_MANAGE ("Master Data",     "Create / edit / delete master data"),
+
+    // ── Hotel marketplace (the tenant SIDE of the platform catalog) ─────────
+    // Separate from MASTER_*: importing a platform hotel writes into the Hotel Master, but browsing
+    // a catalog the platform curates is a different act from maintaining your own master data, and a
+    // tenant can hold one without the other. Managing the catalog itself is not a tenant permission
+    // at all — it lives in the SuperAdmin realm behind ROLE_SUPER_ADMIN.
+    HOTEL_MARKETPLACE_VIEW        ("Hotel Marketplace", "Search the platform hotel catalog"),
+    HOTEL_MARKETPLACE_SYNC_MASTER ("Hotel Marketplace", "Import a platform hotel into your hotel master"),
+    HOTEL_MARKETPLACE_BOOK        ("Hotel Marketplace", "Send a hotel booking request to the platform"),
+    /**
+     * Withdraw a pending request, or ask the platform to cancel a confirmed one.
+     *
+     * <p>Granted to every role that holds {@code HOTEL_MARKETPLACE_BOOK}, deliberately: whoever can
+     * create the liability must be able to start unwinding it, and cancellation is the mitigating
+     * act, not the risky one. The irreversible half — deciding the supplier's cancellation charge and
+     * settling the refund — is a SuperAdmin action behind step-up MFA, so the tenant permission only
+     * ever opens a conversation. (Contrast {@code FLEET_MONEY_READ}, withheld from sales roles
+     * because settling driver cash freezes immediately with no second party in the loop.)</p>
+     */
+    HOTEL_MARKETPLACE_CANCEL      ("Hotel Marketplace", "Cancel or withdraw a marketplace hotel booking"),
+    /**
+     * See what the tenant owes the PLATFORM on a marketplace booking.
+     *
+     * <p>Separate from {@code BOOKING_PROFIT_READ} because the payable is not a margin — it is a
+     * price the agent must know to quote their customer. Gating it behind profit would make the whole
+     * feature unusable for exactly the role that places the orders, since TRAVEL_AGENT holds no
+     * profit permission. It grants sight of marketplace expense rows ONLY; every other expense line,
+     * and every margin figure, stays behind {@code BOOKING_PROFIT_READ}.</p>
+     */
+    MARKETPLACE_PAYABLE_READ      ("Hotel Marketplace", "View what you owe the platform for a marketplace booking"),
 
     // ── User management (mirrors the existing USER_* authorities) ───────────
     USER_READ   ("User Management",   "View users"),
@@ -170,13 +210,23 @@ public enum Permission {
             case MANAGER -> EnumSet.of(
                     LEAD_READ, LEAD_CREATE, LEAD_UPDATE, LEAD_DELETE,
                     BOOKING_READ, BOOKING_CREATE, BOOKING_UPDATE, BOOKING_CANCEL, BOOKING_DELETE,
+                    BOOKING_PROFIT_READ,
                     CUSTOMER_READ, CUSTOMER_CREATE, CUSTOMER_UPDATE, CUSTOMER_DELETE,
                     QUOTATION_READ, QUOTATION_CREATE, QUOTATION_UPDATE, QUOTATION_DELETE,
                     VENDOR_READ, VENDOR_CREATE, VENDOR_UPDATE,
                     REMINDER_READ, REMINDER_CREATE, REMINDER_UPDATE, REMINDER_DELETE,
                     TASK_READ, TASK_CREATE, TASK_UPDATE, TASK_DELETE,
                     FLEET_READ, FLEET_CREATE, FLEET_UPDATE, FLEET_DELETE,
+                    // Sees fleet money; does NOT settle it. Settling a driver's cash is an
+                    // irreversible act (the settlement freezes), so it is granted deliberately,
+                    // never inherited from managing the fleet. Mirrored exactly by the backfill in
+                    // V2__lead_code.sql PART 6; FleetMoneyPermissionDefaultsTest fails the build if
+                    // the two grant paths ever drift apart.
+                    FLEET_MONEY_READ,
                     MASTER_READ, MASTER_MANAGE, REPORT_VIEW, USER_READ,
+                    // Importing writes into the hotel master, so it tracks MASTER_MANAGE.
+                    HOTEL_MARKETPLACE_VIEW, HOTEL_MARKETPLACE_SYNC_MASTER,
+                    HOTEL_MARKETPLACE_BOOK, HOTEL_MARKETPLACE_CANCEL, MARKETPLACE_PAYABLE_READ,
                     ACCOUNTING_INVOICE_READ, ACCOUNTING_TDS_READ,
                     MARKETING_READ, MARKETING_CREATE, MARKETING_UPDATE, MARKETING_DELETE, MARKETING_SEND,
                     TRASH_VIEW, TRASH_RESTORE);
@@ -190,7 +240,17 @@ public enum Permission {
                     REMINDER_READ, REMINDER_CREATE, REMINDER_UPDATE,
                     TASK_READ, TASK_CREATE, TASK_UPDATE,
                     FLEET_READ, FLEET_CREATE, FLEET_UPDATE,
+                    // Deliberately NO FLEET_MONEY_*: this is a sales role. It plans and runs trips,
+                    // but tenant-wide driver cash positions, vendor rates and cost structure are not
+                    // its business. Grant FLEET_MONEY_READ per-user if a particular agent needs it.
                     MASTER_READ, REPORT_VIEW,
+                    // Browse the platform catalog and order from it, but no SYNC_MASTER: importing
+                    // writes master data and this role only holds MASTER_READ. Grant that per-user.
+                    // MARKETPLACE_PAYABLE_READ IS granted — the payable is a price this role has to
+                    // know to quote a customer, not a margin, and TRAVEL_AGENT holds no profit
+                    // permission at all, so without it the feature is unusable for its main user.
+                    HOTEL_MARKETPLACE_VIEW, HOTEL_MARKETPLACE_BOOK, HOTEL_MARKETPLACE_CANCEL,
+                    MARKETPLACE_PAYABLE_READ,
                     MARKETING_READ,
                     TRASH_VIEW);
 
@@ -200,11 +260,13 @@ public enum Permission {
             case STAFF -> EnumSet.noneOf(Permission.class);
 
             case ACCOUNTANT -> EnumSet.of(
-                    BOOKING_READ, BOOKING_UPDATE,
+                    BOOKING_READ, BOOKING_UPDATE, BOOKING_PROFIT_READ,
                     CUSTOMER_READ,
                     QUOTATION_READ,
                     VENDOR_READ, VENDOR_UPDATE,
-                    FLEET_READ,
+                    // The accountant is the settlement + period-close authority for fleet money
+                    // (the compliance lens: "period close by financial year and month that I control").
+                    FLEET_READ, FLEET_MONEY_READ, FLEET_MONEY_SETTLE, FLEET_PERIOD_CLOSE,
                     TASK_READ, TASK_CREATE, TASK_UPDATE,
                     REPORT_VIEW, MASTER_READ,
                     // Accounting is the accountant's core surface: full invoice + TDS/TCS + tax config.

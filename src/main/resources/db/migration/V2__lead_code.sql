@@ -485,3 +485,2024 @@ ALTER TABLE bookings
 -- booking fails. Nullable, no default: _aud rows are historical snapshots.
 ALTER TABLE bookings_aud
     ADD COLUMN IF NOT EXISTS overseas_tour_package boolean;
+
+
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════
+--   EVERYTHING BELOW THIS LINE WAS BRIEFLY V3__forms_and_fleet.sql AND V4__hotel_marketplace.sql
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════
+--
+-- PROVENANCE. This content was written as PARTS 2 and 6-14 of this file, then split out into a
+-- V3 and a V4 when it became clear that V2 was already stamped in flyway_schema_history and an
+-- in-place edit would fail the next boot on a checksum mismatch. Both of those files were folded
+-- back in here — deliberately, at the owner's call, because V2 has still NOT reached the
+-- deployment database. One file to apply on the pilot instead of three, and the whole schema
+-- delta stays readable as one document.
+--
+-- Neither V3 nor V4 was ever committed to git or applied to any database — flyway_schema_history
+-- held only versions 1 and 2 at the moment of the merge — so nothing anywhere records a checksum
+-- for them and this fold-back cannot invalidate anything. They are gone; do not recreate them.
+--
+-- !! THE COST OF GROWING THIS FILE, AND THE ONLY SAFE WAY TO DO IT !!
+-- The LOCAL flyway_schema_history DOES hold a row for version 2. Every edit to this file therefore
+-- breaks the next local boot with:
+--
+--     Migration checksum mismatch for migration version 2
+--
+-- The fix is a RE-STAMP, not a `flyway repair` (bare repair rewrites the checksum WITHOUT running
+-- the new SQL, and JPA_DDL_AUTO=validate then fails on the missing columns):
+--
+--   1. "/c/Program Files/PostgreSQL/18/bin/psql.exe" -U postgres -d travel_crm -v ON_ERROR_STOP=1 \
+--        -f src/main/resources/db/migration/V2__lead_code.sql
+--      (runs the new statements and surfaces any SQL error with a line number)
+--   2. ... -c "DELETE FROM flyway_schema_history WHERE version = '2';"
+--   3. Boot the app — Flyway re-runs V2 (every statement is idempotent, so all no-ops) and stamps
+--      the correct checksum itself.
+--
+-- The moment this file DOES reach the deployment database, that stops being an option at all and
+-- the next change must be a genuine V3.
+--
+-- ORDERING IS LOAD-BEARING and is preserved by the concatenation order below: the hotel
+-- marketplace (former V4, PARTS 13-14) adds columns to and references tables that the form
+-- alignment (former V3, PART 2) creates or extends.
+--
+-- The internal "PART n" numbering below is this file's original sequence and is kept as-is:
+-- renumbering 1700 lines of commented DDL would gain nothing and lose the cross-references
+-- already written into the surrounding docs and code comments. PARTS 1-5 are above.
+--
+-- Every statement below is idempotent (CREATE TABLE / ADD COLUMN / CREATE INDEX all carry
+-- IF NOT EXISTS; every ADD CONSTRAINT is preceded by a DROP or guarded by a pg_constraint probe),
+-- so re-application against a database that already has this schema is a no-op.
+--
+-- SELF-SUFFICIENT under JPA_DDL_AUTO=validate: Hibernate creates NOTHING, so every column an
+-- entity declares must exist below with the EXACT type, or the application refuses to boot — on
+-- CI and both developer machines, not just the VPS.
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+
+
+
+-- ╔══════════════════════════════════════════════════════════════════════════╗
+-- ║  PART 2 — Lead / Customer / Booking alignment with the rebuilt forms      ║
+-- ╚══════════════════════════════════════════════════════════════════════════╝
+--
+-- WHY: the rebuilt Create Lead / Edit Lead / Create Booking screens collect ~40 fields; the backend
+-- bound about 20. Jackson's FAIL_ON_UNKNOWN_PROPERTIES is disabled, so the rest were accepted with
+-- a 200 and silently discarded — agents typed into fields whose values never existed. This part
+-- adds the columns behind them, plus the existing-customer link that lets a new lead auto-prefill
+-- from a customer already on file.
+--
+-- Folded into V2 rather than shipped as a separate V3 because V2 had not reached the server yet —
+-- one file to run instead of two. Every statement is idempotent, so applying this to a database
+-- that already has some of it is a no-op.
+--
+-- SELF-SUFFICIENT: JPA_DDL_AUTO=validate, so Hibernate creates NOTHING. Every column, table, index
+-- and constraint an entity declares must exist here or the application refuses to boot. Column
+-- types are copied from the generated DDL in V1 — `validate` compares types, and a varchar(255)
+-- where the entity says varchar(150) is exactly what it refuses on.
+
+-- ── 5. leads: the 20 dropped form fields ────────────────────────────────────
+
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS anniversary_date date;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS follow_up_date date;
+
+-- package_type stays free text rather than an enum: the vocabulary is a marketing concern that
+-- changes without a deploy, and a CHECK would turn "we added a package category" into a failed save.
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS preferred_communication varchar(30);
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS package_type varchar(50);
+
+-- Departure / transport. departure_mode is the DISCRIMINATOR deciding which of the three groups
+-- below carries data; the service nulls the other two on every write.
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS departure_mode varchar(20);
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS departure_airport varchar(150);
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS airport_code varchar(10);
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS preferred_flight_time time(6);
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS railway_station varchar(150);
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS train_class varchar(50);
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS preferred_train_time time(6);
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS pickup_address TEXT;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS pickup_date_time timestamp(6);
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS vehicle_preference varchar(150);
+
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS special_assistance_required boolean;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS assistance_passenger_count integer;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS special_assistance_notes TEXT;
+
+-- Gender split of the adults; `adults` stays the total every downstream reader uses.
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS male integer;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS female integer;
+
+-- Chosen assistance types — a join table mirroring lead_services, not a delimited column.
+CREATE TABLE IF NOT EXISTS lead_special_assistance_types (
+    lead_id bigint not null,
+    assistance_type varchar(255)
+);
+
+-- @ElementCollection tables get an FK but never an index from Hibernate, and every read of this is
+-- "all rows for one lead" (EAGER on the entity, so it loads on any lead read).
+CREATE INDEX IF NOT EXISTS idx_lead_assistance_types_lead
+    ON lead_special_assistance_types (lead_id);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_lead_assistance_types_lead') THEN
+        ALTER TABLE lead_special_assistance_types
+            ADD CONSTRAINT fk_lead_assistance_types_lead
+            FOREIGN KEY (lead_id) REFERENCES leads (id) ON DELETE CASCADE;
+    END IF;
+END $$;
+
+-- ── 6. leads: link to an existing customer (the auto-prefill rule) ──────────
+-- Set when a lead is created for a phone/email a customer already has. customer_public_id is
+-- denormalised beside customer_id for the same reason converted_booking_public_id is: the API
+-- returns UUIDs, and resolving one per row at response time is an N+1 over every lead list.
+--
+-- NULL customer_id means "no customer matched", NOT "never checked" — customer_linked_at separates
+-- the two. No FK: the customer can be trashed independently, and a real FK would either block that
+-- or cascade into the lead.
+
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS customer_id bigint;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS customer_public_id uuid;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS customer_linked_at timestamp(6);
+
+CREATE INDEX IF NOT EXISTS idx_leads_customer_id ON leads (customer_id)
+    WHERE customer_id IS NOT NULL;
+
+-- ── 7. lead_itinerary: master ids behind the stored names ──────────────────
+-- The NAMES stay authoritative (they are what the quotation and PDF print, and must not change
+-- under an edited master row). These ids exist so EditLead can re-select its cascading
+-- Destination -> City dropdowns, which reopened blank on every lead. Logical, not FKs: a lead may
+-- name a destination that was never entered in the masters.
+
+ALTER TABLE lead_itinerary ADD COLUMN IF NOT EXISTS destination_id bigint;
+ALTER TABLE lead_itinerary ADD COLUMN IF NOT EXISTS city_id bigint;
+
+-- ── 8. customers: canonical phone shadow key ───────────────────────────────
+-- What makes the existing-customer match RELIABLE rather than format-dependent. customers.phone
+-- holds the raw string a human typed and cannot be rewritten (uq_customers_phone_tenant and every
+-- historical row key off it), but '+919812345678', '9812345678' and '+91 98765 43210' are three
+-- different people to a string comparison. Leads already carry this column for the same reason.
+
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS phone_normalized varchar(20);
+
+-- Backfill conservatively — mirrors PhoneCanonicalizer for the cases SQL can express, and leaves
+-- everything else NULL rather than guessing.
+--
+-- A NULL here is never a match (the matcher skips null canonicals), so an un-backfilled row falls
+-- through to the raw-equality fallback — the behaviour that existed before this column. A WRONG
+-- value would attach a stranger's enquiry to someone else's customer record. That asymmetry is why
+-- this is narrow rather than clever.
+UPDATE customers
+   SET phone_normalized = CASE
+        WHEN trim(phone) LIKE '+%'
+            THEN '+' || regexp_replace(phone, '[^0-9]', '', 'g')
+        WHEN length(regexp_replace(regexp_replace(phone, '[^0-9]', '', 'g'), '^0+', '')) = 10
+            THEN '+91' || regexp_replace(regexp_replace(phone, '[^0-9]', '', 'g'), '^0+', '')
+        WHEN length(regexp_replace(regexp_replace(phone, '[^0-9]', '', 'g'), '^0+', '')) = 12
+             AND regexp_replace(regexp_replace(phone, '[^0-9]', '', 'g'), '^0+', '') LIKE '91%'
+            THEN '+' || regexp_replace(regexp_replace(phone, '[^0-9]', '', 'g'), '^0+', '')
+        ELSE NULL
+   END
+ WHERE phone_normalized IS NULL
+   AND phone IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_customers_phone_normalized
+    ON customers (tenant_id, phone_normalized)
+    WHERE phone_normalized IS NOT NULL AND deleted_at IS NULL;
+
+-- The '...OR the same email' half of the match rule. lower() to match the IgnoreCase finder;
+-- without this the probe the lead form fires while the clerk types is a sequential scan.
+CREATE INDEX IF NOT EXISTS idx_customers_email_lower
+    ON customers (tenant_id, lower(email))
+    WHERE email IS NOT NULL AND deleted_at IS NULL;
+
+-- ── 9. bookings: customer publicId ─────────────────────────────────────────
+-- BookingResponseDTO.customerId used to emit the internal Long, which no endpoint accepts — that is
+-- why the booking detail screen's customer card could never load the profile
+-- (GET /api/customers/{id} takes a UUID).
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS customer_public_id uuid;
+
+-- Booking is @Audited — Envers needs the column on the audit twin or every write to an audited
+-- booking fails. Nullable, no default: _aud rows are historical snapshots.
+-- (booking_trip_snapshot needs no _aud twin: the association is @NotAudited on both sides.)
+ALTER TABLE bookings_aud ADD COLUMN IF NOT EXISTS customer_public_id uuid;
+
+UPDATE bookings b
+   SET customer_public_id = c.public_id
+  FROM customers c
+ WHERE b.customer_id = c.id
+   AND b.customer_public_id IS NULL;
+
+-- ── 10. booking trip snapshot ──────────────────────────────────────────────
+-- Traveller / departure / itinerary detail captured at booking time. Booking stored NONE of this,
+-- so every create silently discarded it — a booking that cannot say how many people are travelling
+-- is not a travel booking.
+--
+-- A separate table rather than columns on `bookings`: ~20 columns only the detail screen reads,
+-- `bookings` is loaded by every list/export/report, and Booking is @Audited — widening it would
+-- widen bookings_aud on every revision of every booking, forever. These tables are NOT audited.
+
+CREATE TABLE IF NOT EXISTS booking_trip_snapshot (
+    id bigint generated by default as identity,
+    created_at timestamp(6) not null,
+    created_by varchar(255),
+    deleted_at timestamp(6),
+    deleted_by varchar(255),
+    public_id uuid not null unique,
+    updated_at timestamp(6) not null,
+    updated_by varchar(255),
+    booking_id bigint not null unique,
+    package_type varchar(50),
+    depart_country varchar(100),
+    depart_city varchar(100),
+    departure_mode varchar(20),
+    departure_airport varchar(150),
+    airport_code varchar(10),
+    preferred_flight_time time(6),
+    railway_station varchar(150),
+    train_class varchar(50),
+    preferred_train_time time(6),
+    pickup_address TEXT,
+    pickup_date_time timestamp(6),
+    vehicle_preference varchar(150),
+    rooms integer,
+    male integer,
+    female integer,
+    total_adults integer,
+    children integer,
+    infants integer,
+    extra_beds integer,
+    special_assistance_required boolean,
+    assistance_passenger_count integer,
+    special_assistance_notes TEXT,
+    notes TEXT,
+    primary key (id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_trip_snapshot_booking ON booking_trip_snapshot (booking_id);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_trip_snapshot_booking') THEN
+        ALTER TABLE booking_trip_snapshot
+            ADD CONSTRAINT fk_trip_snapshot_booking
+            FOREIGN KEY (booking_id) REFERENCES bookings (id) ON DELETE CASCADE;
+    END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS booking_trip_legs (
+    id bigint generated by default as identity,
+    created_at timestamp(6) not null,
+    created_by varchar(255),
+    deleted_at timestamp(6),
+    deleted_by varchar(255),
+    public_id uuid not null unique,
+    updated_at timestamp(6) not null,
+    updated_by varchar(255),
+    trip_snapshot_id bigint not null,
+    destination varchar(100),
+    city varchar(100),
+    nights integer,
+    day_number integer,
+    primary key (id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_trip_leg_snapshot ON booking_trip_legs (trip_snapshot_id);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_trip_leg_snapshot') THEN
+        ALTER TABLE booking_trip_legs
+            ADD CONSTRAINT fk_trip_leg_snapshot
+            FOREIGN KEY (trip_snapshot_id) REFERENCES booking_trip_snapshot (id) ON DELETE CASCADE;
+    END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS booking_trip_assistance_types (
+    trip_snapshot_id bigint not null,
+    assistance_type varchar(255)
+);
+
+CREATE INDEX IF NOT EXISTS idx_trip_assistance_types_snapshot
+    ON booking_trip_assistance_types (trip_snapshot_id);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_trip_assistance_types_snapshot') THEN
+        ALTER TABLE booking_trip_assistance_types
+            ADD CONSTRAINT fk_trip_assistance_types_snapshot
+            FOREIGN KEY (trip_snapshot_id) REFERENCES booking_trip_snapshot (id) ON DELETE CASCADE;
+    END IF;
+END $$;
+
+-- ── 11. LeadType -> the priority vocabulary (Fresh / Hot / Warm / Cold) ────
+-- Supersedes deploy/migrate-lead-types-hot-warm-cold.sql, which does the same work standalone — and
+-- running it standalone BREAKS THE APPLICATION, because it installs the new CHECK while the
+-- deployed code still writes FRESH_LEAD/REPEAT_CUSTOMER/CORPORATE/VIP. Folding it in here is what
+-- makes the enum change, the data rewrite and the constraint one atomic unit.
+--
+-- The business categories are NOT preserved: Repeat Customer, Corporate and VIP collapse into Warm
+-- and Hot and cannot be recovered from `leads` afterwards. They belong on Customer.type, which
+-- already carries INDIVIDUAL / CORPORATE / VIP.
+
+-- ORDER IS LOAD-BEARING: drop, then rewrite, then re-add. The CHECK V1 installed permits only the
+-- OLD vocabulary, so a `SET lead_type = 'FRESH'` issued while it is still in place is rejected with
+-- 23514 and takes the whole migration down with it.
+--
+-- Drop by discovery, not by name: the original constraint was generated by Hibernate and carries a
+-- machine name (leads_lead_type_check on some databases, a hash on others).
+DO $$
+DECLARE
+    c text;
+BEGIN
+    FOR c IN
+        SELECT con.conname
+          FROM pg_constraint con
+          JOIN pg_class rel ON rel.oid = con.conrelid
+          JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+         WHERE nsp.nspname = current_schema()
+           AND rel.relname = 'leads'
+           AND con.contype = 'c'
+           AND pg_get_constraintdef(con.oid) ILIKE '%lead_type%'
+    LOOP
+        EXECUTE format('ALTER TABLE leads DROP CONSTRAINT %I', c);
+    END LOOP;
+END $$;
+
+UPDATE leads SET lead_type = 'FRESH' WHERE lead_type = 'FRESH_LEAD';
+UPDATE leads SET lead_type = 'WARM'  WHERE lead_type = 'REPEAT_CUSTOMER';
+UPDATE leads SET lead_type = 'HOT'   WHERE lead_type IN ('CORPORATE', 'VIP');
+
+-- Added last, so it can only ever see rows the rewrite above has already moved over.
+ALTER TABLE leads ADD CONSTRAINT leads_lead_type_check
+    CHECK (lead_type IN ('FRESH', 'HOT', 'WARM', 'COLD'));
+
+-- ── 12. Enum CHECK constraints for the new columns ─────────────────────────
+-- All deliberately ALLOW NULL (a CHECK passes on NULL) — the columns are optional, and rows created
+-- between the column arriving and this running must not be rejected.
+
+ALTER TABLE leads DROP CONSTRAINT IF EXISTS leads_departure_mode_check;
+ALTER TABLE leads ADD CONSTRAINT leads_departure_mode_check
+    CHECK (departure_mode IN ('FLIGHT','TRAIN','CAR','BUS','OTHER'));
+
+-- Same vocabulary as customers.comm_pref — the lead's value is copied straight onto the customer at
+-- conversion, so if these two ever diverge the copy fails at the DB with no clue why.
+ALTER TABLE leads DROP CONSTRAINT IF EXISTS leads_preferred_communication_check;
+ALTER TABLE leads ADD CONSTRAINT leads_preferred_communication_check
+    CHECK (preferred_communication IN ('WHATSAPP','SMS','EMAIL','PHONE_CALL','ALL_CHANNELS'));
+
+ALTER TABLE booking_trip_snapshot DROP CONSTRAINT IF EXISTS booking_trip_snapshot_departure_mode_check;
+ALTER TABLE booking_trip_snapshot ADD CONSTRAINT booking_trip_snapshot_departure_mode_check
+    CHECK (departure_mode IN ('FLIGHT','TRAIN','CAR','BUS','OTHER'));
+
+
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════
+-- PARTS 6-8 — Fleet redesign: platform prerequisites, trip legs, the money ledger, allowance policy
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════
+--
+-- APPENDED TO V2 DELIBERATELY, AND THIS NOW COSTS SOMETHING. Read before adding a PART 9.
+--
+-- The original rationale for growing V2 in place was that it had never been stamped anywhere, so no
+-- checksum could be invalidated. That is only half true now: V2 has still NOT reached production —
+-- which is the owner's reason for keeping fleet DDL here rather than opening a V3 — but as of
+-- 2 Aug 2026 Flyway boots and the LOCAL flyway_schema_history holds V1 and V2. So every edit to this
+-- file breaks the next local boot with:
+--
+--     Migration checksum mismatch for migration version 2
+--
+-- The fix is a re-stamp, not a repair (bare `repair` rewrites the checksum WITHOUT running the new
+-- SQL, and ddl-auto=validate then fails on the missing columns):
+--
+--   1. "/c/Program Files/PostgreSQL/18/bin/psql.exe" -U postgres -d travel_crm -v ON_ERROR_STOP=1 \
+--        -f src/main/resources/db/migration/V2__lead_code.sql
+--      (runs the new statements and surfaces any SQL error with a line number)
+--   2. ... -c "DELETE FROM flyway_schema_history WHERE version = '2';"
+--   3. Boot the app — Flyway re-runs V2 (every statement is idempotent, so all no-ops) and stamps
+--      the correct checksum itself.
+--
+-- The moment V2 DOES reach the deployment database, this stops being an option at all and the next
+-- change must be a genuine V3.
+--
+-- SELF-SUFFICIENT under JPA_DDL_AUTO=validate: Hibernate creates NOTHING, so every column an entity
+-- declares must exist below with the EXACT type, or the application refuses to boot — on CI and both
+-- developer machines, not just the VPS.
+--
+-- CONTENTS
+--   PART 6 — tenants.timezone + the FLEET_MONEY_READ permission backfill   (platform prerequisites)
+--   PART 7 — fleet_trip_legs, fleet_expenses, fleet_cash_entries,
+--            fleet_trip_settlements, fleet_period_closes + trip fx columns (the ledger)
+--   PART 8 — fleet_allowance_policies                                     (bata / night halt)
+--
+-- ORDER MATTERS: PART 6's permission backfill mirrors Permission.defaultsFor() exactly, and
+-- FleetMoneyPermissionDefaultsTest fails the build if the two grant paths ever drift apart.
+
+-- ╔══════════════════════════════════════════════════════════════════════════╗
+-- ║  PART 6 — Fleet redesign, Phase 0                                        ║
+-- ╚══════════════════════════════════════════════════════════════════════════╝
+--
+-- The two platform changes that MUST land BEFORE any fleet money exists:
+--   1. tenants.timezone           (IST +5:30 vs NPT +5:45)
+--   2. FLEET_MONEY_READ backfill  (or every user with a saved custom permission map silently
+--                                  loses the new fleet money screens on deploy day)
+--
+-- See docs/FLEET_MODULE_REDESIGN.md §4.11 and §2 defect 8.
+--
+--
+-- SELF-SUFFICIENT: JPA_DDL_AUTO=validate, so Hibernate creates NOTHING and the application will
+-- REFUSE TO BOOT until the column below exists — on CI and both developer machines, not just the
+-- VPS. Column type copied from @Column(name = "timezone", nullable = false, length = 60) on Tenant;
+-- `validate` compares types, and a varchar(255) where the entity says varchar(60) is exactly what
+-- it refuses on.
+
+
+-- ── 13. tenants.timezone ────────────────────────────────────────────────────
+-- WHY NOW, before the fleet ledger rather than after: every date boundary in the app resolves
+-- through ZoneId.systemDefault() — the SERVER's zone, not the customer's. That is harmless while
+-- the product only stores dates a user typed, and becomes a correctness bug the moment money
+-- carries a document date. The fleet ledger is India + Nepal work: a Bhansar receipt paid at
+-- 23:50 NPT lands on the previous day in every IST report, and a self-hosted VPS on a different TZ
+-- produces different numbers from the SaaS for byte-identical data. Adding a tenant zone AFTER
+-- financial rows exist is a backfill with no correct answer — you cannot recover which local day a
+-- stored instant belonged to.
+--
+-- Backfilled to Asia/Kolkata rather than the server zone deliberately: every existing tenant is an
+-- Indian operator, and inheriting the VPS zone would bake a deployment detail into the accounting
+-- date of every future row.
+
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS timezone varchar(60);
+
+UPDATE tenants SET timezone = 'Asia/Kolkata' WHERE timezone IS NULL OR timezone = '';
+
+ALTER TABLE tenants ALTER COLUMN timezone SET DEFAULT 'Asia/Kolkata';
+ALTER TABLE tenants ALTER COLUMN timezone SET NOT NULL;
+
+
+-- ── 14. FLEET_MONEY_READ backfill ───────────────────────────────────────────
+-- user_permissions.permissions_json is TEXT holding a JSON OBJECT keyed by permission name:
+--     {"FLEET_READ": {"access": true, "scope": "own"}, ...}
+-- (PermissionService.serialize / PermissionEntry{access, scope}).
+--
+-- EffectivePermissionResolver prefers a saved map over role defaults, so adding a constant to the
+-- Permission enum does NOT reach a user whose permissions have ever been customised — they just see
+-- an empty screen, with no error and no log line. docs/FLEET_MODULE.md:86-88 already documents this
+-- trap; the standalone plan proposed TEN new keys and no backfill at all.
+--
+-- THIS BACKFILL MIRRORS Permission.defaultsFor() EXACTLY, AND MUST CONTINUE TO.
+-- There are two grant paths — role defaults for a user with no saved map, this backfill for a user
+-- with one — and if they disagree, two MANAGERs in the same tenant hold different money authority
+-- depending on whether anyone ever clicked Save on their permission screen. So:
+--
+--   MANAGER     + FLEET_READ  ->  FLEET_MONEY_READ
+--   ACCOUNTANT  + FLEET_READ  ->  FLEET_MONEY_READ, FLEET_MONEY_SETTLE, FLEET_PERIOD_CLOSE
+--   everyone else             ->  nothing
+--
+-- TRAVEL_AGENT gets NOTHING even though it holds FLEET_READ: it is a sales role, and tenant-wide
+-- driver cash positions and cost structure are not its business. TENANT_ADMIN is not touched — the
+-- resolver bypasses saved maps for that role entirely, so the owner can settle from day one.
+-- FLEET_MONEY_SETTLE reaches only ACCOUNTANT, the role whose job it literally is; anyone else is
+-- granted it deliberately in Settings -> Users -> Permissions.
+--
+-- PermissionDefaultsTest pins this correspondence so a future edit to one path fails the build.
+--
+-- The scope is inherited from FLEET_READ so a row-scoped user does not silently widen to tenant-wide.
+--
+-- SAFE CAST. A `WHERE left(btrim(x),1) = '{'` guard does NOT protect the ::jsonb cast: PostgreSQL
+-- does not guarantee WHERE-subexpression evaluation order, and '{"A": {"access": tru' passes that
+-- test and still fails the cast. One truncated row would abort PART 6 under ON_ERROR_STOP — leaving
+-- tenants.timezone committed above and the backfill silently unapplied, which is precisely the
+-- failure this section exists to prevent. So the cast goes behind a real exception handler.
+
+CREATE OR REPLACE FUNCTION fleet_safe_jsonb(txt text) RETURNS jsonb AS $$
+BEGIN
+    RETURN txt::jsonb;
+EXCEPTION WHEN others THEN
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+-- Visibility: any row this reports is one a human must repair by hand. Expected 0.
+--   SELECT count(*) AS unparseable_permission_maps FROM user_permissions
+--   WHERE deleted_at IS NULL AND coalesce(permissions_json,'') <> ''
+--     AND fleet_safe_jsonb(permissions_json) IS NULL;
+
+UPDATE user_permissions up
+SET    permissions_json = (
+           fleet_safe_jsonb(up.permissions_json)
+           || jsonb_build_object('FLEET_MONEY_READ', jsonb_build_object(
+                  'access', true,
+                  'scope',  COALESCE(fleet_safe_jsonb(up.permissions_json) #>> '{FLEET_READ,scope}', 'own')))
+           || CASE WHEN u.role = 'ACCOUNTANT' THEN jsonb_build_object(
+                  'FLEET_MONEY_SETTLE', jsonb_build_object('access', true, 'scope', 'all'),
+                  'FLEET_PERIOD_CLOSE', jsonb_build_object('access', true, 'scope', 'all'))
+              ELSE '{}'::jsonb END
+       )::text
+FROM   users u
+WHERE  u.id = up.user_id
+  AND  up.deleted_at IS NULL
+  AND  u.role IN ('MANAGER', 'ACCOUNTANT')
+  AND  jsonb_typeof(fleet_safe_jsonb(up.permissions_json)) = 'object'
+  AND  (fleet_safe_jsonb(up.permissions_json) #>> '{FLEET_READ,access}') = 'true'
+  AND  NOT (fleet_safe_jsonb(up.permissions_json) ? 'FLEET_MONEY_READ');
+
+
+-- ── 15. BOOKING_PROFIT_READ backfill ────────────────────────────────────────
+-- Booking detail separates customer-facing booking access from supplier cost and margin.
+-- Existing saved maps override role defaults, so mirror Permission.defaultsFor() for users whose
+-- maps were customised before this permission existed. Tenant admins use the resolver bypass.
+
+UPDATE user_permissions up
+SET    permissions_json = (
+           fleet_safe_jsonb(up.permissions_json)
+           || jsonb_build_object('BOOKING_PROFIT_READ', jsonb_build_object(
+                  'access', true,
+                  'scope',  COALESCE(
+                      fleet_safe_jsonb(up.permissions_json) #>> '{BOOKING_READ,scope}',
+                      'all')))
+       )::text
+FROM   users u
+WHERE  u.id = up.user_id
+  AND  up.deleted_at IS NULL
+  AND  u.role IN ('MANAGER', 'ACCOUNTANT')
+  AND  jsonb_typeof(fleet_safe_jsonb(up.permissions_json)) = 'object'
+  AND  (fleet_safe_jsonb(up.permissions_json) #>> '{BOOKING_READ,access}') = 'true'
+  AND  NOT (fleet_safe_jsonb(up.permissions_json) ? 'BOOKING_PROFIT_READ');
+
+
+-- ── Verification (run by hand; all counts must be 0) ────────────────────────
+--   SELECT count(*) AS tenants_without_zone FROM tenants WHERE timezone IS NULL;
+--
+--   SELECT count(*) AS unparseable FROM user_permissions
+--   WHERE deleted_at IS NULL AND coalesce(permissions_json,'') <> ''
+--     AND fleet_safe_jsonb(permissions_json) IS NULL;
+--
+--   SELECT count(*) AS manager_read_missing FROM user_permissions up JOIN users u ON u.id = up.user_id
+--   WHERE up.deleted_at IS NULL AND u.role IN ('MANAGER','ACCOUNTANT')
+--     AND (fleet_safe_jsonb(up.permissions_json) #>> '{FLEET_READ,access}') = 'true'
+--     AND NOT (fleet_safe_jsonb(up.permissions_json) ? 'FLEET_MONEY_READ');
+--
+--   SELECT count(*) AS settle_leaked FROM user_permissions up JOIN users u ON u.id = up.user_id
+--   WHERE up.deleted_at IS NULL AND u.role NOT IN ('ACCOUNTANT','TENANT_ADMIN')
+--     AND (fleet_safe_jsonb(up.permissions_json) #>> '{FLEET_MONEY_SETTLE,access}') = 'true';
+--
+--   SELECT count(*) AS booking_profit_missing FROM user_permissions up JOIN users u ON u.id = up.user_id
+--   WHERE up.deleted_at IS NULL AND u.role IN ('MANAGER','ACCOUNTANT')
+--     AND (fleet_safe_jsonb(up.permissions_json) #>> '{BOOKING_READ,access}') = 'true'
+--     AND NOT (fleet_safe_jsonb(up.permissions_json) ? 'BOOKING_PROFIT_READ');
+--
+-- Cross-border operators are switched by hand afterwards, e.g.
+--   UPDATE tenants SET timezone = 'Asia/Kathmandu' WHERE organization_code = '<code>';
+-- TenantTimeZone caches this per tenant on a 30-second TTL, so a direct SQL edit takes effect
+-- within half a minute — no restart needed.
+
+
+-- ╔══════════════════════════════════════════════════════════════════════════╗
+-- ║  PART 7 — Fleet redesign, Phase 2: legs + the money ledger               ║
+-- ╚══════════════════════════════════════════════════════════════════════════╝
+--
+-- Five tables and two columns. Every statement is idempotent.
+--
+-- SELF-SUFFICIENT under JPA_DDL_AUTO=validate: Hibernate creates NOTHING, so every column an entity
+-- declares must exist here with the EXACT type, or the application refuses to boot on CI and both
+-- developer machines as well as the VPS. Types below are copied from the @Column annotations:
+-- money is numeric(14,2) — NOT the legacy numeric(12,2) on fleet_trips, which is deliberate and the
+-- reason those legacy columns are left alone rather than widened — and fx rates are numeric(18,8).
+
+
+-- ── 15. fleet_trips: the trip-level exchange rate ───────────────────────────
+-- The office sets ONE rate per trip; every foreign-currency cost row inherits it AT WRITE TIME.
+-- This is what lets a driver at the Sunauli border type a Bhansar receipt in NPR and never see,
+-- know or influence a conversion — and why no client ever sends fxRate. Freezing the rate onto each
+-- row as it is written also means editing this later cannot restate costs already reported.
+
+ALTER TABLE fleet_trips ADD COLUMN IF NOT EXISTS fx_currency varchar(3);
+ALTER TABLE fleet_trips ADD COLUMN IF NOT EXISTS fx_rate     numeric(18,8);
+
+
+-- ── 16. fleet_trip_legs ────────────────────────────────────────────────────
+-- One vehicle+driver span. A trip is a sequence of legs, so a breakdown 200 km into a Nepal run no
+-- longer forces a choice between corrupting the trip and destroying its odometer chain.
+
+CREATE TABLE IF NOT EXISTS fleet_trip_legs (
+    id bigint generated by default as identity,
+    created_at timestamp(6) not null, created_by varchar(255),
+    deleted_at timestamp(6), deleted_by varchar(255),
+    public_id uuid not null unique,
+    updated_at timestamp(6) not null, updated_by varchar(255),
+    tenant_id bigint not null,
+    trip_id bigint not null,
+    seq integer not null,
+    vehicle_id bigint not null,
+    driver_id bigint not null,
+    start_datetime timestamp(6) not null,
+    end_datetime timestamp(6),
+    start_odometer integer,
+    end_odometer integer,
+    distance_km integer,
+    change_reason varchar(20) check (change_reason in
+        ('BREAKDOWN','DRIVER_HANDOVER','REST_RULE','OWNER_DECISION','CUSTOMER_REQUEST')),
+    notes TEXT,
+    primary key (id),
+    constraint fk_fleet_leg_trip    foreign key (trip_id)    references fleet_trips(id),
+    constraint fk_fleet_leg_vehicle foreign key (vehicle_id) references fleet_vehicles(id),
+    constraint fk_fleet_leg_driver  foreign key (driver_id)  references fleet_drivers(id),
+    constraint ck_fleet_leg_odo check (end_odometer is null or start_odometer is null
+                                       or end_odometer >= start_odometer)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fleet_leg_seq ON fleet_trip_legs (trip_id, seq)
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_fleet_leg_tenant ON fleet_trip_legs (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_fleet_leg_trip   ON fleet_trip_legs (trip_id, seq);
+CREATE INDEX IF NOT EXISTS idx_fleet_leg_vehicle_window ON fleet_trip_legs (tenant_id, vehicle_id, start_datetime);
+CREATE INDEX IF NOT EXISTS idx_fleet_leg_driver_window  ON fleet_trip_legs (tenant_id, driver_id, start_datetime);
+
+-- Backfill: every existing trip becomes exactly one leg carrying its own vehicle, driver, times and
+-- odometers, so nothing about an existing trip changes shape. Idempotent via the NOT EXISTS guard.
+INSERT INTO fleet_trip_legs (
+    created_at, created_by, public_id, updated_at, tenant_id, trip_id, seq,
+    vehicle_id, driver_id, start_datetime, end_datetime, start_odometer, end_odometer, distance_km)
+SELECT now(), 'migration:V2-PART7', gen_random_uuid(), now(), t.tenant_id, t.id, 1,
+       t.vehicle_id, t.driver_id, t.start_datetime, t.end_datetime,
+       t.start_odometer, t.end_odometer, t.distance_km
+FROM   fleet_trips t
+WHERE  t.deleted_at IS NULL
+  AND  NOT EXISTS (SELECT 1 FROM fleet_trip_legs l WHERE l.trip_id = t.id);
+
+
+-- ── 17. fleet_expenses ─────────────────────────────────────────────────────
+-- TWO DATES, and they are not interchangeable. document_date is what the receipt says and is the
+-- attribution key (which trip, which vehicle, which driver) — never overwritten. posting_date is
+-- which accounting period the money lands in. They differ exactly when they must: a Rs 50,000 error
+-- found in June against a March receipt is reversed carrying the ORIGINAL March document date, so
+-- the vehicle cost is genuinely corrected, and TODAY's posting date, so a closed and filed period
+-- does not silently move. One column cannot express that, and it is the case that matters most.
+
+CREATE TABLE IF NOT EXISTS fleet_expenses (
+    id bigint generated by default as identity,
+    created_at timestamp(6) not null, created_by varchar(255),
+    deleted_at timestamp(6), deleted_by varchar(255),
+    public_id uuid not null unique,
+    updated_at timestamp(6) not null, updated_by varchar(255),
+    tenant_id bigint not null,
+    vehicle_id bigint not null,
+    trip_id bigint,
+    leg_id bigint,
+    driver_id bigint,
+    expense_type varchar(24) not null check (expense_type in
+        ('TOLL','PARKING','FUEL','MAINTENANCE','TYRE','BHANSAR_NEPAL','PERMIT_NP','BORDER_AGENT_FEE',
+         'PERMIT_IN','ROAD_TAX_IN','CHALLAN','DRIVER_BATA','NIGHT_HALT','OTHER')),
+    document_date date not null,
+    document_time time(6),
+    posting_date date not null,
+    entered_at timestamp(6) not null,
+    entered_by varchar(150),
+    amount numeric(14,2) not null,
+    currency varchar(3) not null,
+    fx_rate numeric(18,8) not null,
+    base_amount numeric(14,2) not null,
+    paid_by varchar(16) not null check (paid_by in ('OFFICE_DIRECT','DRIVER_CASH','VENDOR_CREDIT')),
+    has_receipt boolean not null,
+    no_receipt_reason varchar(200),
+    reference_number varchar(60),
+    supplier_gstin varchar(15),
+    taxable_value numeric(14,2),
+    gst_rate numeric(5,2),
+    gst_amount numeric(14,2),
+    itc_eligible boolean not null,
+    tax_character varchar(20) not null check (tax_character in ('ALLOWABLE','DISALLOWABLE_37_1','CAPITAL')),
+    reversal_of_id bigint,
+    reversal_reason varchar(300),
+    description varchar(300),
+    notes TEXT,
+    row_version bigint,
+    primary key (id),
+    constraint fk_fleet_exp_vehicle  foreign key (vehicle_id)     references fleet_vehicles(id),
+    constraint fk_fleet_exp_trip     foreign key (trip_id)        references fleet_trips(id),
+    constraint fk_fleet_exp_leg      foreign key (leg_id)         references fleet_trip_legs(id),
+    constraint fk_fleet_exp_driver   foreign key (driver_id)      references fleet_drivers(id),
+    constraint fk_fleet_exp_reversal foreign key (reversal_of_id) references fleet_expenses(id),
+    constraint ck_fleet_exp_amount check (amount > 0),
+    constraint ck_fleet_exp_driver_cash check (paid_by <> 'DRIVER_CASH' OR driver_id IS NOT NULL),
+    constraint ck_fleet_exp_receipt check (has_receipt OR no_receipt_reason IS NOT NULL)
+);
+
+-- A row may be reversed AT MOST ONCE. Without this a double-clicked Reverse inserts two opposing
+-- rows and the vehicle monthly fuel total goes negative.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fleet_exp_reversal ON fleet_expenses (reversal_of_id)
+    WHERE reversal_of_id IS NOT NULL AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_fleet_exp_tenant_date  ON fleet_expenses (tenant_id, document_date);
+CREATE INDEX IF NOT EXISTS idx_fleet_exp_vehicle_date ON fleet_expenses (tenant_id, vehicle_id, document_date);
+CREATE INDEX IF NOT EXISTS idx_fleet_exp_trip         ON fleet_expenses (tenant_id, trip_id);
+CREATE INDEX IF NOT EXISTS idx_fleet_exp_driver       ON fleet_expenses (tenant_id, driver_id);
+CREATE INDEX IF NOT EXISTS idx_fleet_exp_type         ON fleet_expenses (tenant_id, expense_type);
+CREATE INDEX IF NOT EXISTS idx_fleet_exp_posting      ON fleet_expenses (tenant_id, posting_date);
+
+
+-- ── 18. fleet_cash_entries ─────────────────────────────────────────────────
+-- The driver imprest account: peshgi out, spends against it, cash back, signed hisaab. The single
+-- thing every practitioner named first, and the one the superseded plan had no concept of at all —
+-- it framed driver money as reimbursement, which inverts the reality: the office hands over
+-- Rs 8,000 before departure, so at the end the driver is being SETTLED, not reimbursed.
+--
+-- Amounts are ALWAYS positive; direction carries the sign. Allowing a signed amount mints money — a
+-- CASH_RETURN of -1800 would ADD 1800 to what the driver owes rather than discharging it, a Rs 3,600
+-- swing from one keystroke with nothing between the phone and the balance. Write-offs use
+-- ADJUSTMENT_CREDIT, which is why that constant exists as its own direction.
+
+CREATE TABLE IF NOT EXISTS fleet_cash_entries (
+    id bigint generated by default as identity,
+    created_at timestamp(6) not null, created_by varchar(255),
+    deleted_at timestamp(6), deleted_by varchar(255),
+    public_id uuid not null unique,
+    updated_at timestamp(6) not null, updated_by varchar(255),
+    tenant_id bigint not null,
+    driver_id bigint not null,
+    trip_id bigint,
+    direction varchar(24) not null check (direction in
+        ('ADVANCE_OUT','CASH_RETURN','CUSTOMER_COLLECTION','COLLECTION_DEPOSIT','RECOVERY',
+         'ADJUSTMENT_DEBIT','ADJUSTMENT_CREDIT')),
+    amount numeric(14,2) not null,
+    currency varchar(3) not null,
+    fx_rate numeric(18,8) not null,
+    base_amount numeric(14,2) not null,
+    entry_date date not null,
+    posting_date date not null,
+    reason varchar(300),
+    reference_number varchar(60),
+    party_reference varchar(120),
+    reversal_of_id bigint,
+    notes TEXT,
+    row_version bigint,
+    primary key (id),
+    constraint fk_fleet_cash_driver   foreign key (driver_id)      references fleet_drivers(id),
+    constraint fk_fleet_cash_trip     foreign key (trip_id)        references fleet_trips(id),
+    constraint fk_fleet_cash_reversal foreign key (reversal_of_id) references fleet_cash_entries(id),
+    constraint ck_fleet_cash_amount check (amount > 0),
+    constraint ck_fleet_cash_reason check (
+        direction NOT IN ('RECOVERY','ADJUSTMENT_DEBIT','ADJUSTMENT_CREDIT') OR reason IS NOT NULL)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fleet_cash_reversal ON fleet_cash_entries (reversal_of_id)
+    WHERE reversal_of_id IS NOT NULL AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_fleet_cash_tenant_date ON fleet_cash_entries (tenant_id, entry_date);
+CREATE INDEX IF NOT EXISTS idx_fleet_cash_driver      ON fleet_cash_entries (tenant_id, driver_id, entry_date);
+CREATE INDEX IF NOT EXISTS idx_fleet_cash_trip        ON fleet_cash_entries (tenant_id, trip_id);
+CREATE INDEX IF NOT EXISTS idx_fleet_cash_posting     ON fleet_cash_entries (tenant_id, posting_date);
+
+
+-- ── 19. fleet_trip_settlements ─────────────────────────────────────────────
+-- Keyed on (trip, driver), NOT on trip alone. A trip is multi-driver once legs exist, and a single
+-- scalar row nets two men into a number that is right for neither: on a six-day trip handed over on
+-- day three (advances 8,000 and 5,000; driver-cash spend 3,000 and 6,000; bata 1,200 each) a
+-- trip-level row computes +1,600 and can be signed once, while the truth is that A owes 3,800 and B
+-- is owed 2,200 — and A's signature releases B.
+
+CREATE TABLE IF NOT EXISTS fleet_trip_settlements (
+    id bigint generated by default as identity,
+    created_at timestamp(6) not null, created_by varchar(255),
+    deleted_at timestamp(6), deleted_by varchar(255),
+    public_id uuid not null unique,
+    updated_at timestamp(6) not null, updated_by varchar(255),
+    tenant_id bigint not null,
+    trip_id bigint not null,
+    driver_id bigint not null,
+    status varchar(12) not null check (status in ('OPEN','RECONCILED','SETTLED','LOCKED')),
+    advance_total     numeric(14,2) not null,
+    collected_total   numeric(14,2) not null,
+    returned_total    numeric(14,2) not null,
+    deposited_total   numeric(14,2) not null,
+    adjustment_total  numeric(14,2) not null,
+    driver_cash_spend numeric(14,2) not null,
+    allowance_total   numeric(14,2) not null,
+    net_due_from_driver numeric(14,2) not null,
+    settled_at timestamp(6),
+    settled_by varchar(150),
+    driver_acknowledged_at timestamp(6),
+    has_post_settlement_movement boolean not null,
+    notes TEXT,
+    row_version bigint,
+    primary key (id),
+    constraint fk_fleet_settle_trip   foreign key (trip_id)   references fleet_trips(id),
+    constraint fk_fleet_settle_driver foreign key (driver_id) references fleet_drivers(id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fleet_settle_trip_driver
+    ON fleet_trip_settlements (trip_id, driver_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_fleet_settle_tenant ON fleet_trip_settlements (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_fleet_settle_trip   ON fleet_trip_settlements (tenant_id, trip_id);
+CREATE INDEX IF NOT EXISTS idx_fleet_settle_driver_status
+    ON fleet_trip_settlements (tenant_id, driver_id, status);
+
+
+-- ── 20. fleet_period_closes ────────────────────────────────────────────────
+-- The lock is keyed on the PERIOD, not on a trip. A settlement status is a property of one trip row:
+-- on 15 April, after the March close, a brand-new trip dated 28 March gets a brand-new OPEN
+-- settlement and Rs 40,000 of March-dated cost posts freely into a filed period. And an expense with
+-- no trip at all — insurance, road tax, an off-duty challan, typically the largest non-fuel rows in
+-- the book — has no settlement row to consult in the first place.
+--
+-- Closed by financial year and month, by a human holding FLEET_PERIOD_CLOSE. Deliberately NOT a
+-- rolling day-count timer: challans and pump bills routinely arrive 30-60 days late, so a 7-day
+-- cut-off does not protect the books, it just means those costs are never recorded at all.
+
+CREATE TABLE IF NOT EXISTS fleet_period_closes (
+    id bigint generated by default as identity,
+    created_at timestamp(6) not null, created_by varchar(255),
+    deleted_at timestamp(6), deleted_by varchar(255),
+    public_id uuid not null unique,
+    updated_at timestamp(6) not null, updated_by varchar(255),
+    tenant_id bigint not null,
+    financial_year integer not null,
+    period_month integer not null check (period_month between 1 and 12),
+    closed_at timestamp(6) not null,
+    closed_by varchar(150),
+    reopened_at timestamp(6),
+    reopened_by varchar(150),
+    reopen_reason varchar(300),
+    notes TEXT,
+    primary key (id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fleet_period
+    ON fleet_period_closes (tenant_id, financial_year, period_month) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_fleet_period_tenant
+    ON fleet_period_closes (tenant_id, financial_year, period_month);
+
+
+-- ── Verification (run by hand; all counts must be 0) ────────────────────────
+--   SELECT count(*) AS trips_without_leg FROM fleet_trips t
+--   WHERE t.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM fleet_trip_legs l WHERE l.trip_id = t.id);
+--
+--   -- Backfilled legs must reproduce each trip's own distance exactly.
+--   SELECT count(*) AS leg_distance_mismatch FROM fleet_trips t JOIN fleet_trip_legs l ON l.trip_id = t.id
+--   WHERE t.deleted_at IS NULL AND coalesce(t.distance_km,-1) <> coalesce(l.distance_km,-1);
+--
+--   -- Every stored base amount must be reproducible from its own amount and rate.
+--   SELECT count(*) AS bad_base FROM fleet_expenses
+--   WHERE deleted_at IS NULL AND round(amount * fx_rate, 2) <> abs(base_amount);
+
+
+-- ╔══════════════════════════════════════════════════════════════════════════╗
+-- ║  PART 8 — Fleet: driver allowance policy                                 ║
+-- ╚══════════════════════════════════════════════════════════════════════════╝
+--
+-- Bata (daily allowance) and night halt, computed from a written rule rather than typed by whoever
+-- is filling the settlement in. Both the owner and the field supervisor asked for exactly this:
+-- "bata is calculated by a written rule, shown to the driver, and any deduction carries a visible
+-- reason". A bata figure a driver types is a negotiation; one the system derives from days out is a
+-- payslip — and it removes the most common settlement argument there is.
+--
+-- EFFECTIVE-DATED, NEVER EDITED IN PLACE. Raising the rate in October must not restate what a driver
+-- was owed for a June trip that was already settled and signed. A rate change is a NEW row with a
+-- later effective_from; the settlement picks the row in force on the TRIP's start date. Editing the
+-- existing row would silently change history — the same defect as a status-flip void.
+--
+-- vehicle_class matches fleet_vehicles.type ("Tempo Traveller", "Bus"), because a bus driver and a
+-- Dzire driver are not on the same rate. A row with NULL class is the tenant default, used when
+-- nothing more specific matches.
+
+CREATE TABLE IF NOT EXISTS fleet_allowance_policies (
+    id bigint generated by default as identity,
+    created_at timestamp(6) not null, created_by varchar(255),
+    deleted_at timestamp(6), deleted_by varchar(255),
+    public_id uuid not null unique,
+    updated_at timestamp(6) not null, updated_by varchar(255),
+    tenant_id bigint not null,
+    vehicle_class varchar(60),
+    effective_from date not null,
+    bata_per_day numeric(14,2) not null,
+    night_halt_per_day numeric(14,2) not null,
+    count_partial_days_as_full boolean not null,
+    notes TEXT,
+    primary key (id),
+    constraint ck_fleet_allow_rates check (bata_per_day >= 0 AND night_halt_per_day >= 0)
+);
+
+-- One rate per class per effective date. A second row for the same day is an edit pretending to be
+-- a new version, and it would make "which rate applied" ambiguous for every trip on that date.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fleet_allow_class_date
+    ON fleet_allowance_policies (tenant_id, coalesce(vehicle_class, ''), effective_from)
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_fleet_allow_tenant
+    ON fleet_allowance_policies (tenant_id, effective_from);
+
+
+-- ── Verification ────────────────────────────────────────────────────────────
+-- No policy is seeded deliberately: an invented bata rate would quietly become what drivers are
+-- paid. With no policy configured the settlement computes an allowance of ZERO, which is visible
+-- and obviously wrong, rather than plausible and wrong. Set the real rates per tenant, e.g.
+--
+--   INSERT INTO fleet_allowance_policies
+--     (created_at, created_by, public_id, updated_at, tenant_id, vehicle_class, effective_from,
+--      bata_per_day, night_halt_per_day, count_partial_days_as_full)
+--   VALUES (now(), 'setup', gen_random_uuid(), now(), :tid, NULL, DATE '2026-04-01',
+--           400.00, 300.00, true);
+--
+--   SELECT vehicle_class, effective_from, bata_per_day, night_halt_per_day
+--   FROM fleet_allowance_policies WHERE tenant_id = :tid ORDER BY effective_from DESC;
+
+
+-- ╔══════════════════════════════════════════════════════════════════════════╗
+-- ║  PART 9 — Fleet: compliance documents with renewal history               ║
+-- ╚══════════════════════════════════════════════════════════════════════════╝
+--
+-- Replaces four date columns on fleet_vehicles (insurance / rc / permit / puc) and one on
+-- fleet_drivers (licence) with a normalised document table.
+--
+-- WHY. One column per document type can hold exactly one value each, which means:
+--   • renewing OVERWRITES — the certificate that was valid last March becomes unreconstructable,
+--     along with its number, its issuing authority and what it cost;
+--   • a vehicle cannot carry both a national AND a state permit;
+--   • there is nowhere at all for the papers an operator is actually stopped for — fitness, the
+--     Uttarakhand Green Card, VLTD/panic button, speed governor — or, on the driver side, the
+--     transport endorsement, PSV badge and medical that a licence expiry does not cover.
+-- "What was valid on this past date" is a scrutiny question, and it is free once validity is an
+-- interval instead of a column.
+--
+-- The legacy columns are NOT dropped here. They stay as a read-only fallback for one release while
+-- the backfill is reconciled; a later migration retires them once the document table is the
+-- unambiguous source of truth.
+
+CREATE TABLE IF NOT EXISTS fleet_compliance_documents (
+    id bigint generated by default as identity,
+    created_at timestamp(6) not null, created_by varchar(255),
+    deleted_at timestamp(6), deleted_by varchar(255),
+    public_id uuid not null unique,
+    updated_at timestamp(6) not null, updated_by varchar(255),
+    tenant_id bigint not null,
+    owner_type varchar(10) not null check (owner_type in ('VEHICLE','DRIVER')),
+    vehicle_id bigint,
+    driver_id bigint,
+    category varchar(32) not null check (category in (
+        'INSURANCE','REGISTRATION_CERTIFICATE','FITNESS_CERTIFICATE','PUC',
+        'NATIONAL_PERMIT_INDIA','STATE_PERMIT_INDIA','ROAD_TAX_INDIA','GREEN_TAX_INDIA',
+        'UTTARAKHAND_GREEN_CARD','UTTARAKHAND_TRIP_CARD',
+        'VLTD_PANIC_BUTTON','SPEED_GOVERNOR',
+        'PERMIT_NEPAL','BHANSAR_NEPAL',
+        'DRIVING_LICENCE','TRANSPORT_ENDORSEMENT','PSV_BADGE','MEDICAL_CERTIFICATE','OTHER')),
+    document_number varchar(60),
+    issuing_authority varchar(150),
+    country_code varchar(2),
+    state_code varchar(40),
+    border_post varchar(80),
+    issued_on date,
+    valid_from date,
+    valid_until date,
+    -- Nepal entry: the date the vehicle must be back across the border. Deliberately separate from
+    -- validity — the paper can be valid for a month while the stay is capped at seven days, and
+    -- overstaying is a fine at the border rather than an invalid document.
+    exit_deadline date,
+    status varchar(12) not null check (status in ('ACTIVE','EXPIRING','EXPIRED','SUPERSEDED','REVOKED')),
+    -- Null = use the category default. A dispatcher wants compliance to warn and never block; an
+    -- accountant wants an expired PSV badge to refuse the assignment. Both are right about different
+    -- papers, so the paper decides and this allows the exception.
+    blocking boolean,
+    supersedes_id bigint,
+    expense_id bigint,
+    needs_review boolean not null,
+    revoked_at timestamp(6),
+    revoke_reason varchar(300),
+    notes TEXT,
+    primary key (id),
+    constraint fk_fleet_doc_vehicle    foreign key (vehicle_id)    references fleet_vehicles(id),
+    constraint fk_fleet_doc_driver     foreign key (driver_id)     references fleet_drivers(id),
+    constraint fk_fleet_doc_supersedes foreign key (supersedes_id) references fleet_compliance_documents(id),
+    constraint fk_fleet_doc_expense    foreign key (expense_id)    references fleet_expenses(id),
+    -- Exactly one owner. A polymorphic owner with two nullable FKs is only safe while something
+    -- says so — this is that something.
+    constraint ck_fleet_doc_one_owner check (
+        (vehicle_id IS NOT NULL AND driver_id IS NULL) OR
+        (vehicle_id IS NULL     AND driver_id IS NOT NULL)),
+    constraint ck_fleet_doc_validity check (
+        valid_from IS NULL OR valid_until IS NULL OR valid_until >= valid_from)
+);
+
+-- A renewal replaces exactly one predecessor. Without this a double-clicked Renew supersedes the
+-- same certificate twice and the history forks.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fleet_doc_supersedes
+    ON fleet_compliance_documents (supersedes_id)
+    WHERE supersedes_id IS NOT NULL AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_fleet_doc_tenant  ON fleet_compliance_documents (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_fleet_doc_vehicle ON fleet_compliance_documents (tenant_id, vehicle_id, category);
+CREATE INDEX IF NOT EXISTS idx_fleet_doc_driver  ON fleet_compliance_documents (tenant_id, driver_id, category);
+CREATE INDEX IF NOT EXISTS idx_fleet_doc_expiry  ON fleet_compliance_documents (tenant_id, valid_until);
+
+
+-- ── Backfill from the legacy date columns ───────────────────────────────────
+-- Only the expiry date was ever recorded, so ONLY the expiry date is written. The document number,
+-- issue date and issuing authority are genuinely unknown and are NOT invented — every backfilled row
+-- is flagged needs_review, and the UI shows it as needing attention rather than presenting a blank
+-- as a fact. Inventing a plausible-looking number here would be worse than leaving it empty: it
+-- would be believed.
+--
+-- Idempotent: the NOT EXISTS guard keys on (owner, category), so re-running adds nothing.
+
+INSERT INTO fleet_compliance_documents (
+    created_at, created_by, public_id, updated_at, tenant_id,
+    owner_type, vehicle_id, category, country_code, valid_until, status, needs_review)
+SELECT now(), 'migration:V2-PART9', gen_random_uuid(), now(), v.tenant_id,
+       'VEHICLE', v.id, src.category, 'IN', src.expiry,
+       CASE WHEN src.expiry < CURRENT_DATE THEN 'EXPIRED' ELSE 'ACTIVE' END,
+       true
+FROM   fleet_vehicles v
+CROSS JOIN LATERAL (VALUES
+        ('INSURANCE',                v.insurance_expiry),
+        ('REGISTRATION_CERTIFICATE', v.rc_expiry),
+        -- The legacy column could not say WHICH permit. National is the commonest for tourist
+        -- vehicles, and needs_review flags it for a human to confirm or correct.
+        ('NATIONAL_PERMIT_INDIA',    v.permit_expiry),
+        ('PUC',                      v.puc_expiry)
+       ) AS src(category, expiry)
+WHERE  v.deleted_at IS NULL
+  AND  src.expiry IS NOT NULL
+  AND  NOT EXISTS (
+        SELECT 1 FROM fleet_compliance_documents d
+        WHERE d.vehicle_id = v.id AND d.category = src.category);
+
+INSERT INTO fleet_compliance_documents (
+    created_at, created_by, public_id, updated_at, tenant_id,
+    owner_type, driver_id, category, country_code, document_number, valid_until, status, needs_review)
+SELECT now(), 'migration:V2-PART9', gen_random_uuid(), now(), d.tenant_id,
+       'DRIVER', d.id, 'DRIVING_LICENCE', 'IN', d.license_number, d.license_expiry,
+       CASE WHEN d.license_expiry < CURRENT_DATE THEN 'EXPIRED' ELSE 'ACTIVE' END,
+       -- The licence NUMBER did exist on the driver row, so this one is only half-unknown: the
+       -- issue date and authority are still missing, which is enough to warrant review.
+       true
+FROM   fleet_drivers d
+WHERE  d.deleted_at IS NULL
+  AND  d.license_expiry IS NOT NULL
+  AND  NOT EXISTS (
+        SELECT 1 FROM fleet_compliance_documents x
+        WHERE x.driver_id = d.id AND x.category = 'DRIVING_LICENCE');
+
+
+-- ── Verification ────────────────────────────────────────────────────────────
+--   -- Every legacy date must have produced exactly one document. Expect 0.
+--   SELECT count(*) AS vehicle_dates_not_migrated FROM fleet_vehicles v
+--   CROSS JOIN LATERAL (VALUES ('INSURANCE', v.insurance_expiry),
+--                              ('REGISTRATION_CERTIFICATE', v.rc_expiry),
+--                              ('NATIONAL_PERMIT_INDIA', v.permit_expiry),
+--                              ('PUC', v.puc_expiry)) AS s(cat, exp)
+--   WHERE v.deleted_at IS NULL AND s.exp IS NOT NULL
+--     AND NOT EXISTS (SELECT 1 FROM fleet_compliance_documents d
+--                     WHERE d.vehicle_id = v.id AND d.category = s.cat AND d.valid_until = s.exp);
+--
+--   -- Nothing may own both a vehicle and a driver, or neither. The CHECK enforces it; this proves it.
+--   SELECT count(*) AS bad_owner FROM fleet_compliance_documents
+--   WHERE (vehicle_id IS NULL) = (driver_id IS NULL);
+--
+--   -- How much needs a human. Expected to be large right after the backfill and to fall over time.
+--   SELECT category, count(*) FROM fleet_compliance_documents
+--   WHERE needs_review AND deleted_at IS NULL GROUP BY category ORDER BY 2 DESC;
+
+
+-- ╔══════════════════════════════════════════════════════════════════════════╗
+-- ║  PART 10 — Fleet: one document vocabulary                                ║
+-- ╚══════════════════════════════════════════════════════════════════════════╝
+--
+-- Retires the five-value FleetDocumentType in favour of the nineteen-value FleetDocumentCategory.
+--
+-- WHY. Two enums meaning "kind of document" is one vocabulary too many, and it was already drifting:
+-- the compliance table shipped with nineteen categories while the ALERT table could only name five,
+-- so a Green Card, a fitness certificate, a VLTD fitment or a PSV badge could be recorded and then
+-- lapse in complete silence — the alert row could not even be written. Rather than keep a parallel
+-- column, the alert table now speaks the same vocabulary as the documents it is about.
+--
+-- The five legacy values map 1:1 onto the new ones. RC and PERMIT are the only renames:
+--   RC              -> REGISTRATION_CERTIFICATE
+--   PERMIT          -> NATIONAL_PERMIT_INDIA   (the old column could not say WHICH permit; national
+--                                               is the commonest for tourist vehicles, and PART 9's
+--                                               backfill made the same call and flagged it)
+--   DRIVER_LICENSE  -> DRIVING_LICENCE
+
+-- Drop the old CHECK first: the UPDATE below writes values it forbids.
+ALTER TABLE fleet_document_alerts DROP CONSTRAINT IF EXISTS fleet_document_alerts_doc_type_check;
+
+ALTER TABLE fleet_document_alerts ALTER COLUMN doc_type TYPE varchar(32);
+
+UPDATE fleet_document_alerts SET doc_type = 'REGISTRATION_CERTIFICATE' WHERE doc_type = 'RC';
+UPDATE fleet_document_alerts SET doc_type = 'NATIONAL_PERMIT_INDIA'    WHERE doc_type = 'PERMIT';
+UPDATE fleet_document_alerts SET doc_type = 'DRIVING_LICENCE'          WHERE doc_type = 'DRIVER_LICENSE';
+-- INSURANCE and PUC keep their names.
+
+ALTER TABLE fleet_document_alerts ADD CONSTRAINT fleet_document_alerts_doc_type_check
+    CHECK (doc_type IN (
+        'INSURANCE','REGISTRATION_CERTIFICATE','FITNESS_CERTIFICATE','PUC',
+        'NATIONAL_PERMIT_INDIA','STATE_PERMIT_INDIA','ROAD_TAX_INDIA','GREEN_TAX_INDIA',
+        'UTTARAKHAND_GREEN_CARD','UTTARAKHAND_TRIP_CARD',
+        'VLTD_PANIC_BUTTON','SPEED_GOVERNOR',
+        'PERMIT_NEPAL','BHANSAR_NEPAL',
+        'DRIVING_LICENCE','TRANSPORT_ENDORSEMENT','PSV_BADGE','MEDICAL_CERTIFICATE','OTHER'));
+
+-- Which compliance document an alert is about. Null on rows written before that table existed —
+-- those were keyed on a vehicle/driver plus one of four date columns, and there is nothing to point
+-- at. Deliberately NO foreign key: an alert is history and must survive its document being
+-- superseded or removed, exactly as the fired-alert row already survives a renewal.
+ALTER TABLE fleet_document_alerts ADD COLUMN IF NOT EXISTS document_id bigint;
+
+CREATE INDEX IF NOT EXISTS idx_fleet_alert_document
+    ON fleet_document_alerts (tenant_id, document_id);
+
+
+-- ── Verification ────────────────────────────────────────────────────────────
+--   -- No legacy vocabulary may survive. Expect 0.
+--   SELECT count(*) AS stale_doc_types FROM fleet_document_alerts
+--   WHERE doc_type IN ('RC','PERMIT','DRIVER_LICENSE');
+--
+--   -- What the alert history now speaks.
+--   SELECT doc_type, count(*) FROM fleet_document_alerts GROUP BY doc_type ORDER BY 2 DESC;
+
+
+-- ╔══════════════════════════════════════════════════════════════════════════╗
+-- ║  PART 11 — Fleet: attachments (receipts, scans, signed sheets)           ║
+-- ╚══════════════════════════════════════════════════════════════════════════╝
+-- Postgres bytea, the TravelerDocument precedent — NEVER Cloudinary, whose URLs
+-- are public and unauthenticated; these are financial and identity papers.
+-- Bytes count toward Tenant.max_storage_mb through the same three consumers as
+-- every other stored file (StorageQuotaGuard, UsageServiceImpl, UsageAlertService).
+--
+-- Evidence is append-only once money is signed: upload is always allowed, DELETE
+-- is refused in the service the moment the owning expense stops being editable or
+-- the settlement is signed. sha256 is stamped at upload so byte-swapping shows.
+--
+-- Retention: deliberately NOT in TrashableType — fleet money evidence follows the
+-- 8-year rule; soft-delete only ever hides a row, nothing purges it.
+
+CREATE TABLE IF NOT EXISTS fleet_attachments (
+    id            bigserial PRIMARY KEY,
+    public_id     uuid         NOT NULL DEFAULT gen_random_uuid(),
+    tenant_id     bigint       NOT NULL,
+
+    owner_type    varchar(20)  NOT NULL,
+    expense_id    bigint       REFERENCES fleet_expenses(id),
+    document_id   bigint       REFERENCES fleet_compliance_documents(id),
+    settlement_id bigint       REFERENCES fleet_trip_settlements(id),
+
+    file_name     varchar(255),
+    content_type  varchar(100),
+    size_bytes    bigint       NOT NULL DEFAULT 0,
+    sha256        varchar(64),
+    content       bytea,
+
+    created_by    varchar(255),
+    updated_by    varchar(255),
+    created_at    timestamp,
+    updated_at    timestamp,
+    deleted_at    timestamp,
+    deleted_by    varchar(255),
+
+    CONSTRAINT uq_fleet_attachment_public_id UNIQUE (public_id),
+    CONSTRAINT fleet_attachments_owner_type_check
+        CHECK (owner_type IN ('EXPENSE','DOCUMENT','SETTLEMENT')),
+    -- Exactly one owner — same discipline as fleet_compliance_documents.
+    CONSTRAINT fleet_attachments_exactly_one_owner CHECK (
+        (owner_type = 'EXPENSE'    AND expense_id    IS NOT NULL AND document_id IS NULL AND settlement_id IS NULL) OR
+        (owner_type = 'DOCUMENT'   AND document_id   IS NOT NULL AND expense_id  IS NULL AND settlement_id IS NULL) OR
+        (owner_type = 'SETTLEMENT' AND settlement_id IS NOT NULL AND expense_id  IS NULL AND document_id   IS NULL)
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_fleet_att_tenant     ON fleet_attachments (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_fleet_att_expense    ON fleet_attachments (expense_id);
+CREATE INDEX IF NOT EXISTS idx_fleet_att_document   ON fleet_attachments (document_id);
+CREATE INDEX IF NOT EXISTS idx_fleet_att_settlement ON fleet_attachments (settlement_id);
+
+-- ── Verification ────────────────────────────────────────────────────────────
+--   -- Every row names exactly one owner. Expect 0.
+--   SELECT count(*) FROM fleet_attachments
+--   WHERE (expense_id IS NOT NULL)::int + (document_id IS NOT NULL)::int
+--       + (settlement_id IS NOT NULL)::int <> 1;
+--
+--   -- Stored bytes per tenant — must equal what the usage dashboard shows.
+--   SELECT tenant_id, pg_size_pretty(sum(size_bytes)) FROM fleet_attachments
+--   WHERE deleted_at IS NULL GROUP BY tenant_id;
+
+
+-- ╔══════════════════════════════════════════════════════════════════════════╗
+-- ║  PART 12 — Fleet standalone: party directory + the FLEET plan code       ║
+-- ╚══════════════════════════════════════════════════════════════════════════╝
+-- Two things a Fleet-only deployment cannot be sold without.
+--
+-- (a) fleet_parties — whose vehicle is it. A Fleet-only deployment has no Vendor
+--     master, and attached/market vehicles are the MAJORITY of most Indian fleets,
+--     not the exception. Without this an operator could only type the owner as free
+--     text, and a monthly per-owner payout statement cannot be grouped by free text.
+--     Unused in CRM mode: CrmVendorPartyAdapter wins the FleetPartyPort binding
+--     there, so the two directories never coexist and never need reconciling.
+--
+-- (b) TenantPlan.FLEET — provisioning a Fleet-only tenant is just a plan whose
+--     module set is {FLEET}; ModuleAccessFilter then closes every CRM path for it.
+--     No ProductFamily column: the module set already expresses the product.
+--     SEVEN check constraints name the plan enum and ALL of them must be widened
+--     together — Hibernate writes 'FLEET' the moment a tenant is put on that plan,
+--     and any constraint left behind fails the INSERT at the least convenient time.
+
+CREATE TABLE IF NOT EXISTS fleet_parties (
+    id             bigserial PRIMARY KEY,
+    public_id      uuid          NOT NULL DEFAULT gen_random_uuid(),
+    tenant_id      bigint        NOT NULL,
+
+    name           varchar(150)  NOT NULL,
+    contact_person varchar(120),
+    phone          varchar(20),
+    email          varchar(150),
+    address        varchar(400),
+    city           varchar(100),
+
+    gstin          varchar(20),
+    pan            varchar(15),
+
+    bank_name      varchar(120),
+    account_name   varchar(150),
+    account_number varchar(40),
+    ifsc_code      varchar(15),
+    upi_id         varchar(100),
+
+    agreed_rate    numeric(12,2),
+    notes          varchar(1000),
+    active         boolean       NOT NULL DEFAULT true,
+
+    created_by     varchar(255),
+    updated_by     varchar(255),
+    created_at     timestamp,
+    updated_at     timestamp,
+    deleted_at     timestamp,
+    deleted_by     varchar(255),
+
+    CONSTRAINT uq_fleet_party_public_id UNIQUE (public_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_fleet_party_tenant ON fleet_parties (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_fleet_party_name   ON fleet_parties (tenant_id, name);
+
+-- One party per name per tenant, ignoring case and ignoring trashed rows. A duplicate
+-- owner is how one party's vehicles end up split across two payout statements.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fleet_party_name_per_tenant
+    ON fleet_parties (tenant_id, lower(name)) WHERE deleted_at IS NULL;
+
+
+-- ── The FLEET plan code, across every constraint that names the enum ────────
+DO $$
+DECLARE
+    r record;
+BEGIN
+    FOR r IN
+        SELECT * FROM (VALUES
+            ('plans',            'code',            'plans_code_check'),
+            ('tenants',          'plan',            'tenants_plan_check'),
+            ('subscriptions',    'plan_code',       'subscriptions_plan_code_check'),
+            ('billing_records',  'plan',            'billing_records_plan_check'),
+            ('billing_records',  'upgrade_to_plan', 'billing_records_upgrade_to_plan_check'),
+            ('upgrade_requests', 'current_plan',    'upgrade_requests_current_plan_check'),
+            ('upgrade_requests', 'requested_plan',  'upgrade_requests_requested_plan_check')
+        ) AS t(tbl, col, con)
+    LOOP
+        -- Constraint names are Hibernate-generated and stable, but drop defensively by name
+        -- and re-add: IF EXISTS makes this safe on a database where one was never created.
+        EXECUTE format('ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I', r.tbl, r.con);
+        EXECUTE format(
+            'ALTER TABLE %I ADD CONSTRAINT %I CHECK (%I IN (''STARTER'',''PRO'',''ENTERPRISE'',''FLEET''))',
+            r.tbl, r.con, r.col);
+    END LOOP;
+END $$;
+
+-- ── Verification ────────────────────────────────────────────────────────────
+--   -- Every plan-enum constraint must now accept FLEET. Expect 7 rows, all containing 'FLEET'.
+--   SELECT conrelid::regclass AS tbl, conname, pg_get_constraintdef(oid)
+--   FROM pg_constraint
+--   WHERE contype = 'c' AND pg_get_constraintdef(oid) LIKE '%STARTER%'
+--   ORDER BY 1, 2;
+--
+--   -- After boot, the Fleet plan should exist with exactly one module.
+--   SELECT p.code, p.display_name, p.monthly_price,
+--          (SELECT array_agg(m.module) FROM plan_modules m WHERE m.plan_id = p.id) AS modules
+--   FROM plans p WHERE p.code = 'FLEET';
+
+
+
+
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════
+--   PARTS 13-14 — Hotel Marketplace  (briefly V4__hotel_marketplace.sql; see the note above)
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════
+--
+-- See docs/HOTEL-MASTER-MARKETPLACE-BOOKING-DESIGN.md.
+--
+-- DEPENDS ON PART 2 ABOVE, which adds the booking/customer columns these two parts build on. That
+-- is why this content sits at the END of the file and must stay there.
+--
+-- All statements are idempotent (IF NOT EXISTS throughout).
+--
+-- NOTE for the reviewer: platform_audit_logs.action carries an enumerating CHECK constraint that
+-- Hibernate generated once and never widens. PlatformAuditAction gained PLATFORM_HOTEL_CREATE /
+-- _UPDATE / _PUBLISH / _UNPUBLISH / _DELETE, so that constraint must be rebuilt or the FIRST hotel
+-- publish fails at INSERT time — not at startup. The rebuild block is included below.
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+
+
+-- ╔══════════════════════════════════════════════════════════════════════════╗
+-- ║  PART 13 — Hotel Marketplace: platform catalog + Hotel Master sync       ║
+-- ╚══════════════════════════════════════════════════════════════════════════╝
+-- A Superadmin-owned, GLOBAL hotel catalog that every eligible tenant can search,
+-- plus the columns that let a tenant's private Hotel Master hold a controlled
+-- projection of a catalog row. See docs/HOTEL-MASTER-MARKETPLACE-BOOKING-DESIGN.md.
+--
+-- Why new tables instead of widening `hotels`: `hotels` is tenant-scoped and its
+-- city_id FK is NOT NULL against the tenant-scoped `cities` table. Making tenant_id
+-- nullable to host a global row would defeat the Hibernate tenantFilter for EVERY
+-- hotel read, and would still leave the tenant-scoped geography FK unsatisfiable.
+-- So the catalog is a separate aggregate with its own flat geography (country code
+-- + city name strings), and the tenant's Hotel Master keeps a LOCAL projection row
+-- that continues to satisfy every existing CRM and quotation screen unchanged.
+--
+-- Descriptive data only in this part. Rates, inventory, price holds, bookings and
+-- the commission ledger are deliberately NOT here — they arrive once the catalog
+-- and its sync are proven, so that money and inventory are never built on top of an
+-- ownership boundary that has not been exercised yet.
+--
+-- Money columns, when they come, are numeric — never double. Nothing in this part
+-- carries an amount, on purpose.
+
+-- ── The catalog root ────────────────────────────────────────────────────────
+-- BaseEntity shape (no tenant_id): the platform owns these rows and Superadmin
+-- reads them across all tenants. Geography is flat strings, NOT a FK to `cities`,
+-- because that table is tenant-scoped — resolving a catalog row onto a particular
+-- tenant's city is the sync's job, not the catalog's.
+CREATE TABLE IF NOT EXISTS platform_hotels (
+    id                        bigserial PRIMARY KEY,
+    public_id                 uuid          NOT NULL DEFAULT gen_random_uuid(),
+
+    name                      varchar(200)  NOT NULL,
+    status                    varchar(20)   NOT NULL DEFAULT 'DRAFT',
+
+    -- Flat, tenant-independent location. country_code is ISO so the sync can match
+    -- a tenant Country deterministically instead of by display name.
+    country_code              varchar(3),
+    state_name                varchar(120),
+    city_name                 varchar(120)  NOT NULL,
+    city_code                 varchar(20),
+    address                   varchar(500),
+    latitude                  double precision,
+    longitude                 double precision,
+
+    stars                     integer,
+    rating                    double precision,
+    website                   varchar(500),
+    map_url                   varchar(500),
+    overview                  text,
+    primary_image_url         varchar(500),
+
+    -- Guest-facing contact reproduced on a voucher. Never a supplier settlement contact.
+    phone                     varchar(50),
+    email                     varchar(100),
+
+    -- Logical link to a supplier/vendor if one is used. No FK: vendors are tenant-scoped.
+    supplier_vendor_public_id uuid,
+
+    -- INSTANT is reserved for a later automated flow; the first release confirms
+    -- every request by hand, so the column exists but only ever holds one value.
+    confirmation_mode         varchar(30)   NOT NULL DEFAULT 'SUPERADMIN_APPROVAL',
+
+    -- Bumped on every sync-relevant descriptive change. A tenant projection whose
+    -- stored version is behind this one is STALE and re-syncs on next read.
+    catalog_version           bigint        NOT NULL DEFAULT 1,
+
+    created_by                varchar(255),
+    updated_by                varchar(255),
+    created_at                timestamp,
+    updated_at                timestamp,
+    deleted_at                timestamp,
+    deleted_by                varchar(255),
+
+    CONSTRAINT uq_platform_hotel_public_id UNIQUE (public_id),
+    CONSTRAINT platform_hotels_status_check
+        CHECK (status IN ('DRAFT','ACTIVE','INACTIVE','SUSPENDED')),
+    CONSTRAINT platform_hotels_confirmation_mode_check
+        CHECK (confirmation_mode IN ('SUPERADMIN_APPROVAL','INSTANT'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_platform_hotel_status ON platform_hotels (status);
+CREATE INDEX IF NOT EXISTS idx_platform_hotel_city   ON platform_hotels (country_code, lower(city_name));
+
+-- Duplicate DETECTION, deliberately not a unique constraint. Two genuinely different
+-- properties can share a name in one city, and a hard constraint would block the
+-- Superadmin from onboarding the second one. The service warns on a collision here
+-- and a human decides; see §5.1 of the design doc.
+CREATE INDEX IF NOT EXISTS idx_platform_hotel_dedup
+    ON platform_hotels (lower(name), lower(city_name), country_code)
+    WHERE deleted_at IS NULL;
+
+-- ── Amenities ───────────────────────────────────────────────────────────────
+-- Mirrors the tenant Hotel.amenities @ElementCollection shape so the sync is a
+-- straight copy rather than a translation.
+CREATE TABLE IF NOT EXISTS platform_hotel_amenities (
+    platform_hotel_id bigint       NOT NULL
+        REFERENCES platform_hotels (id) ON DELETE CASCADE,
+    amenity           varchar(200) NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_platform_hotel_amenity
+    ON platform_hotel_amenities (platform_hotel_id);
+
+-- ── Sellable room categories ────────────────────────────────────────────────
+-- Descriptive + occupancy only. NO price column: a room's price belongs to a rate
+-- plan and a dated rate calendar, and putting a price here is how a "base price"
+-- silently becomes the number someone bills against.
+CREATE TABLE IF NOT EXISTS platform_hotel_rooms (
+    id                bigserial PRIMARY KEY,
+    public_id         uuid         NOT NULL DEFAULT gen_random_uuid(),
+    platform_hotel_id bigint       NOT NULL
+        REFERENCES platform_hotels (id) ON DELETE CASCADE,
+
+    name              varchar(150) NOT NULL,
+    max_adults        integer,
+    max_children      integer,
+    max_occupancy     integer,
+    bed_type          varchar(100),
+    size              varchar(100),
+    description       text,
+
+    -- Stops future sale without deleting the row the historical bookings point at.
+    active            boolean      NOT NULL DEFAULT true,
+
+    created_by        varchar(255),
+    updated_by        varchar(255),
+    created_at        timestamp,
+    updated_at        timestamp,
+    deleted_at        timestamp,
+    deleted_by        varchar(255),
+
+    CONSTRAINT uq_platform_hotel_room_public_id UNIQUE (public_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_platform_room_hotel ON platform_hotel_rooms (platform_hotel_id);
+
+CREATE TABLE IF NOT EXISTS platform_hotel_room_images (
+    platform_room_id bigint       NOT NULL
+        REFERENCES platform_hotel_rooms (id) ON DELETE CASCADE,
+    image_url        varchar(500) NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_platform_room_image
+    ON platform_hotel_room_images (platform_room_id);
+
+-- ── Meal plans ──────────────────────────────────────────────────────────────
+-- `code` is the stable machine value (the tenant master's meal plan is free text,
+-- which cannot be matched across a sync). The plan's own price is NOT stored: a
+-- meal plan is an inclusion, and treating its price as the room rate is exactly
+-- the mistake §5.4 of the design doc warns against.
+CREATE TABLE IF NOT EXISTS platform_hotel_meal_plans (
+    id                bigserial PRIMARY KEY,
+    public_id         uuid         NOT NULL DEFAULT gen_random_uuid(),
+    platform_hotel_id bigint       NOT NULL
+        REFERENCES platform_hotels (id) ON DELETE CASCADE,
+
+    code              varchar(10)  NOT NULL,
+    name              varchar(150) NOT NULL,
+    description       text,
+    active            boolean      NOT NULL DEFAULT true,
+
+    created_by        varchar(255),
+    updated_by        varchar(255),
+    created_at        timestamp,
+    updated_at        timestamp,
+    deleted_at        timestamp,
+    deleted_by        varchar(255),
+
+    CONSTRAINT uq_platform_hotel_meal_plan_public_id UNIQUE (public_id),
+    CONSTRAINT platform_hotel_meal_plans_code_check
+        CHECK (code IN ('EP','CP','MAP','AP','CUSTOM'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_platform_meal_plan_hotel
+    ON platform_hotel_meal_plans (platform_hotel_id);
+
+
+-- ── Tenant Hotel Master: the projection columns ─────────────────────────────
+-- Existing rows are tenant-authored, so the backfill defaults say exactly that:
+-- origin TENANT and not marketplace-bookable. Nothing existing is adopted into the
+-- catalog automatically — an explicit Superadmin action is the only way in (§15).
+ALTER TABLE hotels ADD COLUMN IF NOT EXISTS origin                   varchar(20) NOT NULL DEFAULT 'TENANT';
+ALTER TABLE hotels ADD COLUMN IF NOT EXISTS platform_hotel_public_id uuid;
+ALTER TABLE hotels ADD COLUMN IF NOT EXISTS platform_catalog_version bigint;
+ALTER TABLE hotels ADD COLUMN IF NOT EXISTS sync_status              varchar(30);
+ALTER TABLE hotels ADD COLUMN IF NOT EXISTS last_synced_at           timestamp;
+ALTER TABLE hotels ADD COLUMN IF NOT EXISTS marketplace_bookable     boolean     NOT NULL DEFAULT false;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'hotels_origin_check') THEN
+        ALTER TABLE hotels ADD CONSTRAINT hotels_origin_check
+            CHECK (origin IN ('TENANT','PLATFORM_SYNC'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'hotels_sync_status_check') THEN
+        ALTER TABLE hotels ADD CONSTRAINT hotels_sync_status_check
+            CHECK (sync_status IS NULL OR sync_status IN
+                   ('SYNCED','STALE','LOCATION_MAPPING_REQUIRED','SOURCE_INACTIVE'));
+    END IF;
+END $$;
+
+-- One projection per catalog hotel per tenant. Without this, two concurrent imports
+-- (or an import racing a lazy re-sync) leave the tenant with two master rows for one
+-- hotel — and every later "find my projection" lookup then picks an arbitrary one.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_hotels_platform_link_per_tenant
+    ON hotels (tenant_id, platform_hotel_public_id)
+    WHERE platform_hotel_public_id IS NOT NULL AND deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_hotels_origin ON hotels (tenant_id, origin);
+
+-- Children carry the platform id they came from, so a re-sync UPSERTS them. Deleting
+-- and recreating instead would mint new publicIds on every sync and orphan any
+-- quotation or booking line that referenced the previous row.
+ALTER TABLE hotel_room_types ADD COLUMN IF NOT EXISTS platform_source_public_id uuid;
+ALTER TABLE hotel_room_types ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true;
+ALTER TABLE hotel_meal_plans ADD COLUMN IF NOT EXISTS platform_source_public_id uuid;
+ALTER TABLE hotel_meal_plans ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_room_type_platform_source
+    ON hotel_room_types (hotel_id, platform_source_public_id)
+    WHERE platform_source_public_id IS NOT NULL AND deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_meal_plan_platform_source
+    ON hotel_meal_plans (hotel_id, platform_source_public_id)
+    WHERE platform_source_public_id IS NOT NULL AND deleted_at IS NULL;
+
+-- ── Audit actions for the catalog ───────────────────────────────────────────
+-- platform_audit_logs.action carries a CHECK that ENUMERATES every value (V1 line 92). Hibernate
+-- generated it once and never widens it, so a new PlatformAuditAction constant does not fail at
+-- startup — it fails on the first INSERT, which is to say the first time a SuperAdmin publishes a
+-- hotel. Same trap as users_role_check. Rebuild the constraint with the full list.
+DO $$
+DECLARE
+    existing text;
+BEGIN
+    SELECT pg_get_constraintdef(oid) INTO existing
+    FROM pg_constraint WHERE conname = 'platform_audit_logs_action_check';
+
+    -- Only rebuild when the new values are actually missing, so re-running V2 is a no-op.
+    IF existing IS NULL OR existing NOT LIKE '%PLATFORM_HOTEL_PUBLISH%' THEN
+        ALTER TABLE platform_audit_logs DROP CONSTRAINT IF EXISTS platform_audit_logs_action_check;
+        ALTER TABLE platform_audit_logs ADD CONSTRAINT platform_audit_logs_action_check
+            CHECK (action IN (
+                'LOGIN','LOGIN_FAILED','LOGOUT','MFA_SETUP','MFA_CHALLENGE','MFA_VERIFY',
+                'MFA_VERIFY_FAILED','MFA_ENABLE_FAILED','MFA_ENABLED','MFA_DISABLE_FAILED',
+                'MFA_DISABLED','SUPER_ADMIN_MFA_RESET','SUPER_ADMIN_PASSWORD_CHANGE',
+                'SUPER_ADMIN_INVITE_CREATE','SUPER_ADMIN_INVITE_ACCEPT','LOGIN_NOTIFICATION',
+                'LOGIN_NOTIFICATION_FAILED','TENANT_CREATE','TENANT_UPDATE','TENANT_SUSPEND',
+                'TENANT_REACTIVATE','TENANT_SOFT_DELETE','TENANT_RESTORE','TENANT_HARD_DELETE',
+                'PLAN_ASSIGN','PLAN_CHANGE','PLAN_UPDATE','SUBSCRIPTION_EXPIRED','BILLING_ISSUE',
+                'BILLING_MARK_PAID','BILLING_MARK_UNPAID','BILLING_VOID','PAYMENT_ORDER_CREATED',
+                'PAYMENT_CAPTURED','PAYMENT_FAILED','SUBSCRIPTION_ACTIVATED','SUBSCRIPTION_CANCELLED',
+                'TENANT_PAST_DUE','UPGRADE_REQUEST_CREATE','UPGRADE_REQUEST_APPROVE',
+                'UPGRADE_REQUEST_REJECT','UPGRADE_REQUEST_CANCEL','SUBAGENT_LICENSE_CREATE',
+                'SUBAGENT_LICENSE_APPROVE','SUBAGENT_LICENSE_REJECT','SUBAGENT_LICENSE_CANCEL',
+                'IMPERSONATION_START','IMPERSONATION_END','USER_FORCE_RESET','USER_LOCK','USER_UNLOCK',
+                'FEATURE_FLAG_CHANGE','CONFIG_CHANGE','QUOTA_OVERRIDE','USAGE_LIMIT_EXCEEDED',
+                'ANNOUNCEMENT_SEND','MAINTENANCE_TOGGLE','DATA_EXPORT',
+                'PLATFORM_HOTEL_CREATE','PLATFORM_HOTEL_UPDATE','PLATFORM_HOTEL_PUBLISH',
+                'PLATFORM_HOTEL_UNPUBLISH','PLATFORM_HOTEL_DELETE'));
+    END IF;
+END $$;
+
+-- ── Verification ────────────────────────────────────────────────────────────
+--   -- The audit CHECK must accept the catalog actions. Expect 1 row containing them.
+--   SELECT pg_get_constraintdef(oid) FROM pg_constraint
+--   WHERE conname = 'platform_audit_logs_action_check';
+--
+--   -- Every existing hotel must be tenant-authored and not bookable. Expect 0.
+--   SELECT count(*) FROM hotels
+--   WHERE origin <> 'TENANT' OR marketplace_bookable IS DISTINCT FROM false;
+--
+--   -- No tenant may hold two projections of one catalog hotel. Expect 0 rows.
+--   SELECT tenant_id, platform_hotel_public_id, count(*)
+--   FROM hotels
+--   WHERE platform_hotel_public_id IS NOT NULL AND deleted_at IS NULL
+--   GROUP BY 1, 2 HAVING count(*) > 1;
+--
+--   -- Catalog shape after seeding one hotel.
+--   SELECT h.name, h.status, h.city_name, h.catalog_version,
+--          (SELECT count(*) FROM platform_hotel_rooms r      WHERE r.platform_hotel_id = h.id) AS rooms,
+--          (SELECT count(*) FROM platform_hotel_meal_plans m WHERE m.platform_hotel_id = h.id) AS meal_plans
+--   FROM platform_hotels h ORDER BY h.id;
+
+
+-- ╔══════════════════════════════════════════════════════════════════════════╗
+-- ║  PART 14 — Hotel marketplace: booking requests + the CRM link            ║
+-- ╚══════════════════════════════════════════════════════════════════════════╝
+-- A tenant asks the platform to book a catalog hotel; a SuperAdmin verifies it with the
+-- supplier and confirms. First release is ON_REQUEST throughout — there is no rate calendar
+-- and no allotment yet, so the SuperAdmin supplies the final supplier and tenant-payable
+-- amounts at approval time. That is deliberate (design doc §19): confirming automatically
+-- against inventory nobody maintains is how you sell a room that does not exist.
+--
+-- ── Where the money lives, and why it is not here ──
+-- The tenant's payable to the platform is recorded as a VENDOR `booking_expenses` row, and
+-- ALSO inside `bookings.vendor_cost`. That is not a duplicate: ExpenseCostType's own contract
+-- says `Booking.vendorCost` "already represents everything paid to suppliers" and VENDOR rows
+-- are excluded from `total_internal_costs` precisely BECAUSE they are assumed to be in it.
+-- Writing the expense without the scalar would silently overstate net_profit — and the
+-- cancellation P&L, which freezes `sunk_vendor_cost` permanently, would freeze it wrong.
+--
+-- ── No new column on `bookings` ──
+-- `Booking` is @Audited, so every column added there needs its twin in `bookings_aud` or
+-- EVERY write to EVERY booking fails. The marketplace link therefore lives on the two CHILD
+-- tables, neither of which is audited.
+
+CREATE TABLE IF NOT EXISTS platform_hotel_bookings (
+    id                          bigserial PRIMARY KEY,
+    public_id                   uuid          NOT NULL DEFAULT gen_random_uuid(),
+
+    -- Platform-owned row that names a tenant, the UpgradeRequest / SubAgentLicenseRequest
+    -- convention. Logical FK, no DB constraint: the SuperAdmin queue reads across tenants.
+    tenant_id                   bigint        NOT NULL,
+    tenant_code                 varchar(50),
+    tenant_name                 varchar(200),
+
+    booking_code                varchar(40)   NOT NULL,
+
+    -- Tenant-supplied. The ONLY guard against a double-submit minting two CRM bookings, because
+    -- BookingServiceImpl.create() has no idempotency of its own.
+    idempotency_key             varchar(100)  NOT NULL,
+
+    platform_hotel_id           bigint        NOT NULL
+        REFERENCES platform_hotels (id),
+    platform_hotel_public_id    uuid          NOT NULL,
+    platform_room_public_id     uuid,
+    platform_meal_plan_public_id uuid,
+
+    -- Snapshots. The catalog may be edited or unpublished afterwards; what was agreed must not move.
+    hotel_name_snapshot         varchar(200)  NOT NULL,
+    city_name_snapshot          varchar(120),
+    country_code_snapshot       varchar(3),
+    address_snapshot            varchar(500),
+    room_name_snapshot          varchar(150),
+    meal_plan_snapshot          varchar(150),
+
+    check_in                    date          NOT NULL,
+    check_out                   date          NOT NULL,
+    nights                      integer       NOT NULL,
+    rooms                       integer       NOT NULL DEFAULT 1,
+    adults                      integer       NOT NULL DEFAULT 1,
+    children                    integer       NOT NULL DEFAULT 0,
+
+    lead_guest_name             varchar(150)  NOT NULL,
+    lead_guest_phone            varchar(30),
+    lead_guest_email            varchar(150),
+    special_requests            text,
+
+    status                      varchar(30)   NOT NULL DEFAULT 'REQUESTED',
+    requested_by_user_id        bigint,
+
+    -- Money. numeric, never double. supplier_* is SuperAdmin-only and must never reach a tenant DTO.
+    quoted_tenant_payable       numeric(15,2),
+    supplier_total              numeric(15,2),
+    platform_earning            numeric(15,2),
+    tenant_payable              numeric(15,2),
+    tenant_customer_selling_amount numeric(15,2),
+    currency                    varchar(3)    NOT NULL DEFAULT 'INR',
+
+    supplier_confirmation_number varchar(100),
+    cancellation_terms_snapshot text,
+    price_revision_reason       text,
+    rejection_reason            text,
+    internal_notes              text,
+
+    approved_by_super_admin_id  bigint,
+    approved_at                 timestamp,
+
+    -- ── The CRM link ──
+    crm_booking_public_id       uuid,
+    crm_service_item_public_id  uuid,
+    crm_expense_public_id       uuid,
+    -- Projection into the tenant's CRM cannot share a transaction with the platform write
+    -- (TenantScope refuses to be entered inside an active transaction), so it is compensated,
+    -- not rolled back: this records how far it got and a scheduler replays PENDING/FAILED.
+    crm_sync_state              varchar(20)   NOT NULL DEFAULT 'PENDING',
+    crm_sync_error              text,
+    crm_sync_attempts           integer       NOT NULL DEFAULT 0,
+
+    version                     bigint        NOT NULL DEFAULT 0,
+
+    created_by                  varchar(255),
+    updated_by                  varchar(255),
+    created_at                  timestamp,
+    updated_at                  timestamp,
+    deleted_at                  timestamp,
+    deleted_by                  varchar(255),
+
+    CONSTRAINT uq_phb_public_id UNIQUE (public_id),
+    CONSTRAINT platform_hotel_bookings_status_check CHECK (status IN (
+        'REQUESTED','UNDER_REVIEW','TENANT_APPROVAL_REQUIRED','TENANT_ACCEPTED',
+        'CONFIRMED','REJECTED','CANCEL_REQUESTED','CANCELLED','EXPIRED')),
+    CONSTRAINT platform_hotel_bookings_sync_check CHECK (crm_sync_state IN (
+        'PENDING','SYNCED','FAILED','ABANDONED')),
+    CONSTRAINT platform_hotel_bookings_dates_check CHECK (check_out > check_in)
+);
+
+CREATE INDEX IF NOT EXISTS idx_phb_tenant  ON platform_hotel_bookings (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_phb_status  ON platform_hotel_bookings (status);
+CREATE INDEX IF NOT EXISTS idx_phb_hotel   ON platform_hotel_bookings (platform_hotel_id);
+CREATE INDEX IF NOT EXISTS idx_phb_sync    ON platform_hotel_bookings (crm_sync_state)
+    WHERE crm_sync_state IN ('PENDING','FAILED');
+
+-- Idempotency is per tenant: two tenants may legitimately generate the same key.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_phb_idem
+    ON platform_hotel_bookings (tenant_id, idempotency_key)
+    WHERE deleted_at IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_phb_booking_code
+    ON platform_hotel_bookings (booking_code) WHERE deleted_at IS NULL;
+
+-- ── The link columns on the two CRM child tables ────────────────────────────
+-- On the CHILDREN, never on `bookings` — see the @Audited note at the top of this part.
+ALTER TABLE booking_service_items ADD COLUMN IF NOT EXISTS marketplace_booking_public_id uuid;
+ALTER TABLE booking_expenses      ADD COLUMN IF NOT EXISTS marketplace_booking_public_id uuid;
+
+-- One line and one payable per marketplace booking, so the approval projection is a true UPSERT.
+-- The `deleted_at IS NULL` arm is load-bearing and easy to get wrong: the uq_bkpay_idem idiom this
+-- copies has NO such arm, and without it a soft-deleted row keeps occupying the key while the
+-- `…AndDeletedAtIsNull` finder cannot see it — so a replay takes the INSERT branch and hits the
+-- constraint. The matching finders deliberately look through soft-deletes and un-delete instead.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bksi_marketplace
+    ON booking_service_items (marketplace_booking_public_id)
+    WHERE marketplace_booking_public_id IS NOT NULL AND deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bkexp_marketplace
+    ON booking_expenses (marketplace_booking_public_id)
+    WHERE marketplace_booking_public_id IS NOT NULL AND deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_bkexp_marketplace
+    ON booking_expenses (booking_id, marketplace_booking_public_id)
+    WHERE marketplace_booking_public_id IS NOT NULL;
+
+-- ── Audit actions for the request lifecycle ─────────────────────────────────
+DO $$
+DECLARE
+    existing text;
+BEGIN
+    SELECT pg_get_constraintdef(oid) INTO existing
+    FROM pg_constraint WHERE conname = 'platform_audit_logs_action_check';
+
+    IF existing IS NULL OR existing NOT LIKE '%MARKETPLACE_BOOKING_APPROVE%' THEN
+        ALTER TABLE platform_audit_logs DROP CONSTRAINT IF EXISTS platform_audit_logs_action_check;
+        ALTER TABLE platform_audit_logs ADD CONSTRAINT platform_audit_logs_action_check
+            CHECK (action IN (
+                'LOGIN','LOGIN_FAILED','LOGOUT','MFA_SETUP','MFA_CHALLENGE','MFA_VERIFY',
+                'MFA_VERIFY_FAILED','MFA_ENABLE_FAILED','MFA_ENABLED','MFA_DISABLE_FAILED',
+                'MFA_DISABLED','SUPER_ADMIN_MFA_RESET','SUPER_ADMIN_PASSWORD_CHANGE',
+                'SUPER_ADMIN_INVITE_CREATE','SUPER_ADMIN_INVITE_ACCEPT','LOGIN_NOTIFICATION',
+                'LOGIN_NOTIFICATION_FAILED','TENANT_CREATE','TENANT_UPDATE','TENANT_SUSPEND',
+                'TENANT_REACTIVATE','TENANT_SOFT_DELETE','TENANT_RESTORE','TENANT_HARD_DELETE',
+                'PLAN_ASSIGN','PLAN_CHANGE','PLAN_UPDATE','SUBSCRIPTION_EXPIRED','BILLING_ISSUE',
+                'BILLING_MARK_PAID','BILLING_MARK_UNPAID','BILLING_VOID','PAYMENT_ORDER_CREATED',
+                'PAYMENT_CAPTURED','PAYMENT_FAILED','SUBSCRIPTION_ACTIVATED','SUBSCRIPTION_CANCELLED',
+                'TENANT_PAST_DUE','UPGRADE_REQUEST_CREATE','UPGRADE_REQUEST_APPROVE',
+                'UPGRADE_REQUEST_REJECT','UPGRADE_REQUEST_CANCEL','SUBAGENT_LICENSE_CREATE',
+                'SUBAGENT_LICENSE_APPROVE','SUBAGENT_LICENSE_REJECT','SUBAGENT_LICENSE_CANCEL',
+                'IMPERSONATION_START','IMPERSONATION_END','USER_FORCE_RESET','USER_LOCK','USER_UNLOCK',
+                'FEATURE_FLAG_CHANGE','CONFIG_CHANGE','QUOTA_OVERRIDE','USAGE_LIMIT_EXCEEDED',
+                'ANNOUNCEMENT_SEND','MAINTENANCE_TOGGLE','DATA_EXPORT',
+                'PLATFORM_HOTEL_CREATE','PLATFORM_HOTEL_UPDATE','PLATFORM_HOTEL_PUBLISH',
+                'PLATFORM_HOTEL_UNPUBLISH','PLATFORM_HOTEL_DELETE',
+                'MARKETPLACE_BOOKING_REQUEST','MARKETPLACE_BOOKING_REVIEW',
+                'MARKETPLACE_BOOKING_APPROVE','MARKETPLACE_BOOKING_REJECT',
+                'MARKETPLACE_BOOKING_CANCEL','MARKETPLACE_BOOKING_CRM_SYNC_FAILED'));
+    END IF;
+END $$;
+
+-- ── Verification ────────────────────────────────────────────────────────────
+--   -- One CRM line and one payable per marketplace booking. Expect 0 rows from each.
+--   SELECT marketplace_booking_public_id, count(*) FROM booking_service_items
+--   WHERE marketplace_booking_public_id IS NOT NULL AND deleted_at IS NULL
+--   GROUP BY 1 HAVING count(*) > 1;
+--   SELECT marketplace_booking_public_id, count(*) FROM booking_expenses
+--   WHERE marketplace_booking_public_id IS NOT NULL AND deleted_at IS NULL
+--   GROUP BY 1 HAVING count(*) > 1;
+--
+--   -- Confirmed on the platform but never projected into the CRM. Should drain to empty;
+--   -- anything stuck at ABANDONED needs an operator.
+--   SELECT booking_code, status, crm_sync_state, crm_sync_attempts, crm_sync_error
+--   FROM platform_hotel_bookings
+--   WHERE status = 'CONFIRMED' AND crm_sync_state <> 'SYNCED';
+--
+--   -- Every confirmed booking's payable must also be inside bookings.vendor_cost, or netProfit
+--   -- and the frozen cancellation P&L are both overstated by exactly that amount.
+--   SELECT b.booking_code, b.vendor_cost, e.amount AS marketplace_payable
+--   FROM bookings b JOIN booking_expenses e ON e.booking_id = b.id
+--   WHERE e.marketplace_booking_public_id IS NOT NULL AND e.deleted_at IS NULL
+--     AND b.vendor_cost < e.amount;
+
+
+-- ╔══════════════════════════════════════════════════════════════════════════╗
+-- ║  PART 15 — Hotel marketplace: revision, cancellation, voucher, earnings  ║
+-- ╚══════════════════════════════════════════════════════════════════════════╝
+--
+-- Completes the request lifecycle PART 14 left half-built. PARTS 13-14 declared every
+-- MarketplaceBookingStatus value in platform_hotel_bookings_status_check — including
+-- TENANT_APPROVAL_REQUIRED, TENANT_ACCEPTED and CANCEL_REQUESTED — but shipped no columns and no
+-- endpoints capable of reaching them, so four of the nine states were unreachable. This part adds
+-- the columns those transitions need, plus the append-only platform earning ledger of design §5.12.
+--
+-- DEPENDS ON PART 14 ABOVE, which creates platform_hotel_bookings.
+--
+-- ddl-auto is `validate` everywhere, local included, so every field added to
+-- PlatformHotelBooking.java must appear here or the next boot fails with
+-- `Schema-validation: missing column`. That is the intended failure — a silent drift between the
+-- entity and the schema is how a production insert discovers a missing column at 2am.
+
+-- ── 15.1  Price revision (design §8 Step 6B) ────────────────────────────────
+-- The proposed amounts live BESIDE the agreed ones. A proposal written straight into tenant_payable
+-- would make "what you owe" mean "what you might owe" for as long as the tenant takes to answer,
+-- and a tenant who never answers would have been silently repriced.
+ALTER TABLE platform_hotel_bookings
+    ADD COLUMN IF NOT EXISTS revised_supplier_total      numeric(15,2),
+    ADD COLUMN IF NOT EXISTS revised_tenant_payable      numeric(15,2),
+    ADD COLUMN IF NOT EXISTS revision_previous_payable   numeric(15,2),
+    ADD COLUMN IF NOT EXISTS revised_cancellation_terms  text,
+    ADD COLUMN IF NOT EXISTS revision_requested_at       timestamp,
+    ADD COLUMN IF NOT EXISTS revision_expires_at         timestamp,
+    ADD COLUMN IF NOT EXISTS revision_responded_at       timestamp,
+    ADD COLUMN IF NOT EXISTS revision_count              integer NOT NULL DEFAULT 0;
+
+-- ── 15.2  Cancellation (design §9) ──────────────────────────────────────────
+-- cancellation_charge is what the supplier retained; tenant_refund_amount is what comes back.
+-- Both are stored rather than derived: the charge comes from the snapshotted policy and from what
+-- the hotel actually allowed on the day, which no formula over today's data can reproduce later.
+ALTER TABLE platform_hotel_bookings
+    ADD COLUMN IF NOT EXISTS cancel_requested_at         timestamp,
+    ADD COLUMN IF NOT EXISTS cancel_request_reason       text,
+    ADD COLUMN IF NOT EXISTS cancelled_at                timestamp,
+    ADD COLUMN IF NOT EXISTS cancellation_reason         text,
+    ADD COLUMN IF NOT EXISTS cancellation_charge         numeric(15,2),
+    ADD COLUMN IF NOT EXISTS tenant_refund_amount        numeric(15,2),
+    ADD COLUMN IF NOT EXISTS cancelled_by_super_admin_id bigint;
+
+-- ── 15.3  Voucher (design §7) ───────────────────────────────────────────────
+-- A second axis, not more values on `status`. A PDF that fails to render — or one revoked to
+-- reissue with a corrected guest name — must not be expressible as a change to the booking's state,
+-- or the room the hotel is already holding appears to un-confirm itself.
+ALTER TABLE platform_hotel_bookings
+    ADD COLUMN IF NOT EXISTS voucher_status     varchar(20) NOT NULL DEFAULT 'NOT_ISSUED',
+    ADD COLUMN IF NOT EXISTS voucher_number     varchar(40),
+    ADD COLUMN IF NOT EXISTS voucher_issued_at  timestamp,
+    ADD COLUMN IF NOT EXISTS voucher_revoked_at timestamp;
+
+DO $do$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                   WHERE conname = 'platform_hotel_bookings_voucher_check') THEN
+        ALTER TABLE platform_hotel_bookings ADD CONSTRAINT platform_hotel_bookings_voucher_check
+            CHECK (voucher_status IN ('NOT_ISSUED','ISSUED','REVOKED'));
+    END IF;
+END $do$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_phb_voucher_number
+    ON platform_hotel_bookings (voucher_number)
+    WHERE voucher_number IS NOT NULL AND deleted_at IS NULL;
+
+-- Drives the revision-expiry sweep. Partial, because the overwhelming majority of rows have no
+-- open offer and a full index on a mostly-null column earns nothing.
+CREATE INDEX IF NOT EXISTS idx_phb_revision_expiry
+    ON platform_hotel_bookings (revision_expires_at)
+    WHERE revision_expires_at IS NOT NULL AND deleted_at IS NULL;
+
+-- The CRM-cancellation listener looks bookings up by the trip they ride on.
+CREATE INDEX IF NOT EXISTS idx_phb_crm_booking
+    ON platform_hotel_bookings (crm_booking_public_id)
+    WHERE crm_booking_public_id IS NOT NULL;
+
+-- ── 15.4  Platform earning ledger (design §5.12) ────────────────────────────
+-- APPEND-ONLY, and that is the whole point: platform revenue must never be recomputed from today's
+-- commercial rules, because a rule edited in March would silently rewrite what was earned in
+-- January. A reversal is a NEW ROW with a negative amount, never an UPDATE of the original accrual.
+--
+-- `amount` is immutable once written. `status` is the one mutable column — an accrual legitimately
+-- moves PENDING -> EARNED -> SETTLED as the stay completes and money changes hands (design §8
+-- Step 9). The distinction matters: the history of what was earned is frozen, the state of its
+-- collection is not.
+--
+-- Not tenant-scoped in the Hibernate sense (BaseEntity, like the bookings it follows), but every
+-- row names a tenant. SuperAdmin-only; no tenant endpoint reads it.
+CREATE TABLE IF NOT EXISTS platform_hotel_commission_ledger (
+    id                      bigserial PRIMARY KEY,
+    public_id               uuid          NOT NULL DEFAULT gen_random_uuid(),
+
+    hotel_booking_id        bigint        NOT NULL
+        REFERENCES platform_hotel_bookings (id),
+    hotel_booking_public_id uuid          NOT NULL,
+    booking_code            varchar(40),
+
+    tenant_id               bigint        NOT NULL,
+    tenant_code             varchar(50),
+
+    entry_type              varchar(20)   NOT NULL,
+    -- Signed. ACCRUAL positive, REVERSAL negative, ADJUSTMENT either way. Summing the column gives
+    -- the net position with no case analysis at the call site — which is exactly the arithmetic
+    -- that goes wrong when it is spread across a reporting query.
+    amount                  numeric(15,2) NOT NULL,
+    currency                varchar(3)    NOT NULL DEFAULT 'INR',
+    status                  varchar(20)   NOT NULL DEFAULT 'PENDING',
+
+    -- The economics this row was derived from, snapshotted. Reporting must never re-derive these
+    -- from the booking, which a later cancellation restates.
+    supplier_total          numeric(15,2),
+    tenant_payable          numeric(15,2),
+
+    effective_date          date          NOT NULL,
+    reason                  text,
+
+    -- Idempotency. The approval path is replayed by the compensating scheduler, and a retry that
+    -- accrued a second time would overstate platform revenue permanently — no later reconciliation
+    -- could tell the duplicate from a legitimate second entry.
+    reference_key           varchar(120)  NOT NULL,
+
+    created_by              varchar(255),
+    updated_by              varchar(255),
+    created_at              timestamp,
+    updated_at              timestamp,
+    deleted_at              timestamp,
+    deleted_by              varchar(255),
+
+    CONSTRAINT uq_phcl_public_id UNIQUE (public_id),
+    CONSTRAINT platform_hotel_commission_ledger_type_check CHECK (entry_type IN (
+        'ACCRUAL','REVERSAL','ADJUSTMENT','SETTLEMENT')),
+    CONSTRAINT platform_hotel_commission_ledger_status_check CHECK (status IN (
+        'PENDING','EARNED','REVERSED','SETTLED'))
+);
+
+-- One entry per logical event. Carries the deleted_at predicate deliberately: a ledger row should
+-- never be soft-deleted, but if one ever is, the key must be free for the corrected entry.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_phcl_reference
+    ON platform_hotel_commission_ledger (reference_key)
+    WHERE deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_phcl_booking    ON platform_hotel_commission_ledger (hotel_booking_id);
+CREATE INDEX IF NOT EXISTS idx_phcl_tenant     ON platform_hotel_commission_ledger (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_phcl_status     ON platform_hotel_commission_ledger (status);
+CREATE INDEX IF NOT EXISTS idx_phcl_effective  ON platform_hotel_commission_ledger (effective_date);
+
+-- ── 15.5  Audit actions for the new transitions ─────────────────────────────
+-- Without this refresh the FIRST revision request fails at INSERT, not at boot — the check
+-- constraint is data-level, and ddl-auto has no opinion about it.
+DO $do$
+DECLARE
+    existing text;
+BEGIN
+    SELECT pg_get_constraintdef(oid) INTO existing
+    FROM pg_constraint WHERE conname = 'platform_audit_logs_action_check';
+
+    IF existing IS NULL OR existing NOT LIKE '%MARKETPLACE_COMMISSION_ACCRUED%' THEN
+        ALTER TABLE platform_audit_logs DROP CONSTRAINT IF EXISTS platform_audit_logs_action_check;
+        ALTER TABLE platform_audit_logs ADD CONSTRAINT platform_audit_logs_action_check
+            CHECK (action IN (
+                'LOGIN','LOGIN_FAILED','LOGOUT','MFA_SETUP','MFA_CHALLENGE','MFA_VERIFY',
+                'MFA_VERIFY_FAILED','MFA_ENABLE_FAILED','MFA_ENABLED','MFA_DISABLE_FAILED',
+                'MFA_DISABLED','SUPER_ADMIN_MFA_RESET','SUPER_ADMIN_PASSWORD_CHANGE',
+                'SUPER_ADMIN_INVITE_CREATE','SUPER_ADMIN_INVITE_ACCEPT','LOGIN_NOTIFICATION',
+                'LOGIN_NOTIFICATION_FAILED','TENANT_CREATE','TENANT_UPDATE','TENANT_SUSPEND',
+                'TENANT_REACTIVATE','TENANT_SOFT_DELETE','TENANT_RESTORE','TENANT_HARD_DELETE',
+                'PLAN_ASSIGN','PLAN_CHANGE','PLAN_UPDATE','SUBSCRIPTION_EXPIRED','BILLING_ISSUE',
+                'BILLING_MARK_PAID','BILLING_MARK_UNPAID','BILLING_VOID','PAYMENT_ORDER_CREATED',
+                'PAYMENT_CAPTURED','PAYMENT_FAILED','SUBSCRIPTION_ACTIVATED','SUBSCRIPTION_CANCELLED',
+                'TENANT_PAST_DUE','UPGRADE_REQUEST_CREATE','UPGRADE_REQUEST_APPROVE',
+                'UPGRADE_REQUEST_REJECT','UPGRADE_REQUEST_CANCEL','SUBAGENT_LICENSE_CREATE',
+                'SUBAGENT_LICENSE_APPROVE','SUBAGENT_LICENSE_REJECT','SUBAGENT_LICENSE_CANCEL',
+                'IMPERSONATION_START','IMPERSONATION_END','USER_FORCE_RESET','USER_LOCK','USER_UNLOCK',
+                'FEATURE_FLAG_CHANGE','CONFIG_CHANGE','QUOTA_OVERRIDE','USAGE_LIMIT_EXCEEDED',
+                'ANNOUNCEMENT_SEND','MAINTENANCE_TOGGLE','DATA_EXPORT',
+                'PLATFORM_HOTEL_CREATE','PLATFORM_HOTEL_UPDATE','PLATFORM_HOTEL_PUBLISH',
+                'PLATFORM_HOTEL_UNPUBLISH','PLATFORM_HOTEL_DELETE',
+                'MARKETPLACE_BOOKING_REQUEST','MARKETPLACE_BOOKING_REVIEW',
+                'MARKETPLACE_BOOKING_APPROVE','MARKETPLACE_BOOKING_REJECT',
+                'MARKETPLACE_BOOKING_CANCEL','MARKETPLACE_BOOKING_CRM_SYNC_FAILED',
+                'MARKETPLACE_BOOKING_REVISION_REQUESTED','MARKETPLACE_BOOKING_REVISION_ACCEPTED',
+                'MARKETPLACE_BOOKING_REVISION_DECLINED','MARKETPLACE_BOOKING_REVISION_EXPIRED',
+                'MARKETPLACE_BOOKING_CANCEL_REQUESTED',
+                'MARKETPLACE_VOUCHER_ISSUED','MARKETPLACE_VOUCHER_REVOKED',
+                'MARKETPLACE_COMMISSION_ACCRUED','MARKETPLACE_COMMISSION_REVERSED',
+                'MARKETPLACE_COMMISSION_ADJUSTED','MARKETPLACE_COMMISSION_SETTLED'));
+    END IF;
+END $do$;
+
+-- ── Verification ────────────────────────────────────────────────────────────
+--   -- Platform earning must equal the net of the ledger for every confirmed booking. A non-empty
+--   -- result means reporting off the ledger and reporting off the booking disagree.
+--   SELECT b.booking_code, b.platform_earning, COALESCE(SUM(l.amount), 0) AS ledger_net
+--   FROM platform_hotel_bookings b
+--   LEFT JOIN platform_hotel_commission_ledger l
+--          ON l.hotel_booking_id = b.id AND l.deleted_at IS NULL
+--   WHERE b.status = 'CONFIRMED' AND b.deleted_at IS NULL
+--   GROUP BY b.id, b.booking_code, b.platform_earning
+--   HAVING COALESCE(SUM(l.amount), 0) <> COALESCE(b.platform_earning, 0);
+--
+--   -- A cancelled booking must not leave an un-reversed accrual earning money on a room nobody
+--   -- stayed in. Expect 0 rows unless a cancellation charge was legitimately retained.
+--   SELECT b.booking_code, b.cancellation_charge, SUM(l.amount) AS still_accrued
+--   FROM platform_hotel_bookings b
+--   JOIN platform_hotel_commission_ledger l ON l.hotel_booking_id = b.id AND l.deleted_at IS NULL
+--   WHERE b.status = 'CANCELLED'
+--   GROUP BY b.id, b.booking_code, b.cancellation_charge HAVING SUM(l.amount) <> 0;
+--
+--   -- An issued voucher on a booking that was never confirmed is a document for a room that was
+--   -- never bought. Expect 0 rows.
+--   SELECT booking_code, status, voucher_status FROM platform_hotel_bookings
+--   WHERE voucher_status = 'ISSUED' AND status NOT IN ('CONFIRMED','CANCEL_REQUESTED','CANCELLED');

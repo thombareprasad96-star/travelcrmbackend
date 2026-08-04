@@ -67,6 +67,24 @@ public class Customer extends BaseTenantEntity implements Ownable {
     @Column(name = "phone", nullable = false, length = 20)
     private String phone;
 
+    /**
+     * E.164-canonical form of {@link #phone}, derived on write. A SHADOW column, exactly like
+     * {@code Lead.phoneNormalized} and for the same reason.
+     *
+     * <p>{@link #phone} stays the raw string a human typed, because
+     * {@code uq_customers_phone_tenant} and every historical row are keyed on it and rewriting the
+     * format in place would break those matches. But raw strings cannot answer "do we already know
+     * this person?": "+919812345678", "9812345678" and "+91 98765 43210" are three different people
+     * to a string comparison. This column is what makes the existing-customer match on lead creation
+     * reliable rather than luck.
+     *
+     * <p>Nullable, and a null is never a match — {@code PhoneCanonicalizer} returns null rather than
+     * guess at a number it cannot parse, and treating those as equal would collapse every
+     * unparseable phone onto one another.
+     */
+    @Column(name = "phone_normalized", length = 20)
+    private String phoneNormalized;
+
     @Column(name = "email", length = 150)
     private String email;
 

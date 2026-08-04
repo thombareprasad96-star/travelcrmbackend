@@ -23,6 +23,51 @@ public interface BookingRepository extends JpaRepository<Booking, Long>,
 
     Optional<Booking> findByPublicIdAndDeletedAtIsNull(UUID publicId);
 
+    /**
+     * Tenant-parameterised by-publicId lookup.
+     *
+     * <p>The finder above carries no tenant predicate and relies entirely on the Hibernate
+     * {@code tenantFilter} — which {@code TenantFilterAspect} enables only on {@code @Transactional}
+     * methods and which fails OPEN when {@code TenantContext} is empty. Any path that may run without
+     * a request-scoped tenant (marketplace projection, a scheduler, anything reached through
+     * {@code TenantScope}) must spell the tenant out instead of trusting the ambient filter.</p>
+     */
+    Optional<Booking> findByPublicIdAndTenantIdAndDeletedAtIsNull(UUID publicId, Long tenantId);
+
+    /**
+     * The same rule for an internal id.
+     *
+     * <p>Needed because a child row ({@code BookingExpense.bookingId}) names its parent by primary
+     * key, and {@code findById} on a {@code BaseTenantEntity} is a documented cross-tenant read —
+     * {@code EntityManager.find()} never sees the Hibernate filter at all. {@code
+     * TenantIsolationArchTest} fails the build on the bare call, which is exactly what caught it.</p>
+     */
+    Optional<Booking> findByIdAndTenantIdAndDeletedAtIsNull(Long id, Long tenantId);
+
+    /**
+     * The live booking already made from this lead, if any — the duplicate guard, addressable by the
+     * lead's public UUID.
+     *
+     * <p>{@code convertLeadToBooking} has this check; {@code create()} does not, yet it accepts and
+     * links a {@code leadPublicId} all the same. Any new path that creates a booking against a lead
+     * has to run it, or one enquiry ends up with two bookings, two quota slots and — for a sub-agent
+     * owner — commission accrued twice on the same sale.</p>
+     *
+     * <p>CANCELLED is excluded deliberately, matching the sibling finder: cancelling reopens the lead,
+     * so a reopened lead must stay re-convertible even though its old cancelled booking still exists.</p>
+     */
+    @Query("""
+            SELECT b FROM Booking b
+            WHERE b.sourceLeadPublicId = :leadPublicId
+              AND b.tenantId = :tenantId
+              AND b.status <> com.crm.travelcrm.booking.enums.BookingStatus.CANCELLED
+              AND b.deletedAt IS NULL
+            ORDER BY b.id DESC
+            LIMIT 1
+            """)
+    Optional<Booking> findFirstByLeadPublicIdActive(@Param("leadPublicId") UUID leadPublicId,
+                                                    @Param("tenantId") Long tenantId);
+
     Optional<Booking> findByBookingCodeAndDeletedAtIsNull(String bookingCode);
 
     Optional<Booking> findByIdAndDeletedAtIsNull(Long id);

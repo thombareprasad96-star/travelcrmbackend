@@ -1,6 +1,7 @@
 package com.crm.travelcrm.fleet.dto;
 
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 import lombok.Getter;
@@ -58,4 +59,19 @@ public class FleetTripCreateDto {
     private BigDecimal driverAllowance;
 
     private String remarks;
+
+    // ── Cross-border money ──────────────────────────────────────────────────
+    // The office sets ONE rate for the whole trip, here, once. Every foreign-currency cost row on
+    // this trip then inherits that rate AT WRITE TIME. This is why no expense request ever carries
+    // a rate: a driver at the Sunauli border types a Bhansar receipt in NPR and never sees, knows
+    // or influences the conversion. Without these two fields the whole NPR path is unreachable —
+    // FleetMoneyCalculator.resolveRate rejects a foreign currency with no trip rate.
+
+    /** Foreign currency in use on this trip, e.g. NPR. Null for a purely domestic trip. */
+    @Size(max = 3)
+    private String fxCurrency;
+
+    /** Units of base currency per one {@link #fxCurrency}, e.g. 0.625 for NPR→INR. */
+    @Positive
+    private BigDecimal fxRate;
 }

@@ -16,4 +16,15 @@ public interface BookingServiceItemRepository extends JpaRepository<BookingServi
 
     /** One line, scoped to its booking so a foreign publicId can never be reached. */
     Optional<BookingServiceItem> findByPublicIdAndBookingIdAndDeletedAtIsNull(UUID publicId, Long bookingId);
+
+    /**
+     * The marketplace hotel line, INCLUDING a soft-deleted one.
+     *
+     * <p>Looking through the soft-delete is deliberate and load-bearing. The partial unique index on
+     * {@code marketplace_booking_public_id} excludes deleted rows, but a soft-deleted row still holds
+     * the value — so a {@code …AndDeletedAtIsNull} finder would miss it, the upsert would take its
+     * INSERT branch, and the index would reject the write. Replays must find the old row and
+     * un-delete it. Same reason {@code BookingExpenseRepository.findByPublicIdAndBookingId} exists.</p>
+     */
+    Optional<BookingServiceItem> findByMarketplaceBookingPublicId(UUID marketplaceBookingPublicId);
 }

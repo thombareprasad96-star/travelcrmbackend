@@ -41,6 +41,22 @@ public class Tenant extends BaseEntity {
     @Column(name = "address", length = 255)
     private String address;
 
+    /**
+     * IANA zone the tenant's business day is measured in — {@code Asia/Kolkata} (IST, +5:30) or
+     * {@code Asia/Kathmandu} (NPT, +5:45) for the cross-border operators.
+     *
+     * <p>Every date boundary in the app currently uses {@code ZoneId.systemDefault()}, which is the
+     * SERVER's zone. That is invisible until money carries a document date: a Bhansar receipt paid
+     * at 23:50 NPT files into the previous day in every Indian report, and a self-hosted VPS with a
+     * different TZ produces different numbers from the SaaS for identical data. Added BEFORE the
+     * fleet ledger exists on purpose — retrofitting it afterwards is a backfill, not a column.
+     *
+     * <p>Resolve through {@code TenantTimeZone}, never by reading this field directly.
+     */
+    @Column(name = "timezone", nullable = false, length = 60)
+    @Builder.Default
+    private String timezone = "Asia/Kolkata";
+
     @Enumerated(EnumType.STRING)
     @Column(name = "plan", nullable = false, length = 20)
     @Builder.Default

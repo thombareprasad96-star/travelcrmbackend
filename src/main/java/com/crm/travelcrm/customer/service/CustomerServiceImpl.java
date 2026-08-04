@@ -6,14 +6,18 @@ import com.crm.travelcrm.booking.repository.BookingRepository;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.dto.PagedApiResponse;
 import com.crm.travelcrm.common.dto.PaginationMeta;
+import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.RestoreAvailableException;
 import com.crm.travelcrm.common.util.PageSupport;
 import com.crm.travelcrm.common.util.PhoneNormalizer;
 import com.crm.travelcrm.customer.dto.request.CreateCustomerRequest;
+import com.crm.travelcrm.customer.dto.request.CustomerResolveRequest;
+import com.crm.travelcrm.customer.dto.request.CustomerSyncRequest;
 import com.crm.travelcrm.customer.dto.request.StatusUpdateRequest;
 import com.crm.travelcrm.customer.dto.request.TierUpdateRequest;
 import com.crm.travelcrm.customer.dto.request.UpdateCustomerRequest;
 import com.crm.travelcrm.customer.dto.response.CustomerBookingResponse;
+import com.crm.travelcrm.customer.dto.response.CustomerMatchResponse;
 import com.crm.travelcrm.customer.dto.response.CustomerResponse;
 import com.crm.travelcrm.customer.dto.response.CustomerStatsResponse;
 import com.crm.travelcrm.customer.entity.Customer;
@@ -39,6 +43,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
@@ -54,6 +59,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
@@ -82,6 +88,7 @@ public class CustomerServiceImpl implements CustomerService {
     private static final DateTimeFormatter CSV_DATE = DateTimeFormatter.ISO_LOCAL_DATE;
 
     private final CustomerRepository customerRepository;
+    private final CustomerMatcher customerMatcher;
     private final BookingRepository bookingRepository;
     private final CustomerMapper customerMapper;
     private final CustomerCodeGenerator customerCodeGenerator;
@@ -96,7 +103,9 @@ public class CustomerServiceImpl implements CustomerService {
         Long tenantId = currentTenantId();
         String phone = normalizePhone(request.getPhone());
 
-        log.info("Creating customer | phone: {} | tenantId: {}", phone, tenantId);
+        // Phone omitted on purpose — see the note in LeadServiceImpl.createLead. The customer CODE
+        // on the success line identifies the row without writing contact data to a retained file.
+        log.info("Creating customer | tenantId: {}", tenantId);
 
         if (customerRepository.existsByPhoneAndTenantIdAndDeletedAtIsNull(phone, tenantId)) {
             throw new DuplicateCustomerException(
@@ -115,13 +124,18 @@ public class CustomerServiceImpl implements CustomerService {
 
         Customer customer = customerMapper.toEntity(request);
         customer.setPhone(phone);
+        // Canonical shadow key, derived through the matcher so every writer stamps it identically.
+        // Without this a customer created here is invisible to the lead auto-prefill unless the
+        // clerk happens to type the phone in exactly the same format next time.
+        customer.setPhoneNormalized(customerMatcher.canonicalPhone(phone));
         customer.setEmail(normalizeEmail(request.getEmail()));
         customer.setTenantId(tenantId);
         customer.setCustomerCode(customerCodeGenerator.generate(tenantId));
         applyDefaults(customer);
 
         Customer saved = customerRepository.save(customer);
-        log.info("Customer created | code: {} | publicId: {}", saved.getCustomerCode(), saved.getPublicId());
+        log.info("Customer created | code: {} | publicId: {} | tenantId: {}",
+                saved.getCustomerCode(), saved.getPublicId(), tenantId);
 
         eventPublisher.publishEvent(NotifyEvent.builder()
                 .type(NotificationType.CUSTOMER_CREATED.name())
@@ -203,6 +217,156 @@ public class CustomerServiceImpl implements CustomerService {
 
     @Override
     @Transactional(readOnly = true)
+    public CustomerMatchResponse lookup(String phone, String email) {
+        Long tenantId = currentTenantId();
+
+        boolean hasPhone = StringUtils.hasText(phone);
+        boolean hasEmail = StringUtils.hasText(email);
+        if (!hasPhone && !hasEmail) {
+            throw new BusinessException("Provide a phone number or an email address to look up.",
+                    HttpStatus.BAD_REQUEST);
+        }
+
+        // DEBUG, not INFO: this fires on a debounce while the clerk types, so at INFO it would be
+        // the single noisiest line in the production log and would drown the events that matter.
+        log.debug("Customer lookup probe | byPhone: {} | byEmail: {} | tenantId: {}",
+                hasPhone, hasEmail, tenantId);
+
+        return customerMatcher.find(phone, email, tenantId)
+                // Row-level scope still applies: a sub-agent must not discover, via this probe, that
+                // a customer belonging to a colleague exists. To them it reads as "no match", which
+                // is also the truthful answer for their own visible set.
+                .filter(match -> subAgentScope.ownerFilter() == null
+                        || subAgentScope.ownerFilter().equals(match.customer().getOwnerUserId()))
+                .map(match -> customerMatcher.toResponse(match, tenantId, null))
+                .orElseGet(CustomerMatchResponse::noMatch);
+    }
+
+    // ── Resolve-or-create (booking create) ────────────────────────────────────
+
+    @Override
+    @Transactional
+    public Customer resolveOrCreate(CustomerResolveRequest request, Long leadId) {
+        Long tenantId = currentTenantId();
+
+        if (request == null) {
+            throw new BusinessException("Customer details are required to create a booking.",
+                    HttpStatus.BAD_REQUEST);
+        }
+
+        // ── Mode A: an existing customer the phone search already matched ──────
+        if (request.isExistingMode()) {
+            Customer customer = customerRepository
+                    .findByPublicIdAndTenantIdAndDeletedAtIsNull(request.getCustomerPublicId(), tenantId)
+                    .orElseThrow(() -> new CustomerNotFoundException(
+                            "Customer not found: " + request.getCustomerPublicId()));
+            subAgentScope.assertVisible(customer, request.getCustomerPublicId().toString());
+
+            if (request.getSync() != null) {
+                applySync(customer, request.getSync());
+                customer = customerRepository.save(customer);
+                log.info("Customer {} details synced from booking form | tenantId: {}",
+                        customer.getCustomerCode(), tenantId);
+            }
+            log.debug("Booking reuses existing customer {} | tenantId: {}",
+                    customer.getCustomerCode(), tenantId);
+            return customer;
+        }
+
+        // ── Mode B: a new customer, because the phone search found nothing ─────
+        CreateCustomerRequest newCustomer = request.getNewCustomer();
+        String phone = normalizePhone(newCustomer.getPhone());
+        if (PhoneNormalizer.isBlank(phone)) {
+            throw new BusinessException("A phone number is required to create a customer.",
+                    HttpStatus.BAD_REQUEST);
+        }
+
+        // The form's search may have 404'd a moment ago and the row may exist now — a second clerk,
+        // a double submit, or a customer created between the search and the save. Re-checking here
+        // means the booking succeeds against the existing customer instead of 500-ing on
+        // uq_customers_phone_tenant. Match on the canonical key so a re-typed format still finds it.
+        Optional<Customer> live = customerMatcher.find(phone, newCustomer.getEmail(), tenantId)
+                .map(CustomerMatcher.Match::customer);
+        if (live.isPresent()) {
+            // WARN, not INFO: the caller asked to CREATE and got an existing row instead. It is
+            // handled and correct, but it means the form's phone search and this save disagreed —
+            // a race, a double-submit, or a stale screen. Worth seeing a rate of in the logs.
+            log.warn("newCustomer requested but customer {} already holds this contact — reusing it "
+                            + "instead of creating a duplicate | tenantId: {}",
+                    live.get().getCustomerCode(), tenantId);
+            return live.get();
+        }
+
+        // A trashed row holding this phone would collide with the partial unique index on insert.
+        // Restore and reuse instead — the same rule lead conversion has always applied.
+        Optional<Customer> trashed = customerRepository
+                .findFirstByPhoneAndTenantIdAndDeletedAtIsNotNullOrderByDeletedAtDesc(phone, tenantId);
+        if (trashed.isPresent()) {
+            Customer revived = trashed.get();
+            revived.restore();
+            applyNewCustomerFields(revived, newCustomer, tenantId);
+            Customer saved = customerRepository.save(revived);
+            log.info("Restored trashed customer {} for a new booking", saved.getCustomerCode());
+            return saved;
+        }
+
+        Customer customer = customerMapper.toEntity(newCustomer);
+        applyNewCustomerFields(customer, newCustomer, tenantId);
+        customer.setTenantId(tenantId);
+        customer.setCustomerCode(customerCodeGenerator.generate(tenantId));
+        // Provenance, so the cancel-cleanup can reclaim ONLY customers this flow created itself and
+        // never one a user typed in by hand.
+        customer.setCreatedFromLeadId(leadId);
+        applyDefaults(customer);
+
+        Customer saved = customerRepository.save(customer);
+        log.info("Customer {} created during booking creation | tenantId: {}",
+                saved.getCustomerCode(), tenantId);
+        return saved;
+    }
+
+    private void applyNewCustomerFields(Customer customer, CreateCustomerRequest request, Long tenantId) {
+        String phone = normalizePhone(request.getPhone());
+        customer.setName(request.getName());
+        customer.setPhone(phone);
+        customer.setPhoneNormalized(customerMatcher.canonicalPhone(phone));
+        if (StringUtils.hasText(request.getEmail())) customer.setEmail(normalizeEmail(request.getEmail()));
+        if (StringUtils.hasText(request.getCity()))  customer.setCity(request.getCity());
+        if (request.getBirthday() != null)           customer.setBirthday(request.getBirthday());
+        if (request.getAnniversary() != null)        customer.setAnniversary(request.getAnniversary());
+    }
+
+    /**
+     * Apply the agent's corrections to an existing customer.
+     *
+     * <p>The asymmetry here is deliberate and is the whole point of the method:
+     * <ul>
+     *   <li><b>{@code name} — last-write-wins.</b> The agent has just confirmed the spelling with
+     *       the customer on the phone; that is fresher than whatever was typed months ago.</li>
+     *   <li><b>{@code email}, {@code birthday}, {@code anniversary} — fill-if-empty only.</b> A thin
+     *       booking form must never erase a richer profile. If the customer record already has an
+     *       email and the booking form's box was left blank, the stored one stands.</li>
+     *   <li><b>{@code phone} — never written.</b> Not by rule but by construction: there is no
+     *       phone field on {@link CustomerSyncRequest} to write from.</li>
+     * </ul>
+     */
+    private void applySync(Customer customer, CustomerSyncRequest sync) {
+        if (StringUtils.hasText(sync.getName())) {
+            customer.setName(sync.getName().trim());
+        }
+        if (StringUtils.hasText(sync.getEmail()) && !StringUtils.hasText(customer.getEmail())) {
+            customer.setEmail(normalizeEmail(sync.getEmail()));
+        }
+        if (sync.getBirthday() != null && customer.getBirthday() == null) {
+            customer.setBirthday(sync.getBirthday());
+        }
+        if (sync.getAnniversary() != null && customer.getAnniversary() == null) {
+            customer.setAnniversary(sync.getAnniversary());
+        }
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public List<CustomerResponse> searchByName(String name) {
         Long tenantId = currentTenantId();
         if (!StringUtils.hasText(name)) {
@@ -235,6 +399,9 @@ public class CustomerServiceImpl implements CustomerService {
         // Mutate the managed entity in place (null fields are ignored by the mapper).
         customerMapper.updateEntity(request, customer);
         customer.setPhone(newPhone);
+        // The shadow key must move with the raw phone or it rots: an edited number would keep
+        // matching leads on the OLD canonical value.
+        customer.setPhoneNormalized(customerMatcher.canonicalPhone(newPhone));
         if (request.getEmail() != null) {
             customer.setEmail(normalizeEmail(request.getEmail()));
         }

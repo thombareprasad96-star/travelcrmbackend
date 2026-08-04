@@ -42,6 +42,7 @@ This is a static and automated repository audit, not a penetration test against 
 | BUG-012 | Medium | Tests | The context test loads developer-local configuration and can migrate/seed a real local database. |
 | BUG-013 | Medium | Email notifications | `@Async` is bypassed by self-invocation, so email retries block the publishing thread. |
 | BUG-014 | Low | Money | Booking-reminder amounts use binary floating point instead of decimal money. |
+| BUG-015 | Medium | Leads / follow-up | Create Lead saves the lead and its requested follow-up reminder in separate, non-atomic requests. |
 
 ---
 
@@ -399,6 +400,29 @@ Use `BigDecimal` end-to-end and a fixed database precision/scale consistent with
 
 ---
 
+## BUG-015 — Create Lead follow-up scheduling is non-atomic
+
+**Severity:** Medium
+**Confidence:** Confirmed by code path
+
+### Evidence
+
+- The Create Lead payload includes `followUpDate`, and the lead is created first at `../travelcrmfe/travelcrmfrontend/src/features/leads/pages/CreateLead.jsx:2088-2115`.
+- Only after that request succeeds, the page makes a second `addLog` request with `createReminder: true` at `CreateLead.jsx:2119-2126`.
+- Failure of the second request is reduced to a warning and the already-created lead remains saved at `CreateLead.jsx:2127-2129`.
+- The first request persists the date on the lead at `src/main/java/com/crm/travelcrm/lead/service/LeadServiceImpl.java:406-410`.
+- The actual reminder is created only through `LeadLogServiceImpl.addLog` at `src/main/java/com/crm/travelcrm/lead/service/LeadLogServiceImpl.java:63-88` and `198-206`.
+
+### Impact
+
+A network interruption, expired session, permission change, or server error between the two requests leaves a lead whose follow-up date appears saved but has no corresponding log/reminder. The user can reasonably believe the follow-up was scheduled, so a sales callback can be missed. Retrying the whole form risks creating a duplicate lead instead of repairing the reminder.
+
+### Recommended fix
+
+Move lead creation and optional follow-up log/reminder creation behind one backend command and transaction. If reminder delivery requires asynchronous processing, commit a durable outbox/job in the same transaction. Return the complete outcome from the create endpoint and add rollback and retry/idempotency tests.
+
+---
+
 ## Recommended repair order
 
 1. Fix BUG-001 so the application and context suite can boot predictably.
@@ -408,6 +432,7 @@ Use `BigDecimal` end-to-end and a fixed database precision/scale consistent with
 5. Replace count-based identifiers and quota checks (BUG-008 and BUG-010).
 6. Repair storage lifecycle, analytics, and test isolation.
 7. Address the latent email worker and decimal type cleanup.
+8. Make Create Lead follow-up scheduling atomic (BUG-015).
 
 ## Regression tests to add
 
@@ -420,3 +445,4 @@ Use `BigDecimal` end-to-end and a fixed database precision/scale consistent with
 - Parallel create tests for quote/customer/vendor/billing numbers and plan caps.
 - Parallel same-IP quotation-view increments.
 - Upload replacement/deletion tests proving both Cloudinary and metering cleanup.
+- Create Lead follow-up creation where reminder/log persistence fails, proving no partial lead state is committed.

@@ -439,8 +439,8 @@ public class DevDataSeeder implements CommandLineRunner {
         String[] names = { "Anushka Narkhede", "Sachin Kumar", "Meera Reddy", "Deepak Mishra", "Neha Kapoor" };
         LeadSource[] sources = { LeadSource.WEBSITE, LeadSource.REFERRAL, LeadSource.INSTAGRAM,
                 LeadSource.GOOGLE_ADS, LeadSource.WHATSAPP };
-        LeadType[] types = { LeadType.FRESH_LEAD, LeadType.REPEAT_CUSTOMER, LeadType.CORPORATE,
-                LeadType.VIP, LeadType.FRESH_LEAD };
+        LeadType[] types = { LeadType.FRESH, LeadType.WARM, LeadType.HOT,
+                LeadType.COLD, LeadType.FRESH };
         LeadStage[] stages = { LeadStage.NEW_LEAD, LeadStage.CONTACTED, LeadStage.FOLLOW_UP,
                 LeadStage.QUALIFIED, LeadStage.PROPOSAL_SENT };
 

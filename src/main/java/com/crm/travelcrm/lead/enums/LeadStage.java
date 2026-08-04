@@ -28,6 +28,9 @@ public enum LeadStage {
 
     @JsonCreator
     public static LeadStage fromValue(String value) {
+        // Null/blank yields null so bean validation reports it as a field error, rather than
+        // Jackson throwing first and producing a 400 the form cannot place beside an input.
+        if (value == null || value.isBlank()) return null;
         for (LeadStage stage : values()) {
             if (stage.displayName.equalsIgnoreCase(value)
                     || stage.name().equalsIgnoreCase(value)) {

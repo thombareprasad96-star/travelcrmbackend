@@ -95,4 +95,23 @@ public class FleetTrip extends BaseTenantEntity {
 
     @Column(name = "remarks", columnDefinition = "TEXT")
     private String remarks;
+
+    // ── Cross-border money ──────────────────────────────────────────────────
+    // The office sets ONE rate for the whole trip, once, and every foreign-currency cost row on it
+    // inherits that rate at write time. This is why no client ever sends an exchange rate: a driver
+    // standing at the Sunauli border with a Bhansar receipt in NPR types NPR, and never sees, knows
+    // or influences the conversion. The rate is frozen onto each row as it is written, so a later
+    // edit here can never silently restate costs that were already recorded and reported.
+
+    /** Foreign currency in use on this trip, e.g. NPR. Null for a purely domestic trip. */
+    @Column(name = "fx_currency", length = 3)
+    private String fxCurrency;
+
+    /**
+     * Units of base currency per one {@link #fxCurrency}. {@code numeric(18,8)} deliberately — at
+     * {@code numeric(14,2)} a rate of 0.625 stores as 0.63, and NPR 100,000 of Bhansar converts to
+     * Rs 63,000 instead of Rs 62,500.
+     */
+    @Column(name = "fx_rate", precision = 18, scale = 8)
+    private BigDecimal fxRate;
 }

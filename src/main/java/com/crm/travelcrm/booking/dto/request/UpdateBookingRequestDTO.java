@@ -7,6 +7,7 @@
 package com.crm.travelcrm.booking.dto.request;
 
 import com.crm.travelcrm.booking.enums.BookingStatus;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 import lombok.Getter;
 import lombok.Setter;
@@ -14,6 +15,7 @@ import lombok.Setter;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.UUID;
 
 @Getter
 @Setter
@@ -24,7 +26,19 @@ public class UpdateBookingRequestDTO {
 
     private String destination;
 
-    @FutureOrPresent(message = "Travel date cannot be in the past")
+    /**
+     * Travel date. Deliberately NOT {@code @FutureOrPresent}, unlike the create DTO.
+     *
+     * <p>A booking spends most of its life with a travel date in the past — mid-trip, or travelled
+     * and awaiting final settlement — and the edit form round-trips every field it loaded. Validating
+     * this the way create does made a booking permanently uneditable the day its travel date passed:
+     * the amount could no longer be corrected, the assignee could not be changed, services could not
+     * be added. The rule belongs on create, where "you cannot schedule a trip into the past" is
+     * actually true; here it only ever rejected an unchanged value.
+     *
+     * <p>Moving a date backwards remains a client-side concern — the form still refuses a date the
+     * clerk edits into the past, and leaves an untouched one alone.
+     */
     private LocalDate travelDate;
 
     private LocalDate bookingDate;
@@ -47,6 +61,13 @@ public class UpdateBookingRequestDTO {
     private Boolean overseasTourPackage;
 
     private List<String> services;
+
+    /** Editable traveller, departure, itinerary, and trip-note snapshot. */
+    @Valid
+    private TripSnapshotRequest tripSnapshot;
+
+    /** Optional assignee change, resolved tenant-safely by public UUID. */
+    private UUID assignedUserId;
 
     // Amount already collected — ABSOLUTE value (not an increment). Server re-derives
     // paymentStatus / pendingAmount and rejects a value above total payable.

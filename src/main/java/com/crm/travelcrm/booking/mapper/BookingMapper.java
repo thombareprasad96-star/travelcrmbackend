@@ -55,6 +55,13 @@ public interface BookingMapper {
     @Mapping(target = "ownerUserId",            ignore = true)  // stamped on persist by OwnershipEntityListener
     @Mapping(target = "assignedUserId",         ignore = true)  // resolved by BookingAssigneeResolver
                                                                 // (dto carries a publicId, entity a Long id)
+    @Mapping(target = "customerId",             ignore = true)  // resolved by CustomerService.resolveOrCreate
+                                                                // from the nested `customer` block
+    @Mapping(target = "customerPublicId",       ignore = true)  // stamped by the service alongside customerId
+    @Mapping(target = "leadId",                 ignore = true)  // dto carries leadPublicId; the service
+                                                                // resolves it tenant-scoped to a Long
+    @Mapping(target = "tripSnapshot",           ignore = true)  // built by the service (needs the saved
+                                                                // Booking for the back-reference)
     Booking toEntity(CreateBookingRequestDTO dto);
 
     // ── UpdateBookingRequestDTO → Booking (partial patch) ─────────────────────
@@ -69,6 +76,8 @@ public interface BookingMapper {
     @Mapping(target = "tenantId",               ignore = true)  // never changeable
     @Mapping(target = "bookingCode",            ignore = true)  // never changeable
     @Mapping(target = "customerId",             ignore = true)  // never changeable after creation
+    @Mapping(target = "customerPublicId",       ignore = true)  // never changeable after creation
+    @Mapping(target = "tripSnapshot",           ignore = true)  // updated explicitly as an owned aggregate
     @Mapping(target = "customerNameSnapshot",   ignore = true)
     @Mapping(target = "destinationId",          ignore = true)  // resolved by service if destination changed
     @Mapping(target = "destinationSnapshot",    ignore = true)
@@ -95,8 +104,7 @@ public interface BookingMapper {
     @Mapping(target = "deletedBy",              ignore = true)
     @Mapping(target = "version",                ignore = true)  // optimistic-lock version, DB owns this
     @Mapping(target = "ownerUserId",            ignore = true)  // owner never changes after creation
-    @Mapping(target = "assignedUserId",         ignore = true)  // set at create/convert; reassignment
-                                                                // is not part of the edit form yet
+    @Mapping(target = "assignedUserId",         ignore = true)  // tenant-safe resolution in service
     void updateEntity(UpdateBookingRequestDTO dto, @MappingTarget Booking booking);
 
     // ── Booking → BookingResponseDTO (full detail) ────────────────────────────
@@ -115,6 +123,19 @@ public interface BookingMapper {
     @Mapping(target = "pendingAmount",    expression = "java(booking.getPendingAmount())")
     @Mapping(target = "assignedUserId",   expression = "java(assignees.publicIdOf(booking.getAssignedUserId()))")
     @Mapping(target = "assignedUserName", expression = "java(assignees.nameOf(booking.getAssignedUserId()))")
+    // The API exposes UUIDs, the entity holds internal Longs alongside their denormalised publicIds.
+    // Both are explicit because the field NAMES collide (entity customerId:Long vs dto customerId:UUID)
+    // and MapStruct would otherwise try to convert a Long into a UUID and fail the build.
+    @Mapping(target = "customerId",    source = "customerPublicId")
+    @Mapping(target = "leadId",        source = "sourceLeadPublicId")
+    // Never populated by any code path — the column exists but nothing writes it. Left on the DTO
+    // for wire compatibility; ignored here so MapStruct does not attempt Long -> UUID.
+    @Mapping(target = "destinationId", ignore = true)
+    // Deliberately NOT mapped: the association is LAZY, and mapping it here would fire per row on
+    // every list/page response — plus a second and third query each for its itinerary legs and
+    // assistance types. The service attaches it on the single-booking reads only, where the detail
+    // screen actually needs it. See BookingServiceImpl.toResponse(Booking).
+    @Mapping(target = "tripSnapshot",  ignore = true)
     BookingResponseDTO toResponse(Booking booking, @Context BookingAssigneeView assignees);
 
     // ── Booking → BookingSummaryDTO (restricted view) ─────────────────────────

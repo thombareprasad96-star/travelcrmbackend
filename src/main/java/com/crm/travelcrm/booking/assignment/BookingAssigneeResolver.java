@@ -74,6 +74,15 @@ public class BookingAssigneeResolver {
         return resolve(requestedPublicId, currentUserProvider.currentUserIdOrNull(), tenantId);
     }
 
+    /**
+     * Assignee for an existing booking: keep the current assignee when omitted, otherwise validate
+     * the requested public UUID against the same tenant-scoped eligible pool used at creation.
+     */
+    @Transactional(readOnly = true)
+    public Long resolveForUpdate(UUID requestedPublicId, Long currentAssigneeId, Long tenantId) {
+        return resolve(requestedPublicId, currentAssigneeId, tenantId);
+    }
+
     /** The eligible pool for the "Assign To" dropdown, name-ordered. */
     @Transactional(readOnly = true)
     public List<User> eligibleUsers(Long tenantId) {

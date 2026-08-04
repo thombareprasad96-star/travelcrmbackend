@@ -7,6 +7,7 @@ import lombok.experimental.SuperBuilder;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 @Entity
 @Table(name = "hotel_room_types",
@@ -44,4 +45,17 @@ public class RoomType extends BaseEntity {
     @Column(name = "image_url", length = 500)
     @Builder.Default
     private List<String> images = new ArrayList<>();
+
+    /**
+     * The catalog room this row projects, when the parent hotel was imported. Lets a re-sync UPSERT
+     * the row instead of deleting and recreating it — recreating would mint a new publicId on every
+     * sync and orphan any quotation or booking line that named the previous one.
+     */
+    @Column(name = "platform_source_public_id")
+    private UUID platformSourcePublicId;
+
+    /** Withdrawn room categories stay for history; only active ones are offered. */
+    @Column(nullable = false)
+    @Builder.Default
+    private boolean active = true;
 }

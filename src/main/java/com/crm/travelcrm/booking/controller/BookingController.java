@@ -1,17 +1,21 @@
 package com.crm.travelcrm.booking.controller;
 
 
+import com.crm.travelcrm.booking.dto.request.BookingFinancialPreviewRequest;
 import com.crm.travelcrm.booking.dto.request.CancelBookingRequestDTO;
 import com.crm.travelcrm.booking.dto.request.CreateBookingRequestDTO;
 import com.crm.travelcrm.booking.dto.request.PaymentUpdateRequestDTO;
 import com.crm.travelcrm.booking.dto.request.StatusUpdateRequestDTO;
 import com.crm.travelcrm.booking.dto.request.UpdateBookingRequestDTO;
+import com.crm.travelcrm.booking.dto.response.BookingFinancialPreviewResponse;
 import com.crm.travelcrm.booking.dto.response.BookingPageSummaryResponseDTO;
 import com.crm.travelcrm.booking.dto.response.BookingResponseDTO;
 import com.crm.travelcrm.booking.dto.response.BookingStatsResponseDTO;
+import com.crm.travelcrm.booking.dto.response.BookingTimelineEventDTO;
 import com.crm.travelcrm.booking.enums.BookingStatus;
 import com.crm.travelcrm.booking.enums.PaymentStatus;
 import com.crm.travelcrm.booking.service.BookingService;
+import com.crm.travelcrm.booking.service.BookingTimelineService;
 
 import com.crm.travelcrm.booking.service.CsvExportService;
 import com.crm.travelcrm.common.dto.ApiResponse;
@@ -42,6 +46,7 @@ BookingController {
     private static final Logger log = LogManager.getLogger(BookingController.class);
 
     private final BookingService bookingService;
+    private final BookingTimelineService bookingTimelineService;
     private final CsvExportService csvExportService;
 
 
@@ -52,10 +57,30 @@ BookingController {
     @PreAuthorize("hasAuthority('BOOKING_CREATE')")
     public ResponseEntity<ApiResponse<BookingResponseDTO>> create(
             @Valid @RequestBody CreateBookingRequestDTO request) {
-        log.info("POST /api/bookings - customer: {}", request.getCustomerId());
+        // Log the mode, never the identifiers — the "new customer" branch carries a name, phone and
+        // email straight from the form, and access logs are not the place for a customer's contact
+        // details. The service logs the resolved customer CODE once it exists.
+        log.info("POST /api/bookings - customer mode: {}",
+                request.getCustomer() != null && request.getCustomer().isExistingMode()
+                        ? "existing" : "new");
         BookingResponseDTO response = bookingService.create(request);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.success("Booking created successfully", response, 201));
+    }
+
+    /**
+     * Dry-run of the money a create would stamp — GST/TCS/total/netProfit/paymentStatus under this
+     * tenant's accounting settings. Powers the create form's live computed panel, so the browser
+     * never computes tax itself. Gated BOOKING_CREATE (its only consumer is the create form, and
+     * the response carries netProfit). Deliberately not logged per call: it fires on every
+     * debounced keystroke of the amount fields.
+     */
+    @PostMapping("/preview")
+    @PreAuthorize("hasAuthority('BOOKING_CREATE')")
+    public ResponseEntity<ApiResponse<BookingFinancialPreviewResponse>> previewFinancials(
+            @Valid @RequestBody BookingFinancialPreviewRequest request) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Booking financials computed", bookingService.previewFinancials(request)));
     }
 
     // Lead → Booking conversion lives on the lead-centric path and is handled by
@@ -80,6 +105,15 @@ BookingController {
         log.info("GET /api/bookings/{}", publicId);
         return ResponseEntity.ok(ApiResponse.success("Booking fetched successfully",
                 bookingService.getById(publicId)));
+    }
+
+    /** Chronological operational audit used by the Booking Details Activity tab. */
+    @GetMapping("/{publicId}/timeline")
+    public ResponseEntity<ApiResponse<List<BookingTimelineEventDTO>>> getTimeline(
+            @PathVariable UUID publicId) {
+        log.info("GET /api/bookings/{}/timeline", publicId);
+        return ResponseEntity.ok(ApiResponse.success("Booking timeline fetched successfully",
+                bookingTimelineService.getTimeline(publicId)));
     }
 
     // ── Get by Code ──────────────────────────────────────────────────────────

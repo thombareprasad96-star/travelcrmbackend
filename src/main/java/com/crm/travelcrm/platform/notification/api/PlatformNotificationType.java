@@ -21,6 +21,12 @@ public final class PlatformNotificationType {
     public static final String UPGRADE_REQUEST_CREATED        = "UPGRADE_REQUEST_CREATED";
     public static final String SUBAGENT_LICENSE_REQUEST_CREATED = "SUBAGENT_LICENSE_REQUEST_CREATED";
 
+    /** A tenant wants a hotel booked. Nothing moves until a SuperAdmin works it with the supplier. */
+    public static final String MARKETPLACE_BOOKING_REQUESTED  = "MARKETPLACE_BOOKING_REQUESTED";
+
+    /** A tenant wants out of a booking already committed to a supplier — always a human decision. */
+    public static final String MARKETPLACE_CANCEL_REQUESTED   = "MARKETPLACE_CANCEL_REQUESTED";
+
     // ── Health ───────────────────────────────────────────────────────────────────────────────
     public static final String USAGE_LIMIT_EXCEEDED   = "USAGE_LIMIT_EXCEEDED";
     public static final String TENANT_PAST_DUE        = "TENANT_PAST_DUE";
@@ -32,4 +38,5 @@ public final class PlatformNotificationType {
     public static final String REF_UPGRADE_REQUEST    = "UPGRADE_REQUEST";
     public static final String REF_SUBAGENT_LICENSE   = "SUBAGENT_LICENSE";
     public static final String REF_SUBSCRIPTION       = "SUBSCRIPTION";
+    public static final String REF_MARKETPLACE_BOOKING = "MARKETPLACE_BOOKING";
 }
