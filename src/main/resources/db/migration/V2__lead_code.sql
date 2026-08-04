@@ -2506,3 +2506,1296 @@ END $do$;
 --   -- never bought. Expect 0 rows.
 --   SELECT booking_code, status, voucher_status FROM platform_hotel_bookings
 --   WHERE voucher_status = 'ISSUED' AND status NOT IN ('CONFIRMED','CANCEL_REQUESTED','CANCELLED');
+
+
+-- ╔══════════════════════════════════════════════════════════════════════════╗
+-- ║  PART 16 — Hotel marketplace: cancellation consent + supplied vouchers   ║
+-- ╚══════════════════════════════════════════════════════════════════════════╝
+--
+-- Two gaps found by auditing the implementation against
+-- docs/HOTEL-MASTER-MARKETPLACE-BOOKING-DESIGN.md, where the DESIGN was the better answer.
+--
+-- DEPENDS ON PARTS 14-15 ABOVE.
+
+-- ── 16.1  The cancellation quote the tenant has to accept (design §9 clauses 1-3) ──
+-- PART 15 let a SuperAdmin set the cancellation charge unilaterally. That is inconsistent with the
+-- price-revision flow three columns over, which is scrupulous about not moving a tenant's money
+-- without their consent — and a cancellation charge of 500 vs 4,000 is exactly as consequential as
+-- a price increase. So the charge is now PROPOSED here and accepted separately.
+--
+-- Beside the settled figures, never on top of them, for the same reason revised_tenant_payable sits
+-- beside tenant_payable: a proposed charge written into cancellation_charge reads as "this is what
+-- you were charged" to every screen, for a cancellation that has not happened and may never.
+ALTER TABLE platform_hotel_bookings
+    ADD COLUMN IF NOT EXISTS quoted_cancellation_charge    numeric(15,2),
+    ADD COLUMN IF NOT EXISTS quoted_retained_earning       numeric(15,2),
+    ADD COLUMN IF NOT EXISTS cancellation_quote_note       text,
+    ADD COLUMN IF NOT EXISTS cancellation_quoted_at        timestamp,
+    ADD COLUMN IF NOT EXISTS cancellation_quote_expires_at timestamp;
+
+-- The new CANCELLATION_QUOTED state. The status CHECK constraint was written out in full in PART 14
+-- and does not know about it; an un-refreshed constraint fails at the first quote INSERT, not at boot.
+DO $do$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint
+               WHERE conname = 'platform_hotel_bookings_status_check')
+       AND NOT EXISTS (SELECT 1 FROM pg_constraint
+                       WHERE conname = 'platform_hotel_bookings_status_check'
+                         AND pg_get_constraintdef(oid) LIKE '%CANCELLATION_QUOTED%') THEN
+        ALTER TABLE platform_hotel_bookings DROP CONSTRAINT platform_hotel_bookings_status_check;
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                   WHERE conname = 'platform_hotel_bookings_status_check') THEN
+        ALTER TABLE platform_hotel_bookings ADD CONSTRAINT platform_hotel_bookings_status_check
+            CHECK (status IN (
+                'REQUESTED','UNDER_REVIEW','TENANT_APPROVAL_REQUIRED','TENANT_ACCEPTED',
+                'CONFIRMED','REJECTED','CANCEL_REQUESTED','CANCELLATION_QUOTED','CANCELLED','EXPIRED'));
+    END IF;
+END $do$;
+
+-- Drives the quote-expiry sweep. Partial: almost no row has an open quote.
+CREATE INDEX IF NOT EXISTS idx_phb_cancel_quote_expiry
+    ON platform_hotel_bookings (cancellation_quote_expires_at)
+    WHERE cancellation_quote_expires_at IS NOT NULL AND deleted_at IS NULL;
+
+-- ── 16.2  Vouchers the hotel supplied (design §7) ──────────────────────────
+-- §7 offers two voucher sources and lists the SuperAdmin upload FIRST, which is the right order for
+-- an ON_REQUEST model: the operator confirms by talking to the hotel, and the hotel sends its own
+-- voucher back. Only the system-generated path existed, so that PDF had nowhere to go.
+ALTER TABLE platform_hotel_bookings
+    ADD COLUMN IF NOT EXISTS voucher_source varchar(20) NOT NULL DEFAULT 'GENERATED';
+
+DO $do$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                   WHERE conname = 'platform_hotel_bookings_voucher_source_check') THEN
+        ALTER TABLE platform_hotel_bookings
+            ADD CONSTRAINT platform_hotel_bookings_voucher_source_check
+            CHECK (voucher_source IN ('GENERATED','UPLOADED'));
+    END IF;
+END $do$;
+
+-- A SIDE TABLE, not a bytea column on platform_hotel_bookings. That table is read by every
+-- SuperAdmin queue page, every tenant list and every scheduler sweep; a blob on it would drag a
+-- multi-megabyte PDF through all of them, and Hibernate's lazy-basic fetch does not reliably avoid
+-- that without bytecode enhancement.
+--
+-- `content` is bytea, NOT a Postgres large object: @Lob on PostgreSQL maps to the oid API, which
+-- stores a pointer into pg_largeobject and leaks the object when the row is deleted. bytea keeps
+-- the bytes in the row, where the ordinary delete and backup paths already handle them.
+--
+-- Never Cloudinary: the document names the guest, their dates and their confirmation number, and
+-- Cloudinary URLs are public and unauthenticated. Same rule as traveler documents.
+CREATE TABLE IF NOT EXISTS platform_hotel_voucher_files (
+    id                         bigserial PRIMARY KEY,
+    public_id                  uuid         NOT NULL DEFAULT gen_random_uuid(),
+
+    hotel_booking_id           bigint       NOT NULL
+        REFERENCES platform_hotel_bookings (id),
+
+    file_name                  varchar(255) NOT NULL,
+    content_type               varchar(100) NOT NULL,
+    size_bytes                 bigint       NOT NULL,
+    content                    bytea        NOT NULL,
+    uploaded_by_super_admin_id bigint,
+
+    created_by                 varchar(255),
+    updated_by                 varchar(255),
+    created_at                 timestamp,
+    updated_at                 timestamp,
+    deleted_at                 timestamp,
+    deleted_by                 varchar(255),
+
+    CONSTRAINT uq_phvf_public_id UNIQUE (public_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_phvf_booking ON platform_hotel_voucher_files (hotel_booking_id);
+
+-- One CURRENT file per booking; a re-upload soft-deletes the old row and inserts a new one, so the
+-- predicate is what makes the uniqueness meaningful rather than blocking the replacement.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_phvf_booking_current
+    ON platform_hotel_voucher_files (hotel_booking_id)
+    WHERE deleted_at IS NULL;
+
+-- ── Verification ────────────────────────────────────────────────────────────
+--   -- A quote that was accepted must have settled at the quoted figure, not some other number.
+--   -- Expect 0 rows.
+--   SELECT booking_code, quoted_cancellation_charge, cancellation_charge
+--   FROM platform_hotel_bookings
+--   WHERE status = 'CANCELLED' AND quoted_cancellation_charge IS NOT NULL
+--     AND cancellation_charge IS DISTINCT FROM quoted_cancellation_charge
+--     AND cancelled_by_super_admin_id IS NULL;   -- admin override is allowed to differ
+--
+--   -- An UPLOADED voucher with no file behind it, or a file with no booking pointing at it.
+--   SELECT b.booking_code FROM platform_hotel_bookings b
+--   WHERE b.voucher_source = 'UPLOADED' AND NOT EXISTS (
+--       SELECT 1 FROM platform_hotel_voucher_files f
+--       WHERE f.hotel_booking_id = b.id AND f.deleted_at IS NULL);
+
+-- ── 16.3  Audit actions for the cancellation-consent trail ─────────────────
+-- The four MARKETPLACE_CANCELLATION_* actions added with the consent flow. Generated from
+-- PlatformAuditAction so the list cannot drift by hand — which is exactly how it drifted the
+-- first time: PART 16 refreshed the STATUS constraint and forgot this one, and
+-- SchemaEnumConstraintValidator failed the boot rather than letting the first quote 500 at INSERT.
+DO $do$
+DECLARE
+    existing text;
+BEGIN
+    SELECT pg_get_constraintdef(oid) INTO existing
+    FROM pg_constraint WHERE conname = 'platform_audit_logs_action_check';
+
+    IF existing IS NULL OR existing NOT LIKE '%MARKETPLACE_CANCELLATION_QUOTED%' THEN
+        ALTER TABLE platform_audit_logs DROP CONSTRAINT IF EXISTS platform_audit_logs_action_check;
+        ALTER TABLE platform_audit_logs ADD CONSTRAINT platform_audit_logs_action_check
+            CHECK (action IN (
+                'ANNOUNCEMENT_SEND',
+                'BILLING_ISSUE',
+                'BILLING_MARK_PAID',
+                'BILLING_MARK_UNPAID',
+                'BILLING_VOID',
+                'CONFIG_CHANGE',
+                'DATA_EXPORT',
+                'FEATURE_FLAG_CHANGE',
+                'IMPERSONATION_END',
+                'IMPERSONATION_START',
+                'LOGIN',
+                'LOGIN_FAILED',
+                'LOGIN_NOTIFICATION',
+                'LOGIN_NOTIFICATION_FAILED',
+                'LOGOUT',
+                'MAINTENANCE_TOGGLE',
+                'MARKETPLACE_BOOKING_APPROVE',
+                'MARKETPLACE_BOOKING_CANCEL',
+                'MARKETPLACE_BOOKING_CANCEL_REQUESTED',
+                'MARKETPLACE_BOOKING_CRM_SYNC_FAILED',
+                'MARKETPLACE_BOOKING_REJECT',
+                'MARKETPLACE_BOOKING_REQUEST',
+                'MARKETPLACE_BOOKING_REVIEW',
+                'MARKETPLACE_BOOKING_REVISION_ACCEPTED',
+                'MARKETPLACE_BOOKING_REVISION_DECLINED',
+                'MARKETPLACE_BOOKING_REVISION_EXPIRED',
+                'MARKETPLACE_BOOKING_REVISION_REQUESTED',
+                'MARKETPLACE_CANCELLATION_QUOTED',
+                'MARKETPLACE_CANCELLATION_QUOTE_ACCEPTED',
+                'MARKETPLACE_CANCELLATION_QUOTE_DECLINED',
+                'MARKETPLACE_CANCELLATION_QUOTE_EXPIRED',
+                'MARKETPLACE_COMMISSION_ACCRUED',
+                'MARKETPLACE_COMMISSION_ADJUSTED',
+                'MARKETPLACE_COMMISSION_REVERSED',
+                'MARKETPLACE_COMMISSION_SETTLED',
+                'MARKETPLACE_VOUCHER_ISSUED',
+                'MARKETPLACE_VOUCHER_REVOKED',
+                'MFA_CHALLENGE',
+                'MFA_DISABLED',
+                'MFA_DISABLE_FAILED',
+                'MFA_ENABLED',
+                'MFA_ENABLE_FAILED',
+                'MFA_SETUP',
+                'MFA_VERIFY',
+                'MFA_VERIFY_FAILED',
+                'PAYMENT_CAPTURED',
+                'PAYMENT_FAILED',
+                'PAYMENT_ORDER_CREATED',
+                'PLAN_ASSIGN',
+                'PLAN_CHANGE',
+                'PLAN_UPDATE',
+                'PLATFORM_HOTEL_CREATE',
+                'PLATFORM_HOTEL_DELETE',
+                'PLATFORM_HOTEL_PUBLISH',
+                'PLATFORM_HOTEL_UNPUBLISH',
+                'PLATFORM_HOTEL_UPDATE',
+                'QUOTA_OVERRIDE',
+                'SUBAGENT_LICENSE_APPROVE',
+                'SUBAGENT_LICENSE_CANCEL',
+                'SUBAGENT_LICENSE_CREATE',
+                'SUBAGENT_LICENSE_REJECT',
+                'SUBSCRIPTION_ACTIVATED',
+                'SUBSCRIPTION_CANCELLED',
+                'SUBSCRIPTION_EXPIRED',
+                'SUPER_ADMIN_INVITE_ACCEPT',
+                'SUPER_ADMIN_INVITE_CREATE',
+                'SUPER_ADMIN_MFA_RESET',
+                'SUPER_ADMIN_PASSWORD_CHANGE',
+                'TENANT_CREATE',
+                'TENANT_HARD_DELETE',
+                'TENANT_PAST_DUE',
+                'TENANT_REACTIVATE',
+                'TENANT_RESTORE',
+                'TENANT_SOFT_DELETE',
+                'TENANT_SUSPEND',
+                'TENANT_UPDATE',
+                'UPGRADE_REQUEST_APPROVE',
+                'UPGRADE_REQUEST_CANCEL',
+                'UPGRADE_REQUEST_CREATE',
+                'UPGRADE_REQUEST_REJECT',
+                'USAGE_LIMIT_EXCEEDED',
+                'USER_FORCE_RESET',
+                'USER_LOCK',
+                'USER_UNLOCK'
+            ));
+    END IF;
+END $do$;
+
+
+-- ╔══════════════════════════════════════════════════════════════════════════╗
+-- ║  PART 17 — Communication Center: the omnichannel unified inbox           ║
+-- ╚══════════════════════════════════════════════════════════════════════════╝
+--
+-- One thread per contact per channel, one timeline row per message, across WhatsApp, email, SMS,
+-- calls, internal chat and notes. See docs/COMMUNICATION_CENTER_DESIGN.md.
+--
+-- ddl-auto is `validate` on EVERY profile, local included, so every field on every entity in
+-- com.crm.travelcrm.communication must appear below or the next boot fails with
+-- `Schema-validation: missing table/column`. That is the intended failure.
+--
+-- WHY THIS IS TWELVE TABLES AND NOT FIVE
+-- The product is a single chronological thread. A UNION across per-channel tables cannot be indexed
+-- for "newest 30 rows of this conversation" and degrades with every channel added, so comm_messages
+-- is one table for every channel and the channel-specific fields live beside it: comm_message_emails
+-- for RFC headers, comm_calls for call detail, comm_attachments for bytes. Notes are messages with a
+-- visibility column; internal chat is a conversation with a member table. Both choices buy full-text
+-- search, attachments and mentions with no second subsystem.
+--
+-- THREE THINGS IN THIS PART, AND ALL THREE MUST SHIP TOGETHER
+--   17.1-17.12  DDL
+--   17.13       user_permissions backfill  — without it, every user whose permission screen has
+--               EVER been saved sees an empty Communication screen, with no error and no log line
+--               (EffectivePermissionResolver treats a non-null saved map as authoritative, so a
+--               newly added enum constant is simply absent for them).
+--   17.14       tenant_modules backfill    — without it, EVERY existing tenant is 403
+--               MODULE_NOT_ENABLED the moment the ModuleAccessFilter rule lands.
+--               PlanCatalogueInitializer's plan-level grant CANNOT reach them:
+--               TenantEntitlementService returns the tenant's own tenant_modules snapshot whenever
+--               it is non-empty and never consults the plan, and TenantServiceImpl snapshots
+--               modules at tenant creation. No tenant_modules backfill has ever been written in
+--               this repository before — this is the first.
+
+
+-- ── 17.1  comm_contact_identities — the canonical address everything hangs off ──────────────
+-- Not Customer and not Lead: the same human is routinely an unknown WhatsApp number today, a Lead
+-- tomorrow and a Customer next week, and is a Lead again next season. Keying a thread on customer_id
+-- orphans everything that arrived before they became one; keying it on lead_id fragments the thread
+-- every time a new enquiry opens a new lead. The address is the only thing that stays put.
+--
+-- identity_value is ALWAYS canonical — E.164 via PhoneCanonicalizer (the same authority
+-- CustomerMatcher uses, so a thread and a customer match can never disagree) or lower-cased email.
+CREATE TABLE IF NOT EXISTS comm_contact_identities (
+    id                  bigserial PRIMARY KEY,
+    public_id           uuid          NOT NULL,
+    tenant_id           bigint        NOT NULL,
+
+    identity_type       varchar(10)   NOT NULL,
+    identity_value      varchar(190)  NOT NULL,
+    display_name        varchar(150),
+
+    customer_id         bigint,
+    customer_public_id  uuid,
+    lead_id             bigint,
+    lead_public_id      uuid,
+
+    unreachable_since   timestamp,
+    unreachable_reason  varchar(255),
+
+    created_by          varchar(255),
+    updated_by          varchar(255),
+    created_at          timestamp,
+    updated_at          timestamp,
+    deleted_at          timestamp,
+    deleted_by          varchar(255),
+
+    CONSTRAINT uq_cci_public_id UNIQUE (public_id),
+    CONSTRAINT comm_contact_identities_type_check CHECK (identity_type IN ('PHONE','EMAIL'))
+);
+
+-- The natural key. The `deleted_at IS NULL` arm is load-bearing and easy to get wrong: without it a
+-- soft-deleted row occupies the key forever while the ...AndDeletedAtIsNull finder cannot see it, so
+-- the next inbound message takes the INSERT branch and hits the constraint. Same trap PART 14
+-- documented for uq_bksi_marketplace.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cci_identity
+    ON comm_contact_identities (tenant_id, identity_type, identity_value)
+    WHERE deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_cci_tenant   ON comm_contact_identities (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_cci_customer ON comm_contact_identities (customer_id)
+    WHERE customer_id IS NOT NULL AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_cci_lead     ON comm_contact_identities (lead_id)
+    WHERE lead_id IS NOT NULL AND deleted_at IS NULL;
+
+
+-- ── 17.2  comm_conversations — one thread ───────────────────────────────────────────────────
+-- TWO CLOCKS, AND BOTH ARE STORED. last_message_at orders the inbox. last_inbound_at is when the
+-- CONTACT last wrote, and it is what opens and closes WhatsApp's 24-hour customer service window —
+-- outside it Meta accepts approved templates only, so the send endpoint reads this column before
+-- accepting free text. Deriving it from the newest message would mean loading messages to answer a
+-- question the composer asks on every keystroke.
+--
+-- booking_public_id / quotation_public_id are carried HERE as uuids rather than as a column on
+-- `bookings`. Booking is @Audited: every column added there needs its twin in bookings_aud or EVERY
+-- write to EVERY booking fails. PART 14 restructured the whole marketplace link for the same reason.
+CREATE TABLE IF NOT EXISTS comm_conversations (
+    id                      bigserial PRIMARY KEY,
+    public_id               uuid          NOT NULL,
+    tenant_id               bigint        NOT NULL,
+
+    kind                    varchar(10)   NOT NULL DEFAULT 'CUSTOMER',
+    channel                 varchar(20)   NOT NULL,
+    contact_identity_id     bigint,
+    channel_account_id      bigint,
+    subject                 varchar(255),
+
+    contact_name            varchar(150),
+    contact_value           varchar(190),
+
+    owner_user_id           bigint,
+    assigned_user_id        bigint,
+    assigned_user_public_id uuid,
+    assigned_user_name      varchar(150),
+
+    status                  varchar(10)   NOT NULL DEFAULT 'OPEN',
+    priority                varchar(10)   NOT NULL DEFAULT 'NORMAL',
+    snoozed_until           timestamp,
+    pinned                  boolean       NOT NULL DEFAULT false,
+
+    last_message_at         timestamp,
+    last_inbound_at         timestamp,
+    last_outbound_at        timestamp,
+    last_direction          varchar(10),
+    last_message_preview    varchar(300),
+
+    unread_count            integer       NOT NULL DEFAULT 0,
+    message_count           integer       NOT NULL DEFAULT 0,
+
+    lead_id                 bigint,
+    lead_public_id          uuid,
+    customer_id             bigint,
+    customer_public_id      uuid,
+    booking_public_id       uuid,
+    quotation_public_id     uuid,
+
+    created_by              varchar(255),
+    updated_by              varchar(255),
+    created_at              timestamp,
+    updated_at              timestamp,
+    deleted_at              timestamp,
+    deleted_by              varchar(255),
+
+    CONSTRAINT uq_conv_public_id UNIQUE (public_id),
+    CONSTRAINT comm_conversations_kind_check CHECK (kind IN ('CUSTOMER','INTERNAL')),
+    CONSTRAINT comm_conversations_channel_check CHECK (channel IN (
+        'WHATSAPP','EMAIL','SMS','CALL','INTERNAL_CHAT','INTERNAL_NOTE')),
+    CONSTRAINT comm_conversations_status_check CHECK (status IN (
+        'OPEN','PENDING','SNOOZED','CLOSED')),
+    CONSTRAINT comm_conversations_priority_check CHECK (priority IN (
+        'LOW','NORMAL','HIGH','URGENT')),
+    CONSTRAINT comm_conversations_last_direction_check CHECK (last_direction IS NULL OR last_direction IN (
+        'INBOUND','OUTBOUND','INTERNAL'))
+);
+
+-- The inbox's own sort. Pinned-then-newest is exactly what the list endpoint orders by, so this
+-- covers the hot query rather than merely the tenant predicate.
+CREATE INDEX IF NOT EXISTS idx_conv_inbox
+    ON comm_conversations (tenant_id, pinned DESC, last_message_at DESC)
+    WHERE deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_conv_assignee ON comm_conversations (tenant_id, assigned_user_id)
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_conv_owner    ON comm_conversations (tenant_id, owner_user_id)
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_conv_channel  ON comm_conversations (tenant_id, channel, status)
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_conv_contact  ON comm_conversations (tenant_id, contact_identity_id)
+    WHERE contact_identity_id IS NOT NULL AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_conv_lead     ON comm_conversations (lead_id)
+    WHERE lead_id IS NOT NULL AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_conv_customer ON comm_conversations (customer_id)
+    WHERE customer_id IS NOT NULL AND deleted_at IS NULL;
+-- Only rows the snooze scheduler will ever look at.
+CREATE INDEX IF NOT EXISTS idx_conv_snoozed  ON comm_conversations (snoozed_until)
+    WHERE snoozed_until IS NOT NULL AND deleted_at IS NULL;
+
+
+-- ── 17.3  comm_messages — the unified timeline, and the largest table in the app ────────────
+-- NEVER add a bytea column here: a byte[] is eagerly fetched, so one blob column would drag every
+-- attachment into every inbox page load. Attachments live in 17.5.
+--
+-- occurred_at is distinct from created_at on purpose. created_at is when WE stored the row;
+-- occurred_at is the provider's timestamp for inbound and the send time for outbound. Without the
+-- split, a webhook replayed after an outage reorders a customer's thread.
+CREATE TABLE IF NOT EXISTS comm_messages (
+    id                  bigserial PRIMARY KEY,
+    public_id           uuid          NOT NULL,
+    tenant_id           bigint        NOT NULL,
+
+    conversation_id     bigint        NOT NULL,
+    channel             varchar(20)   NOT NULL,
+    direction           varchar(10)   NOT NULL,
+    visibility          varchar(10)   NOT NULL DEFAULT 'PUBLIC',
+
+    body_text           text,
+    body_html           text,
+
+    status              varchar(10)   NOT NULL DEFAULT 'QUEUED',
+    status_at           timestamp,
+    error_message       text,
+    provider_message_id varchar(190),
+
+    sender_user_id      bigint,
+    sender_name         varchar(150),
+    owner_user_id       bigint,
+
+    template_id         bigint,
+    reply_to_message_id bigint,
+    call_id             bigint,
+    attachment_count    integer       NOT NULL DEFAULT 0,
+    lead_public_id      uuid,
+
+    occurred_at         timestamp     NOT NULL,
+
+    created_by          varchar(255),
+    updated_by          varchar(255),
+    created_at          timestamp,
+    updated_at          timestamp,
+    deleted_at          timestamp,
+    deleted_by          varchar(255),
+
+    CONSTRAINT uq_msg_public_id UNIQUE (public_id),
+    CONSTRAINT comm_messages_channel_check CHECK (channel IN (
+        'WHATSAPP','EMAIL','SMS','CALL','INTERNAL_CHAT','INTERNAL_NOTE')),
+    CONSTRAINT comm_messages_direction_check CHECK (direction IN (
+        'INBOUND','OUTBOUND','INTERNAL')),
+    CONSTRAINT comm_messages_status_check CHECK (status IN (
+        'QUEUED','SENT','DELIVERED','READ','FAILED','SKIPPED','RECEIVED')),
+    CONSTRAINT comm_messages_visibility_check CHECK (visibility IN (
+        'PUBLIC','INTERNAL','PRIVATE'))
+);
+
+-- FULL-TEXT SEARCH. This is the first tsvector/GIN index in this codebase — there is no precedent
+-- elsewhere to copy, so the reasoning is written out here.
+--
+-- A GENERATED column rather than a trigger: nothing to maintain, nothing to forget on an INSERT
+-- path, and `validate` is satisfied because the entity simply does not map the column (Hibernate
+-- validation does not object to columns an entity does not know about — mapping a tsvector through
+-- JPA buys nothing, and search runs as a native query that passes tenant_id explicitly).
+--
+-- The two-argument to_tsvector('simple', ...) is required: the ONE-argument form depends on
+-- default_text_search_config, is therefore only STABLE rather than IMMUTABLE, and Postgres refuses
+-- it in a generated column. 'simple' is also the right configuration on the merits — these bodies
+-- are routinely Hinglish and transliterated Devanagari, where English stemming harms recall.
+ALTER TABLE comm_messages
+    ADD COLUMN IF NOT EXISTS search_tsv tsvector
+        GENERATED ALWAYS AS (to_tsvector('simple', coalesce(body_text, ''))) STORED;
+
+CREATE INDEX IF NOT EXISTS idx_msg_search ON comm_messages USING GIN (search_tsv);
+
+-- The timeline query, covered end to end.
+CREATE INDEX IF NOT EXISTS idx_msg_timeline
+    ON comm_messages (tenant_id, conversation_id, occurred_at DESC)
+    WHERE deleted_at IS NULL;
+
+-- Inbound idempotency. Interakt's documented response SLA is ~3 seconds, so a slow reply IS a
+-- retry; without this a retry appends a duplicate message to a real customer's thread. Scoped per
+-- tenant because two tenants may legitimately be handed the same provider id.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_msg_provider_id
+    ON comm_messages (tenant_id, provider_message_id)
+    WHERE provider_message_id IS NOT NULL AND deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_msg_owner   ON comm_messages (tenant_id, owner_user_id)
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_msg_sender  ON comm_messages (tenant_id, sender_user_id)
+    WHERE sender_user_id IS NOT NULL AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_msg_channel ON comm_messages (tenant_id, channel, occurred_at DESC)
+    WHERE deleted_at IS NULL;
+-- Only the rows a delivery-status callback will ever touch: a full index on a column that is
+-- terminal for 99% of rows earns nothing.
+CREATE INDEX IF NOT EXISTS idx_msg_pending
+    ON comm_messages (tenant_id, status)
+    WHERE status IN ('QUEUED','SENT') AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_msg_call ON comm_messages (call_id)
+    WHERE call_id IS NOT NULL AND deleted_at IS NULL;
+
+
+-- ── 17.4  comm_message_emails — RFC headers, a side table ───────────────────────────────────
+-- Eight header fields (three of them unbounded address lists), NULL for every WhatsApp, SMS, call
+-- and note row, would be pure width on the hottest table in the application.
+--
+-- message_id_header / in_reply_to / references_header are what make threading work, and they are the
+-- mail system's identifiers, not ours. Threading walks References newest-to-oldest and falls back to
+-- In-Reply-To. Subject matching is deliberately NOT used: "Re: Dubai Package" from two different
+-- customers is one thread under that rule.
+CREATE TABLE IF NOT EXISTS comm_message_emails (
+    id                bigserial PRIMARY KEY,
+    public_id         uuid          NOT NULL,
+    tenant_id         bigint        NOT NULL,
+
+    message_id        bigint        NOT NULL,
+
+    from_address      varchar(320),
+    from_name         varchar(150),
+    to_addresses      text,
+    cc_addresses      text,
+    bcc_addresses     text,
+
+    message_id_header varchar(255),
+    in_reply_to       varchar(255),
+    references_header text,
+
+    folder            varchar(10)   NOT NULL DEFAULT 'INBOX',
+    starred           boolean       NOT NULL DEFAULT false,
+    is_draft          boolean       NOT NULL DEFAULT false,
+    imap_uid          bigint,
+
+    created_by        varchar(255),
+    updated_by        varchar(255),
+    created_at        timestamp,
+    updated_at        timestamp,
+    deleted_at        timestamp,
+    deleted_by        varchar(255),
+
+    CONSTRAINT uq_cme_public_id UNIQUE (public_id),
+    CONSTRAINT comm_message_emails_folder_check CHECK (folder IN (
+        'INBOX','SENT','DRAFTS','ARCHIVE','TRASH'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cme_message
+    ON comm_message_emails (message_id) WHERE deleted_at IS NULL;
+-- Identity is the header, never the IMAP UID: UIDs are per-mailbox and reset whenever UIDVALIDITY
+-- changes, so a re-validated mailbox would otherwise re-import its entire history as new messages.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cme_header_id
+    ON comm_message_emails (tenant_id, message_id_header)
+    WHERE message_id_header IS NOT NULL AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_cme_folder ON comm_message_emails (tenant_id, folder)
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_cme_in_reply_to ON comm_message_emails (tenant_id, in_reply_to)
+    WHERE in_reply_to IS NOT NULL AND deleted_at IS NULL;
+
+
+-- ── 17.5  comm_attachments — bytes in Postgres, NEVER Cloudinary ────────────────────────────
+-- Cloudinary URLs are public and unauthenticated. A passport scan, a payment screenshot or an
+-- invoice PDF arriving on WhatsApp is exactly the class of data TravelerDocument keeps in bytea
+-- behind an ownership check; CloudinaryService.deleteImage also has zero callers, so metered bytes
+-- there only ever grow. Quota is enforced by StorageQuota.enforceWithinQuota BEFORE the bytes are
+-- read, and metered by SUM(size_bytes) — the TravelerDocument pattern.
+CREATE TABLE IF NOT EXISTS comm_attachments (
+    id                bigserial PRIMARY KEY,
+    public_id         uuid          NOT NULL,
+    tenant_id         bigint        NOT NULL,
+
+    message_id        bigint        NOT NULL,
+    file_name         varchar(255)  NOT NULL,
+    content_type      varchar(120),
+    size_bytes        bigint        NOT NULL DEFAULT 0,
+    sha256            varchar(64),
+    content           bytea,
+    direction         varchar(10)   NOT NULL,
+    provider_media_id varchar(190),
+    owner_user_id     bigint,
+
+    created_by        varchar(255),
+    updated_by        varchar(255),
+    created_at        timestamp,
+    updated_at        timestamp,
+    deleted_at        timestamp,
+    deleted_by        varchar(255),
+
+    CONSTRAINT uq_catt_public_id UNIQUE (public_id),
+    CONSTRAINT comm_attachments_direction_check CHECK (direction IN (
+        'INBOUND','OUTBOUND','INTERNAL'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_catt_message ON comm_attachments (tenant_id, message_id)
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_catt_owner   ON comm_attachments (tenant_id, owner_user_id)
+    WHERE deleted_at IS NULL;
+-- Feeds the storage-quota SUM without touching the heap.
+CREATE INDEX IF NOT EXISTS idx_catt_bytes   ON comm_attachments (tenant_id, size_bytes)
+    WHERE deleted_at IS NULL;
+
+
+-- ── 17.6  comm_calls — logging only ─────────────────────────────────────────────────────────
+-- This module never PLACES a call. Rows arrive from a PBX/provider webhook where one is connected,
+-- and by manual entry otherwise. Click-to-call and the in-browser softphone are out of scope: mute /
+-- hold / keypad require a WebRTC browser SDK, which server-side call bridging cannot provide.
+--
+-- `outcome` is a free varchar, not an enum with a CHECK, following the LeadLog.activity_kind
+-- precedent: it is a display/filter label over an open vocabulary that sales teams extend
+-- ("Interested", "Callback requested", "Wrong number"), and an enum would need a constraint refresh
+-- and a production migration for every new one.
+CREATE TABLE IF NOT EXISTS comm_calls (
+    id                  bigserial PRIMARY KEY,
+    public_id           uuid          NOT NULL,
+    tenant_id           bigint        NOT NULL,
+
+    conversation_id     bigint,
+    direction           varchar(10)   NOT NULL,
+    from_number         varchar(30),
+    to_number           varchar(30),
+
+    agent_user_id       bigint,
+    agent_name          varchar(150),
+    provider_call_id    varchar(190),
+    provider            varchar(40),
+
+    started_at          timestamp     NOT NULL,
+    answered_at         timestamp,
+    ended_at            timestamp,
+    duration_seconds    integer       NOT NULL DEFAULT 0,
+
+    outcome             varchar(40),
+    notes               text,
+    follow_up_at        timestamp,
+
+    recording_ref       varchar(255),
+    recording_available boolean       NOT NULL DEFAULT false,
+    owner_user_id       bigint,
+
+    created_by          varchar(255),
+    updated_by          varchar(255),
+    created_at          timestamp,
+    updated_at          timestamp,
+    deleted_at          timestamp,
+    deleted_by          varchar(255),
+
+    CONSTRAINT uq_call_public_id UNIQUE (public_id),
+    CONSTRAINT comm_calls_direction_check CHECK (direction IN ('INCOMING','OUTGOING','MISSED'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_call_list ON comm_calls (tenant_id, started_at DESC)
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_call_direction ON comm_calls (tenant_id, direction, started_at DESC)
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_call_agent ON comm_calls (tenant_id, agent_user_id)
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_call_owner ON comm_calls (tenant_id, owner_user_id)
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_call_conversation ON comm_calls (conversation_id)
+    WHERE conversation_id IS NOT NULL AND deleted_at IS NULL;
+-- Only the rows the "due follow-ups" tile counts.
+CREATE INDEX IF NOT EXISTS idx_call_follow_up ON comm_calls (tenant_id, follow_up_at)
+    WHERE follow_up_at IS NOT NULL AND deleted_at IS NULL;
+-- PBX webhook idempotency, per tenant.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_call_provider_id
+    ON comm_calls (tenant_id, provider_call_id)
+    WHERE provider_call_id IS NOT NULL AND deleted_at IS NULL;
+
+
+-- ── 17.7  comm_templates — the tenant's single template library ─────────────────────────────
+-- Nothing like this existed before: marketing stores subject/body INLINE on every campaign, drip
+-- step and automation trigger, and its `template_name` is a bare string naming a provider-approved
+-- WhatsApp template with no row behind it. WhatsApp quick replies are simply templates with
+-- category = 'QUICK_REPLY' — no second table.
+--
+-- `arity` exists because a mismatch is otherwise silent. WhatsApp bodyValues are POSITIONAL
+-- substitutions for {{1}}, {{2}}, … and the two existing callers already disagree about what that
+-- means: MessageDispatcher passes one whole composed message as a single value, while
+-- QuotationServiceImpl passes three ordered parameters. Nothing anywhere records how many a given
+-- provider template expects, so getting it wrong is a provider-side rejection logged as FAILED with
+-- no explanation.
+CREATE TABLE IF NOT EXISTS comm_templates (
+    id                     bigserial PRIMARY KEY,
+    public_id              uuid          NOT NULL,
+    tenant_id              bigint        NOT NULL,
+
+    channel                varchar(20)   NOT NULL,
+    category               varchar(40),
+    name                   varchar(120)  NOT NULL,
+    subject                varchar(255),
+    body                   text          NOT NULL,
+
+    provider_template_name varchar(120),
+    language_code          varchar(10),
+    arity                  smallint      NOT NULL DEFAULT 0,
+    variables              text,
+
+    status                 varchar(10)   NOT NULL DEFAULT 'DRAFT',
+    usage_count            integer       NOT NULL DEFAULT 0,
+    owner_user_id          bigint,
+
+    created_by             varchar(255),
+    updated_by             varchar(255),
+    created_at             timestamp,
+    updated_at             timestamp,
+    deleted_at             timestamp,
+    deleted_by             varchar(255),
+
+    CONSTRAINT uq_ctpl_public_id UNIQUE (public_id),
+    CONSTRAINT comm_templates_channel_check CHECK (channel IN (
+        'WHATSAPP','EMAIL','SMS','CALL','INTERNAL_CHAT','INTERNAL_NOTE')),
+    CONSTRAINT comm_templates_status_check CHECK (status IN ('DRAFT','ACTIVE','ARCHIVED'))
+);
+
+-- Name is unique per channel within a tenant so a composer's picker is unambiguous.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ctpl_name
+    ON comm_templates (tenant_id, channel, lower(name))
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_ctpl_pick ON comm_templates (tenant_id, channel, status)
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_ctpl_category ON comm_templates (tenant_id, category)
+    WHERE category IS NOT NULL AND deleted_at IS NULL;
+
+
+-- ── 17.8  comm_scheduled_messages — one-off scheduled sends ─────────────────────────────────
+-- Deliberately NOT an automation engine. The repository already has two (marketing campaigns/drips,
+-- and birthday/anniversary triggers) and a third would mean two systems disagreeing about what was
+-- sent to whom. Recurring and triggered sends stay in marketing/; this holds only "send this exact
+-- message to this exact contact at this exact time".
+--
+-- `body` is frozen at schedule time and is NOT re-rendered at send time: the agent approved these
+-- exact words, and a merge tag that resolves differently next Tuesday sends something nobody
+-- reviewed.
+CREATE TABLE IF NOT EXISTS comm_scheduled_messages (
+    id                  bigserial PRIMARY KEY,
+    public_id           uuid          NOT NULL,
+    tenant_id           bigint        NOT NULL,
+
+    conversation_id     bigint,
+    contact_identity_id bigint        NOT NULL,
+    channel             varchar(20)   NOT NULL,
+    template_id         bigint,
+
+    subject             varchar(255),
+    body                text,
+
+    send_at             timestamp     NOT NULL,
+    status              varchar(10)   NOT NULL DEFAULT 'SCHEDULED',
+    attempts            smallint      NOT NULL DEFAULT 0,
+    last_error          text,
+    sent_message_id     bigint,
+
+    created_by_user_id  bigint,
+    owner_user_id       bigint,
+
+    created_by          varchar(255),
+    updated_by          varchar(255),
+    created_at          timestamp,
+    updated_at          timestamp,
+    deleted_at          timestamp,
+    deleted_by          varchar(255),
+
+    CONSTRAINT uq_csm_public_id UNIQUE (public_id),
+    CONSTRAINT comm_scheduled_messages_channel_check CHECK (channel IN (
+        'WHATSAPP','EMAIL','SMS','CALL','INTERNAL_CHAT','INTERNAL_NOTE')),
+    CONSTRAINT comm_scheduled_messages_status_check CHECK (status IN (
+        'SCHEDULED','SENT','FAILED','CANCELLED'))
+);
+
+-- The scheduler's poll, and nothing else. A partial index keeps it cheap as the table accumulates
+-- years of SENT rows.
+CREATE INDEX IF NOT EXISTS idx_csm_due
+    ON comm_scheduled_messages (tenant_id, send_at)
+    WHERE status = 'SCHEDULED' AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_csm_conversation ON comm_scheduled_messages (conversation_id)
+    WHERE conversation_id IS NOT NULL AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_csm_owner ON comm_scheduled_messages (tenant_id, owner_user_id)
+    WHERE deleted_at IS NULL;
+
+
+-- ── 17.9  comm_conversation_members — internal chat membership + per-member read state ──────
+-- Unread is modelled twice across this module, deliberately. A CUSTOMER thread has one external
+-- party and one agent who owes the reply, so a denormalised unread_count on the conversation is
+-- correct. An INTERNAL thread genuinely has N different unread counts, so read state lives here as
+-- last_read_at. Forcing per-user read state onto customer threads would add a row per user per
+-- conversation for no product gain.
+--
+-- pinned_at is per member on purpose: pinning is a personal shortcut, not a property of the channel.
+CREATE TABLE IF NOT EXISTS comm_conversation_members (
+    id              bigserial PRIMARY KEY,
+    public_id       uuid          NOT NULL,
+    tenant_id       bigint        NOT NULL,
+
+    conversation_id bigint        NOT NULL,
+    user_id         bigint        NOT NULL,
+    user_public_id  uuid,
+    user_name       varchar(150),
+    member_role     varchar(10)   NOT NULL DEFAULT 'MEMBER',
+
+    last_read_at    timestamp,
+    pinned_at       timestamp,
+    muted           boolean       NOT NULL DEFAULT false,
+
+    created_by      varchar(255),
+    updated_by      varchar(255),
+    created_at      timestamp,
+    updated_at      timestamp,
+    deleted_at      timestamp,
+    deleted_by      varchar(255),
+
+    CONSTRAINT uq_ccm_public_id UNIQUE (public_id),
+    CONSTRAINT comm_conversation_members_role_check CHECK (member_role IN ('OWNER','MEMBER'))
+);
+
+-- The deleted_at arm lets someone removed from a channel be re-added later.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ccm_membership
+    ON comm_conversation_members (tenant_id, conversation_id, user_id)
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_ccm_user ON comm_conversation_members (tenant_id, user_id)
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_ccm_pinned ON comm_conversation_members (tenant_id, user_id, pinned_at DESC)
+    WHERE pinned_at IS NOT NULL AND deleted_at IS NULL;
+
+
+-- ── 17.10  comm_mentions ────────────────────────────────────────────────────────────────────
+-- A row rather than a parsed-on-read scan of the body: the Mentions tab is "everything addressed to
+-- me across every conversation", which as a text search over the largest table in the application
+-- would be unusable, and an unread mention needs a per-user read state a body cannot carry.
+CREATE TABLE IF NOT EXISTS comm_mentions (
+    id                   bigserial PRIMARY KEY,
+    public_id            uuid       NOT NULL,
+    tenant_id            bigint     NOT NULL,
+
+    message_id           bigint     NOT NULL,
+    conversation_id      bigint     NOT NULL,
+    mentioned_user_id    bigint     NOT NULL,
+    mentioned_by_user_id bigint,
+    read_at              timestamp,
+
+    created_by           varchar(255),
+    updated_by           varchar(255),
+    created_at           timestamp,
+    updated_at           timestamp,
+    deleted_at           timestamp,
+    deleted_by           varchar(255),
+
+    CONSTRAINT uq_cmn_public_id UNIQUE (public_id)
+);
+
+-- Mentioning someone twice in one note must notify them once.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cmn_once
+    ON comm_mentions (tenant_id, message_id, mentioned_user_id)
+    WHERE deleted_at IS NULL;
+-- The unread badge reads exactly this.
+CREATE INDEX IF NOT EXISTS idx_cmn_unread
+    ON comm_mentions (tenant_id, mentioned_user_id)
+    WHERE read_at IS NULL AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_cmn_message ON comm_mentions (tenant_id, message_id)
+    WHERE deleted_at IS NULL;
+
+
+-- ── 17.11  comm_channel_accounts — connected channels ───────────────────────────────────────
+-- WhatsApp and outbound SMTP credentials already live in tenant_settings, encrypted, and are used by
+-- WhatsAppMessagingService and TenantMailSenderFactory. This table does NOT duplicate them: for
+-- those two channels a row here carries only the label and the last check result, and the status is
+-- DERIVED by reading tenant settings. Copying a secret to render a status badge is how two copies of
+-- a credential drift apart.
+--
+-- IMAP, SMS and Voice have no home anywhere else, so those rows DO carry secret_enc — AES ciphertext
+-- through the same AesSecretCipher the settings module uses, never returned to a client.
+--
+-- ingest_token_hash is SHA-256 of the opaque per-tenant webhook path segment, mirroring
+-- lead_source_integrations. The clear value is shown to the user exactly once, at creation.
+CREATE TABLE IF NOT EXISTS comm_channel_accounts (
+    id                bigserial PRIMARY KEY,
+    public_id         uuid          NOT NULL,
+    tenant_id         bigint        NOT NULL,
+
+    channel           varchar(20)   NOT NULL,
+    provider          varchar(40)   NOT NULL,
+    display_label     varchar(150),
+    status            varchar(20)   NOT NULL DEFAULT 'NOT_CONFIGURED',
+
+    external_ref      varchar(190),
+    config_json       text,
+    secret_enc        text,
+    ingest_token_hash varchar(64),
+
+    last_checked_at   timestamp,
+    last_error        text,
+    sync_cursor       varchar(190),
+    last_sync_at      timestamp,
+
+    created_by        varchar(255),
+    updated_by        varchar(255),
+    created_at        timestamp,
+    updated_at        timestamp,
+    deleted_at        timestamp,
+    deleted_by        varchar(255),
+
+    CONSTRAINT uq_cca_public_id UNIQUE (public_id),
+    CONSTRAINT comm_channel_accounts_channel_check CHECK (channel IN (
+        'WHATSAPP','EMAIL','SMS','CALL','INTERNAL_CHAT','INTERNAL_NOTE')),
+    CONSTRAINT comm_channel_accounts_status_check CHECK (status IN (
+        'NOT_CONFIGURED','CONNECTED','DISCONNECTED','ERROR'))
+);
+
+-- Global, NOT per tenant: this is the webhook's tenant RESOLVER, matched before any tenant is known.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cca_ingest_token
+    ON comm_channel_accounts (ingest_token_hash)
+    WHERE ingest_token_hash IS NOT NULL AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_cca_tenant ON comm_channel_accounts (tenant_id)
+    WHERE deleted_at IS NULL;
+-- The polling reader's sweep: every connected mailbox across every tenant, in one query.
+CREATE INDEX IF NOT EXISTS idx_cca_poll ON comm_channel_accounts (channel, status)
+    WHERE deleted_at IS NULL;
+
+
+-- ── 17.12  comm_notification_prefs — per-user toggles ───────────────────────────────────────
+-- notificationsetting/NotificationSetting is NOT a preference model despite the package name: it is
+-- one JSON blob per tenant of lead-stage auto-reminder rules, keyed UNIQUE(tenant_id) alone, and
+-- NOTHING in the codebase reads it. There is no opt-out anywhere in the application today — channel
+-- selection is decided by the publisher when it builds a NotifyEvent and no consumer consults a
+-- preference. This table is only meaningful once that check runs inside a delivery channel bean.
+--
+-- ABSENCE MEANS ENABLED. A missing row is "on", so a new user and a newly invented event type both
+-- behave sensibly with no backfill, and only explicit opt-outs are ever stored.
+CREATE TABLE IF NOT EXISTS comm_notification_prefs (
+    id         bigserial PRIMARY KEY,
+    public_id  uuid          NOT NULL,
+    tenant_id  bigint        NOT NULL,
+
+    user_id    bigint        NOT NULL,
+    event_type varchar(40)   NOT NULL,
+    channel    varchar(20)   NOT NULL,
+    enabled    boolean       NOT NULL DEFAULT true,
+
+    created_by varchar(255),
+    updated_by varchar(255),
+    created_at timestamp,
+    updated_at timestamp,
+    deleted_at timestamp,
+    deleted_by varchar(255),
+
+    CONSTRAINT uq_cnp_public_id UNIQUE (public_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cnp_pref
+    ON comm_notification_prefs (tenant_id, user_id, event_type, channel)
+    WHERE deleted_at IS NULL;
+-- The send-time gate reads only the opt-OUTs.
+CREATE INDEX IF NOT EXISTS idx_cnp_off
+    ON comm_notification_prefs (tenant_id, event_type, channel)
+    WHERE enabled = false AND deleted_at IS NULL;
+
+
+-- ── 17.13  COMM_* permission backfill ───────────────────────────────────────────────────────
+-- WHY THIS IS NOT OPTIONAL. Permission has TWO independent grant paths:
+-- Permission.defaultsFor(Role) for a user whose permission screen has NEVER been saved, and this
+-- backfill for a user whose has. EffectivePermissionResolver treats a non-null saved map as
+-- AUTHORITATIVE — it does not merge in role defaults — so without this UPDATE every user who has
+-- ever had their permissions edited opens the Communication Center to a blank screen, with no error
+-- and nothing in the log. Exactly the failure FLEET_MONEY_READ hit in PART 6.
+--
+-- CommPermissionDefaultsTest pins the correspondence between this SQL and defaultsFor(Role), so a
+-- future edit to either path fails the build rather than diverging silently.
+--
+-- KEYED ON CUSTOMER_READ, and the scope is INHERITED from it. Every role that receives COMM_READ by
+-- default (MANAGER, TRAVEL_AGENT, ACCOUNTANT, SUB_AGENT) also holds CUSTOMER_READ by default, so the
+-- key reaches exactly the intended population; inheriting the scope stops a row-scoped user silently
+-- widening to tenant-wide visibility of every conversation.
+--
+-- fleet_safe_jsonb() is reused from PART 6 (NOT redefined): a truncated or malformed permissions_json
+-- returns NULL instead of aborting the migration under ON_ERROR_STOP.
+--
+-- COMM_CHAT takes scope 'all' because internal chat is not row-scoped by assignment at all —
+-- membership of the conversation is the gate, checked in CommAccessGuard.
+--
+-- Deliberately NOT granted here, matching defaultsFor(): COMM_NOTE_PRIVATE_READ,
+-- COMM_RECORDING_READ, COMM_TEMPLATE_MANAGE, COMM_WORKFLOW_MANAGE. Reading a colleague's private
+-- notes and listening to call recordings are privacy decisions an owner makes per person, exactly
+-- like BOOKING_REFUND.
+UPDATE user_permissions up
+SET    permissions_json = (
+           fleet_safe_jsonb(up.permissions_json)
+           || jsonb_build_object('COMM_READ', jsonb_build_object(
+                  'access', true,
+                  'scope',  COALESCE(fleet_safe_jsonb(up.permissions_json) #>> '{CUSTOMER_READ,scope}', 'own')))
+           || jsonb_build_object('COMM_CHAT', jsonb_build_object('access', true, 'scope', 'all'))
+           || CASE WHEN u.role IN ('MANAGER','TRAVEL_AGENT','SUB_AGENT') THEN jsonb_build_object(
+                  'COMM_SEND', jsonb_build_object(
+                      'access', true,
+                      'scope',  COALESCE(fleet_safe_jsonb(up.permissions_json) #>> '{CUSTOMER_READ,scope}', 'own')))
+              ELSE '{}'::jsonb END
+           || CASE WHEN u.role IN ('MANAGER','TRAVEL_AGENT') THEN jsonb_build_object(
+                  'COMM_CALL_LOG', jsonb_build_object(
+                      'access', true,
+                      'scope',  COALESCE(fleet_safe_jsonb(up.permissions_json) #>> '{CUSTOMER_READ,scope}', 'own')))
+              ELSE '{}'::jsonb END
+           || CASE WHEN u.role = 'MANAGER' THEN jsonb_build_object(
+                  'COMM_ASSIGN',      jsonb_build_object('access', true, 'scope', 'all'),
+                  'COMM_REPORT_VIEW', jsonb_build_object('access', true, 'scope', 'all'))
+              ELSE '{}'::jsonb END
+       )::text
+FROM   users u
+WHERE  u.id = up.user_id
+  AND  up.deleted_at IS NULL
+  AND  u.role IN ('MANAGER', 'TRAVEL_AGENT', 'ACCOUNTANT', 'SUB_AGENT')
+  AND  jsonb_typeof(fleet_safe_jsonb(up.permissions_json)) = 'object'
+  AND  (fleet_safe_jsonb(up.permissions_json) #>> '{CUSTOMER_READ,access}') = 'true'
+  AND  NOT (fleet_safe_jsonb(up.permissions_json) ? 'COMM_READ');
+
+
+-- ── 17.14  tenant_modules backfill ──────────────────────────────────────────────────────────
+-- THE FIRST tenant_modules BACKFILL EVER WRITTEN IN THIS REPOSITORY, and it is required.
+--
+-- PlanCatalogueInitializer.backfillCommunicationKey() grants COMMUNICATION to the PLANS, which makes
+-- the key visible in the SuperAdmin Feature-Flag console and settable there. It does NOT reach an
+-- existing TENANT: TenantEntitlementService.computeEffectiveModules returns the tenant's own
+-- tenant_modules snapshot whenever it is non-empty and never falls back to the plan, and
+-- TenantServiceImpl.create snapshots the plan's modules into that table at tenant creation. So every
+-- tenant that exists today already has a non-empty snapshot that does not contain COMMUNICATION.
+--
+-- Without the INSERT below, the first deploy carrying the ModuleAccessFilter rule 403s
+-- MODULE_NOT_ENABLED for every existing tenant on every /api/communication call.
+--
+-- The EXISTS guard restricts this to tenants that ALREADY have a snapshot: a tenant with an empty
+-- snapshot correctly falls through to its plan's modules, and inserting a single row would flip it
+-- from "inherits the plan" to "has an explicit list of exactly one module" — which would silently
+-- REVOKE every other module it holds. That guard is the whole safety of this statement.
+--
+-- Effective modules are cached per tenant for 30 seconds and evicted only by updateModules(), so a
+-- DB-side insert takes up to that long to be seen. Run it during a deploy restart.
+INSERT INTO tenant_modules (tenant_id, module)
+SELECT t.id, 'COMMUNICATION'
+FROM   tenants t
+WHERE  t.deleted_at IS NULL
+  AND  EXISTS     (SELECT 1 FROM tenant_modules m WHERE m.tenant_id = t.id)
+  AND  NOT EXISTS (SELECT 1 FROM tenant_modules m
+                   WHERE m.tenant_id = t.id AND m.module = 'COMMUNICATION');
+
+
+-- ── Verification ────────────────────────────────────────────────────────────────────────────
+-- Paste these after applying. Every one should return the stated result.
+--
+-- 1. All twelve tables exist.
+--   SELECT count(*) AS should_be_12 FROM information_schema.tables
+--   WHERE table_schema = 'public' AND table_name LIKE 'comm\_%';
+--
+-- 2. The generated column and its GIN index are present (this is the app's first full-text index).
+--   SELECT is_generated, generation_expression FROM information_schema.columns
+--   WHERE table_name = 'comm_messages' AND column_name = 'search_tsv';
+--   SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_msg_search';
+--
+-- 3. Full-text actually matches (expect 1 row, no error).
+--   SELECT to_tsvector('simple', 'need dubai package for june') @@ plainto_tsquery('simple', 'dubai');
+--
+-- 4. No user was left behind by the permission backfill. Expect 0.
+--   SELECT count(*) AS users_missing_comm_read
+--   FROM   user_permissions up JOIN users u ON u.id = up.user_id
+--   WHERE  up.deleted_at IS NULL
+--     AND  u.role IN ('MANAGER','TRAVEL_AGENT','ACCOUNTANT','SUB_AGENT')
+--     AND  (fleet_safe_jsonb(up.permissions_json) #>> '{CUSTOMER_READ,access}') = 'true'
+--     AND  NOT (fleet_safe_jsonb(up.permissions_json) ? 'COMM_READ');
+--
+-- 5. Any row this reports needs a human to repair it by hand. Expect 0.
+--   SELECT count(*) AS unparseable_permission_maps FROM user_permissions
+--   WHERE deleted_at IS NULL AND coalesce(permissions_json,'') <> ''
+--     AND fleet_safe_jsonb(permissions_json) IS NULL;
+--
+-- 6. Every tenant that had a module snapshot now has COMMUNICATION. Expect 0.
+--   SELECT count(*) AS tenants_missing_communication FROM tenants t
+--   WHERE t.deleted_at IS NULL
+--     AND EXISTS     (SELECT 1 FROM tenant_modules m WHERE m.tenant_id = t.id)
+--     AND NOT EXISTS (SELECT 1 FROM tenant_modules m WHERE m.tenant_id = t.id AND m.module = 'COMMUNICATION');
+--
+-- 7. And no tenant was given a snapshot it did not have before (this would have revoked its other
+--    modules). Compare against the count taken BEFORE applying; it must be unchanged.
+--   SELECT count(DISTINCT tenant_id) AS tenants_with_snapshot FROM tenant_modules;
+
+
+-- â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
+-- â•‘  PART 18 â€” Lead claim window: broadcast, claim/override, contacted lock  â•‘
+-- â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+--
+-- A new lead is auto-assigned an owner but stays CLAIMABLE by anyone eligible until someone marks
+-- it contacted; each claim overrides the previous owner. This part adds the state that window runs
+-- on, the ownership timeline it writes, and the permission backfill that decides who may take part.
+--
+-- NUMBERED 18, NOT 17. PART 17 is reserved for the Communication Center backfill that
+-- Permission.java and SchemaEnumConstraintValidator already reference by that number; it has not
+-- landed in this file yet. Taking 17 here would silently collide with it.
+--
+-- SELF-SUFFICIENT under JPA_DDL_AUTO=validate: every column and table an entity declares is created
+-- below with the exact type Hibernate expects, so the app boots with Hibernate creating nothing.
+--
+-- CONTENTS
+--   18.1  leads: five claim-window columns + the CAS counter backfill
+--   18.2  leads: partial indexes for the open-lead feed and SLA reporting
+--   18.3  lead_assignment_events: the ownership timeline
+--   18.4  LEAD_CLAIM / LEAD_REASSIGN_LOCKED backfill (mirrors Permission.defaultsFor)
+
+
+-- â”€â”€ 18.1  leads: the claim window's state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+--
+-- claim_version is a compare-and-swap counter, NOT a JPA @Version. Optimistic locking fires when
+-- any two writers touch the row, so adding @Version to Lead would make a manager editing notes 409
+-- against a concurrent claim, and every existing lead write path would inherit that. A dedicated
+-- counter guards exactly the ownership transition and leaves the rest alone.
+--
+-- first_contacted_at is the lock, and it is deliberately NOT derived from lead_stage: the stage
+-- moves on past Contacted (Follow Up, Qualified, ...) and a stage-based test would reopen the
+-- window every time it did.
+--
+-- sla_target_seconds is snapshotted per lead so raising the target later cannot retroactively
+-- un-breach an old one â€” the same anti-retroactivity rule a booking's cancellation policy follows.
+
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS claim_version              integer;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS first_contacted_at         timestamp(6);
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS first_contacted_by_user_id bigint;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS first_response_seconds     bigint;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS sla_target_seconds         integer;
+
+-- Existing rows carry NULL, and `NULL = 0` is NULL (not false), so an un-backfilled lead would
+-- reject every claim whatever version the client submitted. Idempotent; also present in
+-- db/indexes.sql because FLYWAY_ENABLED defaults to false and that file is what runs on a dev or
+-- pilot database.
+UPDATE leads SET claim_version = 0 WHERE claim_version IS NULL;
+
+-- Deliberately NOT NULL-constrained. ddl-auto=update would fail trying to add NOT NULL to a column
+-- that was full of nulls a moment ago, and the entity therefore maps it as a nullable Integer whose
+-- readers coalesce. Tightening it is a follow-up once every environment has run this backfill.
+
+
+-- â”€â”€ 18.2  leads: claim-feed and SLA indexes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- Partial on exactly the predicate LeadAccessGuard.isOpenToClaim uses, so the index stays tiny: an
+-- agency with 50,000 leads has a dozen open at once, and a full (tenant_id, created_at) index would
+-- make Postgres wade through the closed ones to find them.
+
+CREATE INDEX IF NOT EXISTS idx_leads_open_to_claim
+        ON leads (tenant_id, created_at DESC)
+        WHERE deleted_at IS NULL
+          AND first_contacted_at IS NULL
+          AND lead_stage NOT IN ('CONVERTED', 'LOST');
+
+CREATE INDEX IF NOT EXISTS idx_leads_first_response
+        ON leads (tenant_id, first_response_seconds)
+        WHERE first_response_seconds IS NOT NULL;
+
+
+-- â”€â”€ 18.3  lead_assignment_events: the ownership timeline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+--
+-- SEPARATE FROM lead_assignment_audits ON PURPOSE. That table answers "what did the algorithm
+-- recommend, and did a human override it" and holds one row per lead, written at creation. This one
+-- is the timeline: auto-assigned -> claimed -> claimed again -> contacted. Folding them together
+-- would force every claim to invent a recommendation it never had, or make manual_override mean two
+-- different things depending on the row.
+--
+-- User references are logical FKs with no DB constraint (house pattern, as ActivityLog.acting_user_id
+-- is), and the display names are write-time snapshots so the trail still reads correctly after a
+-- rename or a delete â€” "assigned to [deleted user]" is worse than useless in an audit.
+
+CREATE TABLE IF NOT EXISTS lead_assignment_events (
+    id bigint generated by default as identity,
+    created_at timestamp(6) not null, created_by varchar(255),
+    deleted_at timestamp(6), deleted_by varchar(255),
+    public_id uuid not null unique,
+    updated_at timestamp(6) not null, updated_by varchar(255),
+    tenant_id bigint not null,
+    lead_id bigint not null,
+    lead_public_id uuid not null,
+    event_type varchar(20) not null,
+    from_user_id bigint,
+    from_user_name varchar(150),
+    to_user_id bigint,
+    to_user_name varchar(150),
+    actor_user_id bigint,
+    actor_name varchar(150),
+    strategy_used varchar(20),
+    note varchar(255),
+    primary key (id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_lead_assignment_event_tenant
+        ON lead_assignment_events (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_lead_assignment_event_lead
+        ON lead_assignment_events (lead_id);
+CREATE INDEX IF NOT EXISTS idx_lead_assignment_event_created
+        ON lead_assignment_events (created_at);
+CREATE INDEX IF NOT EXISTS idx_lead_assignment_event_type
+        ON lead_assignment_events (event_type);
+
+-- Enum CHECK constraint, written out rather than left to Hibernate: under ddl-auto=validate
+-- Hibernate creates nothing at all, so without this the column accepts any string. Refreshed the
+-- same way the marketplace status constraints are, and guarded at boot by
+-- SchemaEnumConstraintValidator so a new constant cannot silently start failing at INSERT.
+DO $do$
+DECLARE
+    existing text;
+BEGIN
+    SELECT pg_get_constraintdef(oid) INTO existing
+    FROM pg_constraint WHERE conname = 'lead_assignment_events_event_type_check';
+
+    IF existing IS NULL OR existing NOT LIKE '%REOPENED%' THEN
+        ALTER TABLE lead_assignment_events
+            DROP CONSTRAINT IF EXISTS lead_assignment_events_event_type_check;
+        ALTER TABLE lead_assignment_events
+            ADD CONSTRAINT lead_assignment_events_event_type_check
+            CHECK (event_type IN (
+                'AUTO_ASSIGNED',
+                'CLAIMED',
+                'REASSIGNED',
+                'CONTACTED',
+                'REOPENED'
+            ));
+    END IF;
+END $do$;
+
+
+-- â”€â”€ 18.4  LEAD_CLAIM / LEAD_REASSIGN_LOCKED backfill â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+--
+-- Two independent grant paths exist, and they must agree: Permission.defaultsFor(role) for a user
+-- whose permission screen was never saved, and this block for a user whose was. A saved map is the
+-- source of truth (EffectivePermissionResolver), so without this, two MANAGERs in one tenant would
+-- differ on whether they can claim a lead purely by whether anyone ever clicked Save on their
+-- profile. LeadClaimPermissionDefaultsTest fails the build if the two lists drift.
+--
+-- Mirrors defaultsFor exactly:
+--   LEAD_CLAIM            -> MANAGER, TRAVEL_AGENT   (TENANT_ADMIN via the resolver bypass)
+--   LEAD_REASSIGN_LOCKED  -> MANAGER                 (TENANT_ADMIN via the resolver bypass)
+-- Deliberately NOT SUB_AGENT: AssignableUserResolver excludes sub-agents from ever owning a parent
+-- tenant's lead, and a claim grant would be a second door into exactly what that excludes.
+-- Deliberately NOT STAFF: that role is deny-by-default and gets everything granted explicitly.
+--
+-- Keyed on LEAD_READ being true, since a user who cannot see leads has no use for either key. Scope
+-- is inherited from the user's existing lead scope rather than defaulted, so a TEAM-scoped manager
+-- does not silently become tenant-wide on the new key.
+
+UPDATE user_permissions up
+SET    permissions_json = (
+           fleet_safe_jsonb(up.permissions_json)
+           || jsonb_build_object('LEAD_CLAIM', jsonb_build_object(
+                  'access', true,
+                  'scope',  COALESCE(
+                      fleet_safe_jsonb(up.permissions_json) #>> '{LEAD_READ,scope}',
+                      'all')))
+       )::text
+FROM   users u
+WHERE  u.id = up.user_id
+  AND  up.deleted_at IS NULL
+  AND  u.role IN ('MANAGER', 'TRAVEL_AGENT')
+  AND  jsonb_typeof(fleet_safe_jsonb(up.permissions_json)) = 'object'
+  AND  (fleet_safe_jsonb(up.permissions_json) #>> '{LEAD_READ,access}') = 'true'
+  AND  NOT (fleet_safe_jsonb(up.permissions_json) ? 'LEAD_CLAIM');
+
+UPDATE user_permissions up
+SET    permissions_json = (
+           fleet_safe_jsonb(up.permissions_json)
+           || jsonb_build_object('LEAD_REASSIGN_LOCKED', jsonb_build_object(
+                  'access', true,
+                  'scope',  COALESCE(
+                      fleet_safe_jsonb(up.permissions_json) #>> '{LEAD_UPDATE,scope}',
+                      'all')))
+       )::text
+FROM   users u
+WHERE  u.id = up.user_id
+  AND  up.deleted_at IS NULL
+  AND  u.role = 'MANAGER'
+  AND  jsonb_typeof(fleet_safe_jsonb(up.permissions_json)) = 'object'
+  AND  (fleet_safe_jsonb(up.permissions_json) #>> '{LEAD_READ,access}') = 'true'
+  AND  NOT (fleet_safe_jsonb(up.permissions_json) ? 'LEAD_REASSIGN_LOCKED');
+
+
+-- â”€â”€ Verification (run by hand; all counts must be 0) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+--   SELECT count(*) AS unbackfilled_version FROM leads WHERE claim_version IS NULL;
+--
+--   SELECT count(*) AS claim_missing FROM user_permissions up JOIN users u ON u.id = up.user_id
+--   WHERE up.deleted_at IS NULL AND u.role IN ('MANAGER','TRAVEL_AGENT')
+--     AND (fleet_safe_jsonb(up.permissions_json) #>> '{LEAD_READ,access}') = 'true'
+--     AND NOT (fleet_safe_jsonb(up.permissions_json) ? 'LEAD_CLAIM');
+--
+--   -- Nobody outside MANAGER/TENANT_ADMIN may hold the post-lock reassign key by backfill.
+--   SELECT count(*) AS reassign_leaked FROM user_permissions up JOIN users u ON u.id = up.user_id
+--   WHERE up.deleted_at IS NULL AND u.role NOT IN ('MANAGER','TENANT_ADMIN')
+--     AND (fleet_safe_jsonb(up.permissions_json) #>> '{LEAD_REASSIGN_LOCKED,access}') = 'true';
+--
+--   -- A locked lead must never lack the actor that locked it.
+--   SELECT count(*) AS lock_without_actor FROM leads
+--   WHERE first_contacted_at IS NOT NULL AND first_contacted_by_user_id IS NULL;

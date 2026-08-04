@@ -154,6 +154,28 @@ public class PlanCatalogueInitializer implements ApplicationRunner {
         ensureModules(TenantPlan.PRO, "TASKS", "REMINDERS", "DASHBOARD", "ACCOUNTING", "MARKETING");
         ensureModules(TenantPlan.ENTERPRISE, "TASKS", "REMINDERS", "DASHBOARD", "ACCOUNTING", "MARKETING");
         backfillHotelMarketplaceKey();
+        backfillCommunicationKey();
+    }
+
+    /**
+     * Grants {@code COMMUNICATION} — the omnichannel Communication Center — to every plan.
+     *
+     * <p>On every plan including Starter, deliberately: the module is the inbox for WhatsApp, email
+     * and calls the agency already uses, not a premium add-on, and a tenant that loses it loses the
+     * channel its customers actually contact it on. Same reasoning as TASKS/REMINDERS/DASHBOARD
+     * above, and the opposite of {@link #backfillHotelMarketplaceKey()}.
+     *
+     * <p><b>This is only half the story.</b> Granting a key to the PLANS does not reach an existing
+     * TENANT: {@code TenantEntitlementService.computeEffectiveModules} returns the tenant's own
+     * {@code tenant_modules} snapshot whenever it is non-empty and never falls back to the plan, and
+     * {@code TenantServiceImpl} snapshots modules at tenant creation. V2 PART 17 carries the
+     * matching {@code INSERT INTO tenant_modules} backfill. Without it, every existing tenant is
+     * 403 MODULE_NOT_ENABLED the moment the ModuleAccessFilter rule lands.
+     */
+    private void backfillCommunicationKey() {
+        ensureModules(TenantPlan.STARTER, "COMMUNICATION");
+        ensureModules(TenantPlan.PRO, "COMMUNICATION");
+        ensureModules(TenantPlan.ENTERPRISE, "COMMUNICATION");
     }
 
     /**

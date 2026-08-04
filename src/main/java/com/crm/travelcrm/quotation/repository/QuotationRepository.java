@@ -2,6 +2,7 @@ package com.crm.travelcrm.quotation.repository;
 
 import com.crm.travelcrm.quotation.entity.Quotation;
 import com.crm.travelcrm.quotation.enums.DiscountType;
+import com.crm.travelcrm.quotation.enums.TemplateStyle;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -61,7 +62,8 @@ public interface QuotationRepository
                    q.sightseeingAmount AS sightseeingAmount, q.cruiseAmount AS cruiseAmount,
                    q.vehicleAmount AS vehicleAmount, q.addonAmount AS addonAmount,
                    q.discount AS discount, q.discountType AS discountType,
-                   q.tax AS tax, q.markup AS markup
+                   q.tax AS tax, q.markup AS markup,
+                   q.version AS version, q.templateStyle AS templateStyle
               FROM Quotation q
              WHERE q.leadPublicId IN :ids
                AND q.tenantId = :tenantId
@@ -89,6 +91,9 @@ public interface QuotationRepository
         DiscountType getDiscountType();
         BigDecimal getTax();
         BigDecimal getMarkup();
+        /** Version label and stored design — the lead row shares and opens the weblink from these. */
+        String getVersion();
+        TemplateStyle getTemplateStyle();
     }
 
     // ── Quote-number sequence ───────────────────────────────────────────────────

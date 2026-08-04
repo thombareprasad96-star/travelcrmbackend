@@ -35,6 +35,30 @@ public enum Permission {
     // and the 30-day auto-purge remove it physically. Not in any role default; only TENANT_ADMIN
     // holds it (via the resolver bypass) until granted.
     LEAD_PERMANENT_DELETE ("Leads",   "Remove lead when cancelling a booking (moves to Trash)"),
+    /**
+     * Take ownership of a new lead that is still open (nobody has marked it contacted yet),
+     * overriding whoever the auto-assignment gave it to.
+     *
+     * <p>Separate from {@code LEAD_UPDATE} on purpose: editing a lead and taking it off a colleague
+     * are different acts, and an agency that wants its juniors to work leads without letting them
+     * grab their seniors' has no way to express that if the two share a key. It is also the gate
+     * that stops a read-only viewer from acquiring ownership.
+     *
+     * <p>Granted to MANAGER and TRAVEL_AGENT by default — the roles that actually work the pipeline.
+     * NOT to SUB_AGENT: {@code AssignableUserResolver} excludes sub-agents from ever owning a parent
+     * tenant's lead, and a claim permission would be a second door into exactly what that excludes.
+     * STAFF is deny-by-default as always.
+     */
+    LEAD_CLAIM     ("Leads",          "Claim a new lead / override its assigned owner"),
+    /**
+     * Move a lead to a different owner AFTER it has been locked by first contact, and reopen a
+     * claim window closed by mistake. The supervisory half of ownership.
+     *
+     * <p>MANAGER and TENANT_ADMIN only. Once a lead is contacted the customer has been spoken to,
+     * and silently moving it (or reopening it so someone else can take it) is a management decision,
+     * not a self-service one — which is the whole point of the contacted lock.
+     */
+    LEAD_REASSIGN_LOCKED ("Leads",    "Reassign or reopen a lead after it has been contacted"),
 
     // ── Bookings ────────────────────────────────────────────────────────────
     BOOKING_READ   ("Bookings",       "View bookings"),
@@ -166,6 +190,36 @@ public enum Permission {
     ACCOUNTING_TDS_MANAGE      ("Accounting", "Manage vendor bills, payments & TDS/TCS"),
     ACCOUNTING_SETTINGS_MANAGE ("Accounting", "Manage GST settings & tax-rate masters"),
 
+    // ── Communication Center ─────────────────────────────────────────────────
+    // The unified inbox (WhatsApp, Email, SMS, Calls, Internal chat, Notes).
+    //
+    // COMM_READ carries the DATA SCOPE that implements the product's "all vs assigned
+    // conversations" requirement: ScopeResolver reads own/team/all off this key and the service
+    // filters comm_conversations.assigned_user_id by it. An unassigned thread stays visible at every
+    // scope above NONE — a message from a new number belongs to nobody yet, and hiding it until
+    // someone claims it means nobody ever does.
+    COMM_READ     ("Communication",   "View conversations, messages and call history"),
+    COMM_SEND     ("Communication",   "Send messages and reply on customer channels"),
+    COMM_ASSIGN   ("Communication",   "Assign, snooze and close conversations"),
+    COMM_CALL_LOG ("Communication",   "Log a call and set its outcome / follow-up"),
+    COMM_CHAT     ("Communication",   "Use internal team chat"),
+
+    // Privacy- and config-sensitive keys. Deliberately in NO role default — TENANT_ADMIN reaches
+    // them through the resolver bypass, everyone else is granted them explicitly, following the
+    // BOOKING_REFUND / LEAD_PERMANENT_DELETE precedent.
+    //
+    // COMM_NOTE_PRIVATE_READ is enforced as a QUERY predicate, not a mapper filter: a private note
+    // must never be materialised inside a request that was not entitled to it.
+    COMM_NOTE_PRIVATE_READ ("Communication", "Read other users' private notes"),
+    COMM_RECORDING_READ    ("Communication", "Listen to call recordings"),
+    COMM_TEMPLATE_MANAGE   ("Communication", "Create and edit message templates"),
+    COMM_WORKFLOW_MANAGE   ("Communication", "Configure automated / scheduled messages"),
+
+    // Tenant-wide analytics. Granted to MANAGER (and TENANT_ADMIN) only — the endpoints behind it
+    // are additionally gated on CRM_FULL, which SUB_AGENT does not hold, so a franchise partner can
+    // never read the parent agency's response times or agent leaderboard.
+    COMM_REPORT_VIEW       ("Communication", "View communication reports & analytics"),
+
     // ── Settings ────────────────────────────────────────────────────────────
     SETTINGS_MANAGE ("Settings",      "Manage company settings");
 
@@ -209,6 +263,11 @@ public enum Permission {
 
             case MANAGER -> EnumSet.of(
                     LEAD_READ, LEAD_CREATE, LEAD_UPDATE, LEAD_DELETE,
+                    // Works the pipeline AND supervises it: claims open leads like any agent, and
+                    // holds the post-lock reassign/reopen authority agents deliberately do not.
+                    // Mirrored by the V2 PART 18 backfill; LeadClaimPermissionDefaultsTest fails the
+                    // build if the two grant paths ever drift.
+                    LEAD_CLAIM, LEAD_REASSIGN_LOCKED,
                     BOOKING_READ, BOOKING_CREATE, BOOKING_UPDATE, BOOKING_CANCEL, BOOKING_DELETE,
                     BOOKING_PROFIT_READ,
                     CUSTOMER_READ, CUSTOMER_CREATE, CUSTOMER_UPDATE, CUSTOMER_DELETE,
@@ -229,10 +288,19 @@ public enum Permission {
                     HOTEL_MARKETPLACE_BOOK, HOTEL_MARKETPLACE_CANCEL, MARKETPLACE_PAYABLE_READ,
                     ACCOUNTING_INVOICE_READ, ACCOUNTING_TDS_READ,
                     MARKETING_READ, MARKETING_CREATE, MARKETING_UPDATE, MARKETING_DELETE, MARKETING_SEND,
+                    // Communication: the full operational surface plus analytics. NOT the four
+                    // privacy/config keys — private notes, recordings, templates and workflow config
+                    // are granted per user, exactly like BOOKING_REFUND. Mirrored by the V2 PART 17
+                    // backfill; CommPermissionDefaultsTest fails the build if the two ever drift.
+                    COMM_READ, COMM_SEND, COMM_ASSIGN, COMM_CALL_LOG, COMM_CHAT, COMM_REPORT_VIEW,
                     TRASH_VIEW, TRASH_RESTORE);
 
             case TRAVEL_AGENT -> EnumSet.of(
                     LEAD_READ, LEAD_CREATE, LEAD_UPDATE,
+                    // The role the broadcast-and-claim flow exists for. No LEAD_REASSIGN_LOCKED:
+                    // once a colleague has spoken to the customer, taking the lead is a manager's
+                    // call, not a peer's.
+                    LEAD_CLAIM,
                     BOOKING_READ, BOOKING_CREATE, BOOKING_UPDATE,
                     CUSTOMER_READ, CUSTOMER_CREATE, CUSTOMER_UPDATE,
                     QUOTATION_READ, QUOTATION_CREATE, QUOTATION_UPDATE,
@@ -252,6 +320,10 @@ public enum Permission {
                     HOTEL_MARKETPLACE_VIEW, HOTEL_MARKETPLACE_BOOK, HOTEL_MARKETPLACE_CANCEL,
                     MARKETPLACE_PAYABLE_READ,
                     MARKETING_READ,
+                    // Communication: this is the role that actually talks to customers all day, so
+                    // it reads, sends and logs calls. No COMM_ASSIGN (triage is a supervisor act)
+                    // and no COMM_REPORT_VIEW (tenant-wide response times are not its business).
+                    COMM_READ, COMM_SEND, COMM_CALL_LOG, COMM_CHAT,
                     TRASH_VIEW);
 
             // STAFF is deny-by-default: a new STAFF user holds NO permissions until a
@@ -271,7 +343,11 @@ public enum Permission {
                     REPORT_VIEW, MASTER_READ,
                     // Accounting is the accountant's core surface: full invoice + TDS/TCS + tax config.
                     ACCOUNTING_INVOICE_READ, ACCOUNTING_INVOICE_MANAGE,
-                    ACCOUNTING_TDS_READ, ACCOUNTING_TDS_MANAGE, ACCOUNTING_SETTINGS_MANAGE);
+                    ACCOUNTING_TDS_READ, ACCOUNTING_TDS_MANAGE, ACCOUNTING_SETTINGS_MANAGE,
+                    // Communication: reads threads (a payment query arrives on WhatsApp like
+                    // anything else) and uses team chat. Deliberately NOT COMM_SEND — this role
+                    // does not correspond with customers on the agency's behalf.
+                    COMM_READ, COMM_CHAT);
 
             // B2B franchise partner — its OWN sales pipeline only (row-scope OWN via ScopeResolver).
             // Soft-delete allowed on own leads/quotations; deliberately NO booking cancel/refund/delete,
@@ -285,7 +361,13 @@ public enum Permission {
                     CUSTOMER_READ, CUSTOMER_CREATE, CUSTOMER_UPDATE,
                     REMINDER_READ, REMINDER_CREATE, REMINDER_UPDATE, REMINDER_DELETE,
                     TASK_READ, TASK_CREATE, TASK_UPDATE, TASK_DELETE,
-                    MASTER_READ);
+                    MASTER_READ,
+                    // Communication: its OWN conversations only. Row scope is doubly enforced —
+                    // SubAgentScope confines it to threads it owns, and ScopeResolver defaults
+                    // SUB_AGENT to OWN. No COMM_REPORT_VIEW: those endpoints are CRM_FULL-gated and
+                    // SUB_AGENT holds no coarse authority at all, but stating it here keeps the
+                    // catalogue honest rather than relying on a second gate.
+                    COMM_READ, COMM_SEND, COMM_CHAT);
         };
     }
 

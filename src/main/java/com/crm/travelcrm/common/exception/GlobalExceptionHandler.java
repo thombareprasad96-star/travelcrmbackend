@@ -5,6 +5,7 @@ import com.crm.travelcrm.common.context.TraceId;
 import com.crm.travelcrm.customer.exception.CustomerNotFoundException;
 import com.crm.travelcrm.customer.exception.DuplicateCustomerException;
 import com.crm.travelcrm.lead.exception.DuplicateLeadException;
+import com.crm.travelcrm.lead.exception.LeadClaimLostException;
 import com.crm.travelcrm.lead.exception.LeadNotFoundException;
 import com.crm.travelcrm.tenent.exception.DuplicateTenantException;
 import com.crm.travelcrm.tenent.exception.TenantNotFoundException;
@@ -160,6 +161,30 @@ public class GlobalExceptionHandler {
         details.put("entityType", ex.getEntityType());
         details.put("publicId", ex.getPublicId());
         return build(ApiError.of(ErrorCode.RESTORE_AVAILABLE, ex.getMessage()).withDetails(details));
+    }
+
+    /**
+     * A lead claim / contact-stamp / reassign lost its compare-and-swap race.
+     *
+     * <p>Logged at INFO, not WARN: two agents racing for the same fresh lead is the feature working,
+     * not a fault, and at WARN it would fill the production log with normal user behaviour.
+     *
+     * <p>{@code details} carries who owns the lead now and the fresh {@code claimVersion}, so the UI
+     * can say "now owned by Priya" and re-arm the button rather than showing a dead-end conflict.
+     * No email or phone goes in here — the loser may be outside the row-scope that would let them
+     * read the lead once it locks.
+     */
+    @ExceptionHandler(LeadClaimLostException.class)
+    public ResponseEntity<ApiError> handleLeadClaimLost(LeadClaimLostException ex) {
+        log.info("Lead claim race lost on {}: {}", ex.getLeadPublicId(), ex.getReason());
+        Map<String, Object> details = new HashMap<>();
+        details.put("claimLost", true);
+        details.put("reason", ex.getReason().name());
+        details.put("leadPublicId", ex.getLeadPublicId());
+        details.put("currentOwnerName", ex.getCurrentOwnerName());
+        details.put("currentOwnerPublicId", ex.getCurrentOwnerPublicId());
+        details.put("claimVersion", ex.getCurrentClaimVersion());
+        return build(ApiError.of(ErrorCode.CONFLICT, ex.getMessage()).withDetails(details));
     }
 
     /** Two concurrent updates of the same row. 409 lets the client reload rather than lose a write. */

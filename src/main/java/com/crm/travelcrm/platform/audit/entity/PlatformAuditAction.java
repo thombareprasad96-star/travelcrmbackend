@@ -118,6 +118,12 @@ public enum PlatformAuditAction {
 
     // ── Cancellation ─────────────────────────────────────────────────────
     MARKETPLACE_BOOKING_CANCEL_REQUESTED,   // tenant asked; the supplier conversation starts here
+    // A charge the tenant will be billed for is put to them, and answered, before it binds — the
+    // same consent trail the price revision keeps.
+    MARKETPLACE_CANCELLATION_QUOTED,
+    MARKETPLACE_CANCELLATION_QUOTE_ACCEPTED,
+    MARKETPLACE_CANCELLATION_QUOTE_DECLINED,
+    MARKETPLACE_CANCELLATION_QUOTE_EXPIRED,
 
     // ── Voucher (design §7) ──────────────────────────────────────────────
     MARKETPLACE_VOUCHER_ISSUED,

@@ -136,6 +136,32 @@ public class MarketplaceNotifier {
     }
 
     /** Settled cancellation. The charge and the refund are the only two numbers that matter here. */
+    /**
+     * The platform has priced the cancellation and the tenant has to answer.
+     *
+     * <p>Carries the charge and the refund, because a notification that says only "we have replied"
+     * makes the tenant open the app to learn a number they could have been told. Never the retained
+     * earning — that is the platform's side of the same figure.</p>
+     */
+    public void cancellationQuoted(PlatformHotelBooking b) {
+        publishToTenant(b, MarketplaceNotificationType.HOTEL_BOOKING_CANCELLATION_QUOTED, () -> {
+            BigDecimal charge = b.getQuotedCancellationCharge();
+            String chargeText = (charge == null || charge.signum() <= 0)
+                    ? "The hotel will not charge to cancel."
+                    : "Cancelling will cost " + money(b.getCurrency(), charge) + ".";
+            return tenantEvent(b, MarketplaceNotificationType.HOTEL_BOOKING_CANCELLATION_QUOTED,
+                    "Cancellation quote — your approval is needed",
+                    stay(b) + ". " + chargeText
+                            + (b.getCancellationQuoteNote() == null ? ""
+                                    : " " + b.getCancellationQuoteNote())
+                            + " The booking stands until you accept."
+                            + (b.getCancellationQuoteExpiresAt() == null ? ""
+                                    : " This quote lapses on "
+                                            + DAY_TIME.format(b.getCancellationQuoteExpiresAt()) + ".")
+                            + ref(b));
+        });
+    }
+
     public void bookingCancelled(PlatformHotelBooking b) {
         publishToTenant(b, MarketplaceNotificationType.HOTEL_BOOKING_CANCELLED, () -> {
             BigDecimal charge = b.getCancellationCharge();

@@ -741,3 +741,65 @@ CREATE INDEX IF NOT EXISTS idx_customers_email_lower
 
 CREATE INDEX IF NOT EXISTS idx_leads_customer_id ON leads (customer_id)
         WHERE customer_id IS NOT NULL;
+
+-- ── Claim window: CAS counter backfill + the open-lead feed's index ─────────
+--
+-- claim_version is the compare-and-swap counter guarding lead ownership. ddl-auto=update adds it
+-- NULL on every pre-existing row, and `NULL = 0` is NULL rather than false in SQL, so an
+-- un-backfilled row would reject every claim whatever version the client submitted.
+--
+-- This IS a data backfill, which DEPLOYMENT.md says belongs in a versioned migration rather than
+-- here — and it is also in V2 PART 18 for exactly that reason. It is duplicated here on the same
+-- narrow grounds as the vendors.row_version backfill above, which it mirrors: an optimistic-lock
+-- counter initialisation is schema plumbing, not business data, and FLYWAY_ENABLED defaults to
+-- false, so on a dev or pilot database this file is the ONLY thing that runs. Idempotent, so the
+-- two never fight. (The CAS queries also COALESCE, so correctness does not actually depend on this
+-- having run — this makes the column honest, it does not make the feature work.)
+UPDATE leads SET claim_version = 0 WHERE claim_version IS NULL;
+
+-- The incoming-leads feed: "every lead in this tenant still open to claim, newest first". Partial
+-- on exactly the predicate the feed and LeadAccessGuard.isOpenToClaim use, so it stays small — an
+-- agency with 50,000 leads has maybe a dozen open at once, and a full index on (tenant_id,
+-- created_at) would make Postgres scan the closed ones to find them.
+CREATE INDEX IF NOT EXISTS idx_leads_open_to_claim
+        ON leads (tenant_id, created_at DESC)
+        WHERE deleted_at IS NULL
+          AND first_contacted_at IS NULL
+          AND lead_stage NOT IN ('CONVERTED', 'LOST');
+
+-- SLA reporting: answered-late leads are found by first_response_seconds, unanswered ones by
+-- created_at among the still-open rows (covered by the partial index above).
+CREATE INDEX IF NOT EXISTS idx_leads_first_response
+        ON leads (tenant_id, first_response_seconds)
+        WHERE first_response_seconds IS NOT NULL;
+
+-- ── lead_assignment_events: the ownership timeline ──────────────────────────
+-- Hibernate creates the table and its event_type CHECK constraint on first boot. The refresh block
+-- below exists for the NEXT constant added to LeadAssignmentEventType: ddl-auto=update never alters
+-- an existing constraint, so without it a new value is rejected at INSERT with nothing in the log.
+-- SchemaEnumConstraintValidator guards this column, so a drift fails the boot rather than the write.
+DO $do$
+DECLARE
+    existing text;
+BEGIN
+    IF to_regclass('public.lead_assignment_events') IS NULL THEN
+        RETURN;   -- first boot: Hibernate has not created the table yet
+    END IF;
+
+    SELECT pg_get_constraintdef(oid) INTO existing
+    FROM pg_constraint WHERE conname = 'lead_assignment_events_event_type_check';
+
+    IF existing IS NULL OR existing NOT LIKE '%REOPENED%' THEN
+        ALTER TABLE lead_assignment_events
+            DROP CONSTRAINT IF EXISTS lead_assignment_events_event_type_check;
+        ALTER TABLE lead_assignment_events
+            ADD CONSTRAINT lead_assignment_events_event_type_check
+            CHECK (event_type IN (
+                'AUTO_ASSIGNED',
+                'CLAIMED',
+                'REASSIGNED',
+                'CONTACTED',
+                'REOPENED'
+            ));
+    END IF;
+END $do$;

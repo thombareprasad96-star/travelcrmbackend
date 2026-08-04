@@ -3,6 +3,7 @@ package com.crm.travelcrm.hotelmarketplace.booking.entity;
 import com.crm.travelcrm.common.entity.BaseEntity;
 import com.crm.travelcrm.hotelmarketplace.booking.enums.CrmSyncState;
 import com.crm.travelcrm.hotelmarketplace.booking.enums.MarketplaceBookingStatus;
+import com.crm.travelcrm.hotelmarketplace.booking.enums.VoucherSource;
 import com.crm.travelcrm.hotelmarketplace.booking.enums.VoucherStatus;
 import jakarta.persistence.*;
 import lombok.*;
@@ -261,6 +262,34 @@ public class PlatformHotelBooking extends BaseEntity {
     @Column(name = "cancelled_by_super_admin_id")
     private Long cancelledBySuperAdminId;
 
+    // ── The cancellation quote the tenant has to accept (design §9 clauses 1-3) ──
+    // Beside the settled figures, never on top of them — the same rule the revision fields follow.
+    // A proposed charge written into cancellationCharge would read as "this is what you were
+    // charged" to every screen, for a cancellation that has not happened and may never.
+
+    @Column(name = "quoted_cancellation_charge", precision = 15, scale = 2)
+    private BigDecimal quotedCancellationCharge;
+
+    /** SuperAdmin-only. What the platform proposes to keep of its earning. */
+    @Column(name = "quoted_retained_earning", precision = 15, scale = 2)
+    private BigDecimal quotedRetainedEarning;
+
+    /**
+     * Why the charge is what it is, in the tenant's words rather than the operator's.
+     *
+     * <p>Tenant-visible, unlike {@code internalNotes}. A charge without a reason is one the tenant
+     * cannot explain to their own customer, which is the same problem {@code priceRevisionReason}
+     * exists to solve on the revision side.</p>
+     */
+    @Column(name = "cancellation_quote_note", columnDefinition = "TEXT")
+    private String cancellationQuoteNote;
+
+    @Column(name = "cancellation_quoted_at")
+    private LocalDateTime cancellationQuotedAt;
+
+    @Column(name = "cancellation_quote_expires_at")
+    private LocalDateTime cancellationQuoteExpiresAt;
+
     // ── Voucher (design §7) ─────────────────────────────────────────────────
     // Tracked SEPARATELY from status on purpose: a PDF that fails to render must not be able to
     // un-confirm a room the supplier has already held.
@@ -269,6 +298,18 @@ public class PlatformHotelBooking extends BaseEntity {
     @Column(name = "voucher_status", nullable = false, length = 20)
     @Builder.Default
     private VoucherStatus voucherStatus = VoucherStatus.NOT_ISSUED;
+
+    /**
+     * Whether the voucher is the one this system renders, or a PDF the hotel supplied.
+     *
+     * <p>Only the discriminator lives here. The bytes are in {@code platform_hotel_voucher_files},
+     * a side table, because this entity is loaded on every queue and list page and a {@code bytea}
+     * column on it would drag a multi-megabyte PDF through each one.</p>
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "voucher_source", nullable = false, length = 20)
+    @Builder.Default
+    private VoucherSource voucherSource = VoucherSource.GENERATED;
 
     @Column(name = "voucher_number", length = 40)
     private String voucherNumber;

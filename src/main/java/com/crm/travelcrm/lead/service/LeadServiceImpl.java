@@ -12,10 +12,18 @@ import com.crm.travelcrm.lead.dto.LeadBoardColumnDto;
 import com.crm.travelcrm.lead.dto.LeadResponseDto;
 import com.crm.travelcrm.lead.dto.UserLeadStageCountDto;
 import com.crm.travelcrm.lead.dto.UserWorkloadDto;
+import com.crm.travelcrm.lead.alert.LeadAlertAssembler;
+import com.crm.travelcrm.lead.alert.LeadAlertBroadcaster;
 import com.crm.travelcrm.lead.assignment.audit.LeadAssignmentAudit;
 import com.crm.travelcrm.lead.assignment.audit.LeadAssignmentAuditRecorder;
+import com.crm.travelcrm.lead.assignment.history.LeadAssignmentEvent;
+import com.crm.travelcrm.lead.assignment.history.LeadAssignmentEventRecorder;
+import com.crm.travelcrm.lead.assignment.history.LeadAssignmentEventType;
+import com.crm.travelcrm.lead.assignment.service.AssignableUserResolver;
 import com.crm.travelcrm.lead.assignment.service.AssignmentOutcome;
 import com.crm.travelcrm.lead.assignment.service.LeadAssignmentService;
+import com.crm.travelcrm.lead.claim.service.LeadClaimService;
+import com.crm.travelcrm.lead.sla.LeadSlaPolicy;
 import com.crm.travelcrm.lead.entity.Lead;
 import com.crm.travelcrm.lead.entity.LeadItinerary;
 import com.crm.travelcrm.lead.enums.LeadStage;
@@ -33,6 +41,7 @@ import com.crm.travelcrm.lead.repository.LeadRepository;
 import com.crm.travelcrm.lead.util.LeadCodeGenerator;
 import com.crm.travelcrm.notification.api.NotifyEvent;
 import com.crm.travelcrm.notification.domain.enums.DeliveryChannel;
+import com.crm.travelcrm.permission.enums.Permission;
 import com.crm.travelcrm.permission.service.ScopeResolver;
 import com.crm.travelcrm.permission.service.SubAgentScope;
 import com.crm.travelcrm.quotation.dto.QuotationRefDto;
@@ -78,6 +87,12 @@ public class LeadServiceImpl implements LeadService {
     private final TenantRepository tenantRepository;
     private final LeadAssignmentService leadAssignmentService;
     private final LeadAssignmentAuditRecorder leadAssignmentAuditRecorder;
+    private final LeadAssignmentEventRecorder leadAssignmentEventRecorder;
+    private final LeadClaimService leadClaimService;
+    private final LeadSlaPolicy slaPolicy;
+    private final LeadAlertAssembler alertAssembler;
+    private final LeadAlertBroadcaster alertBroadcaster;
+    private final AssignableUserResolver assignableUserResolver;
     private final CustomerMatcher customerMatcher;
 
     // Terminal (closed) stages. A lead here no longer blocks a fresh lead for the same
@@ -124,6 +139,15 @@ public class LeadServiceImpl implements LeadService {
         // sub-agent portal) funnels through here, so none of them can mint a code-less lead.
         lead.setLeadCode(leadCodeGenerator.generate(tenantId));
 
+        // ── Claim window opens here ──────────────────────────────────────────
+        // Explicit 0 rather than relying on a column default: the CAS compares against the value the
+        // client last saw, and a row that starts NULL would depend on the backfill in db/indexes.sql
+        // having run before its first claim. New rows must never need a backfill to work.
+        lead.setClaimVersion(0);
+        // The SLA target is PINNED at creation, never read live afterwards — raising the target next
+        // month must not retroactively un-breach this lead. See LeadSlaPolicy.
+        lead.setSlaTargetSeconds(slaPolicy.targetSecondsForNewLead(tenantId));
+
         // Intelligent assignment (Strategy Pattern). Runs inside this transaction so the round-robin
         // cursor's pessimistic lock is held to commit — which is why assignment happens HERE and is
         // not resolved by the caller and passed in.
@@ -157,6 +181,15 @@ public class LeadServiceImpl implements LeadService {
         // the audit's REQUIRES_NEW write unfiltered; it survived only on the explicit .tenantId()
         // below. Publish last, and keep it last.
         recordAssignmentAudit(savedLead, outcome, tenantId, actor);
+        recordAssignmentHistory(savedLead, outcome, tenantId, actor);
+
+        // The tenant-wide alert. Assembled NOW, while the session can still resolve the lazy
+        // assignedUser and itinerary; the push itself is deferred to after commit, so a rollback
+        // can never leave every browser in the tenant showing a lead that does not exist.
+        // Registered BEFORE the publish below for the same reason the audit is: publishing clears
+        // TenantContext on this thread, and anything after it runs without a tenant.
+        alertBroadcaster.broadcastNewLead(tenantId, alertAssembler.toAlert(savedLead));
+
         publishLeadCreatedNotification(savedLead, tenantId);
 
         LeadResponseDto response = leadMapper.toResponse(savedLead);
@@ -285,6 +318,41 @@ public class LeadServiceImpl implements LeadService {
                     .build());
         } catch (Exception ex) {
             log.warn("Lead assignment audit write failed for lead {}: {}",
+                    lead.getPublicId(), ex.getMessage());
+        }
+    }
+
+    /**
+     * Open the lead's ownership TIMELINE with its first entry. Sibling of
+     * {@link #recordAssignmentAudit} and deliberately a separate row in a separate table: that one
+     * records the DECISION (what the strategy recommended vs what happened), this records the
+     * resulting OWNERSHIP, and every later claim appends here. Folding them together would force
+     * each claim to invent a recommendation it never had.
+     *
+     * <p>Best-effort, same contract as the audit: written by a {@code REQUIRES_NEW} recorder across
+     * a bean boundary and wrapped in try/catch, so a history failure can never roll back the lead.
+     * The claim-time events are the opposite (in-transaction) — see {@code LeadClaimService}.
+     */
+    private void recordAssignmentHistory(Lead lead, AssignmentOutcome outcome, Long tenantId,
+                                         LeadActor actor) {
+        try {
+            leadAssignmentEventRecorder.record(LeadAssignmentEvent.builder()
+                    .tenantId(tenantId)
+                    .leadId(lead.getId())
+                    .leadPublicId(lead.getPublicId())
+                    .eventType(LeadAssignmentEventType.AUTO_ASSIGNED)
+                    // No fromUser — nobody held it before. A self-referential "from X to X" row would
+                    // render in the timeline as a transfer that never happened.
+                    .toUserId(outcome.finalUser().getId())
+                    .toUserName(outcome.finalUser().getName())
+                    // Null for INTEGRATION / SYSTEM: a webhook has no user behind it, and actorName
+                    // carries the connection label instead so the trail still reads "who did this".
+                    .actorUserId(actor.userId())
+                    .actorName(actor.displayName())
+                    .strategyUsed(outcome.strategyUsed())
+                    .build());
+        } catch (Exception ex) {
+            log.warn("Lead assignment history write failed for lead {}: {}",
                     lead.getPublicId(), ex.getMessage());
         }
     }
@@ -622,24 +690,56 @@ public class LeadServiceImpl implements LeadService {
         // CONVERTED is owned by the booking lifecycle — reject drag/edit crossings.
         assertConversionStageTransitionAllowed(oldStage, newStage);
 
+        // ── The claim window's SECOND door ───────────────────────────────────
+        // Dragging an open lead into an engaged stage IS first contact, and it must close the claim
+        // window exactly as the "Mark Contacted" button does. Routing it through the same CAS rather
+        // than setting the stage here is the whole point: a direct save would move the lead to
+        // "Qualified" while leaving it advertised in the claim feed with its SLA clock still running,
+        // and two people would keep being able to take it. The CAS also writes the stage, so this
+        // branch must NOT fall through to the save below.
+        if (LeadAccessGuard.isOpenToClaim(lead) && LeadStageGroups.isEngaged(newStage)) {
+            leadClaimService.stampFirstContact(lead, newStage, "Stage moved to "
+                    + newStage.getDisplayName());
+            // Re-read: stampFirstContact runs a bulk UPDATE that clears the persistence context, so
+            // the `lead` reference above is now stale and would report the pre-contact state.
+            Lead contacted = leadRepository
+                    .findByPublicIdAndTenantIdAndDeletedAtIsNull(publicId, tenantId)
+                    .orElseThrow(() -> new ResourceNotFoundException("Lead not found: " + publicId));
+            log.info("Lead stage changed with first-contact stamp | publicId: {} | {} -> {} | tenantId: {}",
+                    publicId, oldStage, newStage, tenantId);
+            publishStageChangedNotification(contacted, oldStage, newStage, tenantId);
+            return leadMapper.toResponse(contacted);
+        }
+
         lead.setLeadStage(newStage);
         Lead updated = leadRepository.save(lead);
         log.info("Lead stage changed | publicId: {} | {} -> {} | tenantId: {}",
                 publicId, oldStage, newStage, tenantId);
 
+        publishStageChangedNotification(updated, oldStage, newStage, tenantId);
+
+        return leadMapper.toResponse(updated);
+    }
+
+    /**
+     * Extracted so BOTH stage-change paths — the ordinary save and the first-contact CAS above —
+     * raise the identical event. Inlined in one branch only, it silently went missing whenever a
+     * drag happened to close the claim window, which is precisely the move a manager most wants to
+     * see in the feed.
+     */
+    private void publishStageChangedNotification(Lead lead, LeadStage oldStage, LeadStage newStage,
+                                                 Long tenantId) {
         eventPublisher.publishEvent(NotifyEvent.builder()
                 .type("LEAD_STAGE_CHANGED")
                 .tenantId(tenantId)
                 .actorUserId(currentUserId())
-                .title("Lead moved: " + updated.getCustomerName())
-                .message(updated.getCustomerName() + " moved from "
+                .title("Lead moved: " + lead.getCustomerName())
+                .message(lead.getCustomerName() + " moved from "
                         + oldStage.getDisplayName() + " to " + newStage.getDisplayName())
                 .referenceType("LEAD")
-                .referencePublicId(updated.getPublicId())
+                .referencePublicId(lead.getPublicId())
                 .channels(Set.of(DeliveryChannel.IN_APP))
                 .build());
-
-        return leadMapper.toResponse(updated);
     }
 
     /**
@@ -871,11 +971,18 @@ public class LeadServiceImpl implements LeadService {
     }
 
     private void publishLeadCreatedNotification(Lead lead, Long tenantId) {
-        // Notify all TENANT_ADMIN + MANAGER of this tenant
-        List<Long> recipientIds = userRepository
-                .findByTenantIdAndRoleInAndIsActiveTrue(
-                        tenantId,
-                        List.of("TENANT_ADMIN", "MANAGER"))
+        // BROADCAST TO EVERYONE WHO COULD OWN THIS LEAD, not just admins and managers.
+        //
+        // This used to target TENANT_ADMIN + MANAGER only, which made sense when a new lead was
+        // purely a supervisory event. It is not any more: the lead is claimable by any eligible
+        // agent, and an alert that reaches only the two people who mostly do not work the pipeline
+        // is an alert nobody acts on.
+        //
+        // The audience is AssignableUserResolver's pool — active, unlocked, holds LEAD_READ, never a
+        // sub-agent — i.e. exactly the set the auto-assignment could have picked from and the set
+        // LeadClaimService will let claim. Deriving it from the same resolver rather than a role
+        // list means "who is told" and "who may act" cannot drift apart.
+        List<Long> recipientIds = assignableUserResolver.resolve(tenantId, Permission.LEAD_READ)
                 .stream()
                 .map(User::getId)
                 .toList();

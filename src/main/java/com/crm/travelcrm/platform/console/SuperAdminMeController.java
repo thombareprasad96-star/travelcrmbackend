@@ -1,6 +1,7 @@
 package com.crm.travelcrm.platform.console;
 
 import com.crm.travelcrm.auth.dto.ChangePasswordRequest;
+import com.crm.travelcrm.auth.dev.DevSuperAdminLoginMode;
 import com.crm.travelcrm.auth.mfa.SuperAdminStepUpService;
 import com.crm.travelcrm.auth.repository.SuperAdminRepository;
 import com.crm.travelcrm.auth.security.SuperAdminPasswordPolicy;
@@ -43,6 +44,7 @@ public class SuperAdminMeController {
     private final PlatformAuditRecorder platformAuditRecorder;
     private final SuperAdminPasswordPolicy superAdminPasswordPolicy;
     private final SuperAdminStepUpService superAdminStepUpService;
+    private final DevSuperAdminLoginMode devLoginMode;
 
     @GetMapping("/me")
     public ResponseEntity<ApiResponse<SuperAdminProfileDTO>> me() {
@@ -55,13 +57,19 @@ public class SuperAdminMeController {
             throw new BusinessException("Not a platform session.", HttpStatus.FORBIDDEN);
         }
 
+        // isSetupComplete() is "MFA enrolled AND password changed" — unreachable on a login path
+        // that skips MFA. The console hard-redirects to /console/setup while this is false, so on
+        // the local dev bypass it would park on a setup screen that can never be satisfied.
+        // Non-prod only; see DevSuperAdminLoginMode. mfaEnabled below stays the truth.
+        boolean setupComplete = devLoginMode.isEnabled() || superAdmin.isSetupComplete();
+
         SuperAdminProfileDTO dto = new SuperAdminProfileDTO(
                 superAdmin.getPublicId(),
                 superAdmin.getName(),
                 superAdmin.getEmail(),
                 superAdmin.isMfaEnabled(),
                 superAdmin.isMustChangePassword(),
-                superAdmin.isSetupComplete());
+                setupComplete);
         return ResponseEntity.ok(ApiResponse.success("OK", dto));
     }
 

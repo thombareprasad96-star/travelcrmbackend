@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.function.Consumer;
 import java.util.UUID;
 
 /**
@@ -36,6 +37,13 @@ public class MarketplaceRevisionExpiryScheduler {
      */
     public interface RevisionExpiryHandler {
         void expire(UUID bookingPublicId);
+
+        /**
+         * The same job for an unanswered cancellation quote. Two offers a tenant can leave hanging,
+         * one sweep — a stale cancellation charge is exactly as unsafe to leave acceptable as a
+         * stale price.
+         */
+        void expireCancellationQuote(UUID bookingPublicId);
     }
 
     private final PlatformHotelBookingRepository repository;
@@ -63,37 +71,46 @@ public class MarketplaceRevisionExpiryScheduler {
     @Scheduled(fixedDelayString = "${app.marketplace.revision-expiry.interval-ms:300000}",
                initialDelayString = "${app.marketplace.revision-expiry.initial-delay-ms:150000}")
     public void sweep() {
-        List<PlatformHotelBooking> expired = repository.findExpiredRevisions(
-                LocalDateTime.now(), PageRequest.of(0, batchSize));
-        if (expired.isEmpty()) {
+        LocalDateTime now = LocalDateTime.now();
+        PageRequest batch = PageRequest.of(0, batchSize);
+
+        List<PlatformHotelBooking> revisions = repository.findExpiredRevisions(now, batch);
+        List<PlatformHotelBooking> quotes = repository.findExpiredCancellationQuotes(now, batch);
+        if (revisions.isEmpty() && quotes.isEmpty()) {
             return;
         }
 
         RevisionExpiryHandler handler = handlerProvider.getIfAvailable();
         if (handler == null) {
-            log.warn("Marketplace revision expiry: {} offer(s) are past their deadline but no "
-                    + "RevisionExpiryHandler bean is present — none were expired", expired.size());
+            log.warn("Marketplace expiry: {} price offer(s) and {} cancellation quote(s) are past "
+                            + "their deadline but no RevisionExpiryHandler bean is present — none were expired",
+                    revisions.size(), quotes.size());
             return;
         }
 
+        int closed = drain(revisions, handler::expire, "revision");
+        closed += drain(quotes, handler::expireCancellationQuote, "cancellation quote");
+
+        log.info("Marketplace expiry: {} offer(s) closed ({} revision, {} cancellation quote)",
+                closed, revisions.size(), quotes.size());
+    }
+
+    private int drain(List<PlatformHotelBooking> rows, Consumer<UUID> action, String what) {
         int closed = 0;
-        int failed = 0;
-        for (PlatformHotelBooking row : expired) {
+        for (PlatformHotelBooking row : rows) {
             try {
-                handler.expire(row.getPublicId());
+                action.accept(row.getPublicId());
                 closed++;
             } catch (RuntimeException e) {
                 // A row somebody is deciding on right now will be locked; it stays in the query and
                 // is swept again next tick rather than ending the batch.
-                failed++;
-                log.error("Revision expiry failed for {}: {}", row.getBookingCode(), e.getMessage());
+                log.error("{} expiry failed for {}: {}", what, row.getBookingCode(), e.getMessage());
             } finally {
                 // The handler may cross into tenant-scoped work. A pooled scheduler thread carrying a
                 // leftover tenant id is a cross-tenant read waiting to happen.
                 TenantContext.clear();
             }
         }
-
-        log.info("Marketplace revision expiry: {} offer(s) closed, {} failed", closed, failed);
+        return closed;
     }
 }

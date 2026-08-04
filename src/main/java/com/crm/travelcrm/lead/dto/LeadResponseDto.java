@@ -112,6 +112,29 @@ public class LeadResponseDto {
     private LocalDateTime convertedAt;
     private UUID convertedBookingPublicId;
 
+    // ── Claim window / first-response SLA ─────────────────────────────────────
+    // Present on every lead response, list included: the claim button submits the version it saw,
+    // so a list that omitted it would need a detail fetch per row before anyone could claim.
+
+    /**
+     * The compare-and-swap value to submit with a claim. Never null on the wire — legacy rows read
+     * as 0 (see the mapper), because a null here would become {@code null} in the JSON and the
+     * client would post it straight back as the expected version.
+     */
+    private int claimVersion;
+
+    /** True while anyone eligible may claim this lead (not yet contacted, not terminal). */
+    private boolean openToClaim;
+
+    /** When first contact was made — null while the claim window is still open. */
+    private LocalDateTime firstContactedAt;
+
+    /** Measured create → first-contact time. Survives a manager reopening the window. */
+    private Long firstResponseSeconds;
+
+    /** The SLA target pinned at creation, so the client's countdown matches the server's judgement. */
+    private Integer slaTargetSeconds;
+
     @Data
     @Builder
     public static class ItineraryItem {

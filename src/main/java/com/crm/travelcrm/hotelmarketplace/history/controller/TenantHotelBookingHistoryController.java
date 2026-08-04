@@ -10,6 +10,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import com.crm.travelcrm.hotelmarketplace.voucher.service.MarketplaceVoucherService;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
@@ -59,13 +60,19 @@ public class TenantHotelBookingHistoryController {
         return ResponseEntity.ok(ApiResponse.success("Hotel booking fetched", historyService.get(publicId)));
     }
 
-    /** 404 until the platform has issued it — a document that does not exist is not a 403. */
+    /**
+     * 404 until the platform has issued it — a document that does not exist is not a 403.
+     *
+     * <p>Serves the hotel's own file when one was uploaded, and the rendered PDF otherwise, so the
+     * content type is whatever the document actually is rather than an assumption.</p>
+     */
     @GetMapping("/{publicId}/voucher.pdf")
     public ResponseEntity<byte[]> voucher(@PathVariable UUID publicId) {
+        MarketplaceVoucherService.VoucherDocument doc = historyService.voucherDocument(publicId);
         return ResponseEntity.ok()
-                .header("Content-Disposition", "inline; filename=hotel-voucher-" + publicId + ".pdf")
-                .contentType(MediaType.APPLICATION_PDF)
-                .body(historyService.voucherPdf(publicId));
+                .header("Content-Disposition", "inline; filename=\"" + doc.fileName() + "\"")
+                .contentType(MediaType.parseMediaType(doc.contentType()))
+                .body(doc.content());
     }
 
     private static int clamp(int size) {

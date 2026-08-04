@@ -361,6 +361,16 @@
 			<version>1.10.0</version>
 		</dependency>
 
+		<!-- Excel (.xls / .xlsx) parsing for bulk lead import. Read-only: we never WRITE
+		     workbooks — the downloadable import template is CSV, which every spreadsheet
+		     opens. poi-ooxml pulls poi (HSSF, for legacy .xls) transitively, so one
+		     WorkbookFactory.create(...) call covers both formats. -->
+		<dependency>
+			<groupId>org.apache.poi</groupId>
+			<artifactId>poi-ooxml</artifactId>
+			<version>5.2.5</version>
+		</dependency>
+
 		<!-- ===================================================== -->
 		<!-- DEVTOOLS                                                -->
 		<!-- ===================================================== -->

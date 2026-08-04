@@ -1,6 +1,7 @@
 package com.crm.travelcrm.notification.web;
 
 import com.crm.travelcrm.auth.api.CurrentUserProvider;
+import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.notification.domain.entity.Notification;
@@ -99,8 +100,17 @@ public class NotificationServiceImpl implements NotificationService {
     @Override
     public SseEmitter subscribe() {
         Long userId = currentUserId();
-        SseEmitter emitter = sseEmitterRegistry.register(userId);
-        log.debug("SSE emitter registered for user {}", userId);
+        // Tenant comes from TenantContext, populated moments ago by TokenAuthenticator when it
+        // validated the query-param token — the same claim JwtAuthFilter would have used. It is what
+        // makes this connection eligible for tenant broadcasts (the new-lead alert); a null tenant
+        // simply receives none rather than being filed under a default and seeing everyone's.
+        Long tenantId = TenantContext.getTenantId();
+        if (tenantId == null) {
+            log.warn("SSE subscription for user {} has no tenant in context — this connection will "
+                    + "receive personal notifications but no tenant broadcasts.", userId);
+        }
+        SseEmitter emitter = sseEmitterRegistry.register(tenantId, userId);
+        log.debug("SSE emitter registered for user {} (tenant {})", userId, tenantId);
         return emitter;
     }
 

@@ -1,5 +1,6 @@
 package com.crm.travelcrm.lead.repository;
 
+import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.lead.dto.UserLeadStageCountDto;
 import com.crm.travelcrm.lead.dto.UserWorkloadDto;
 import com.crm.travelcrm.lead.entity.Lead;
@@ -8,6 +9,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -165,6 +167,274 @@ public interface LeadRepository extends JpaRepository<Lead, Long> {
     /** Total live leads assigned to one user (tenant-scoped). */
     long countByAssignedUserPublicIdAndTenantIdAndDeletedAtIsNull(
             UUID userPublicId, Long tenantId);
+
+    // ── Claim window: the incoming-leads feed and its tiles ──────────────────
+
+    /**
+     * Every lead in the tenant still open to claim, newest first — the incoming-leads list.
+     *
+     * <p>The predicate is the SQL twin of {@code LeadAccessGuard.isOpenToClaim} and of the partial
+     * index {@code idx_leads_open_to_claim}; all three must state the same thing or the index stops
+     * being used and the feed stops agreeing with the per-lead guard.
+     *
+     * <p><b>No owner filter.</b> An open lead is visible tenant-wide by design (the approved
+     * claim-window widening) — that is what lets anyone claim it. Row-scope resumes the moment it
+     * locks, at which point it leaves this feed entirely.
+     */
+    @EntityGraph(attributePaths = "assignedUser")
+    @Query("""
+            SELECT l
+            FROM Lead l
+            WHERE l.tenantId = :tenantId
+              AND l.deletedAt IS NULL
+              AND l.firstContactedAt IS NULL
+              AND l.leadStage NOT IN :terminalStages
+            ORDER BY l.createdAt DESC
+            """)
+    List<Lead> findOpenToClaim(@Param("tenantId") Long tenantId,
+                               @Param("terminalStages") Collection<LeadStage> terminalStages,
+                               Pageable pageable);
+
+    /** Tile 2 — how many leads are claimable right now (not scoped to today; see the DTO). */
+    @Query("""
+            SELECT COUNT(l)
+            FROM Lead l
+            WHERE l.tenantId = :tenantId
+              AND l.deletedAt IS NULL
+              AND l.firstContactedAt IS NULL
+              AND l.leadStage NOT IN :terminalStages
+            """)
+    long countOpenToClaim(@Param("tenantId") Long tenantId,
+                          @Param("terminalStages") Collection<LeadStage> terminalStages);
+
+    /** Tile 1 — leads created inside the tenant's local day. */
+    @Query("""
+            SELECT COUNT(l)
+            FROM Lead l
+            WHERE l.tenantId = :tenantId
+              AND l.deletedAt IS NULL
+              AND l.createdAt >= :from AND l.createdAt < :to
+            """)
+    long countCreatedBetween(@Param("tenantId") Long tenantId,
+                             @Param("from") LocalDateTime from,
+                             @Param("to") LocalDateTime to);
+
+    /**
+     * Tile 3 — mean first-response seconds over leads CONTACTED in the window.
+     *
+     * @return null when nobody was contacted in the window; the caller renders "—" rather than 0,
+     *         because "no data" and "instant response" are opposite facts
+     */
+    @Query("""
+            SELECT AVG(l.firstResponseSeconds)
+            FROM Lead l
+            WHERE l.tenantId = :tenantId
+              AND l.deletedAt IS NULL
+              AND l.firstResponseSeconds IS NOT NULL
+              AND l.firstContactedAt >= :from AND l.firstContactedAt < :to
+            """)
+    Double avgFirstResponseSeconds(@Param("tenantId") Long tenantId,
+                                   @Param("from") LocalDateTime from,
+                                   @Param("to") LocalDateTime to);
+
+    /**
+     * Tile 4 — SLA breaches among leads created in the window.
+     *
+     * <p>Two disjoint populations in one count, and both are needed:
+     * <ol>
+     *   <li>answered, but slower than the lead's own pinned target;</li>
+     *   <li>never answered, still active, and already past that target as of {@code now}.</li>
+     * </ol>
+     * The second is why this is computed live. {@code COALESCE(slaTargetSeconds, :defaultTarget)}
+     * covers rows written before the column existed, which otherwise compare against NULL and
+     * silently never breach.
+     *
+     * <p><b>Both branches compare against the lead's OWN pinned target</b>, via
+     * {@code timestampdiff} rather than a single precomputed cutoff timestamp. A shared cutoff
+     * would be right only while every lead in the window happened to share one target — true today,
+     * false the moment the configured target is changed mid-day or a per-tenant target lands, and
+     * wrong silently in exactly the direction that under-reports breaches.
+     */
+    @Query("""
+            SELECT COUNT(l)
+            FROM Lead l
+            WHERE l.tenantId = :tenantId
+              AND l.deletedAt IS NULL
+              AND l.createdAt >= :from AND l.createdAt < :to
+              AND (
+                    (l.firstResponseSeconds IS NOT NULL
+                      AND l.firstResponseSeconds > COALESCE(l.slaTargetSeconds, :defaultTarget))
+                 OR (l.firstContactedAt IS NULL
+                      AND l.leadStage NOT IN :terminalStages
+                      AND timestampdiff(SECOND, l.createdAt, :now)
+                            > COALESCE(l.slaTargetSeconds, :defaultTarget))
+              )
+            """)
+    long countSlaBreaches(@Param("tenantId") Long tenantId,
+                          @Param("from") LocalDateTime from,
+                          @Param("to") LocalDateTime to,
+                          @Param("now") LocalDateTime now,
+                          @Param("defaultTarget") int defaultTarget,
+                          @Param("terminalStages") Collection<LeadStage> terminalStages);
+
+    // ── Claim window: compare-and-swap ownership transitions ─────────────────
+    //
+    // All three statements below are SINGLE atomic UPDATEs whose WHERE clause carries the entire
+    // precondition. That is the whole concurrency design: two simultaneous claims cannot both
+    // succeed because the second one's `claimVersion = :expectedVersion` no longer matches. The
+    // loser gets 0 rows and is told who won — it is never silently overwritten, and there is never
+    // a moment where the row has two owners.
+    //
+    // Read-then-write in Java (load, check, save) would NOT be equivalent: between the read and the
+    // write another transaction commits, and both writers see a valid precondition. That is exactly
+    // the bug this shape exists to make unrepresentable.
+    //
+    // COALESCE(l.claimVersion, 0) throughout: ddl-auto=update adds the column NULL on existing rows,
+    // and `NULL = 0` is NULL (not false) in SQL, so an un-coalesced comparison would make every
+    // pre-existing lead permanently unclaimable until the backfill ran. It runs in db/indexes.sql,
+    // but correctness must not depend on that having happened.
+    //
+    // @Modifying(clearAutomatically, flushAutomatically): the caller holds the same Lead in the
+    // persistence context and re-reads it immediately afterwards. Without these, the bulk UPDATE
+    // bypasses the first-level cache and the re-read returns the STALE entity — the claim would
+    // succeed in the database and the response would report the old owner.
+
+    /**
+     * Take ownership of an OPEN lead. Succeeds only while the claim window is open and nobody has
+     * moved since the caller read {@code expectedVersion}.
+     *
+     * @return 1 when the claim was won, 0 when it was lost (stale version, already contacted,
+     *         terminal stage, deleted, or wrong tenant) — the caller must re-read to say WHY
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            UPDATE Lead l
+               SET l.assignedUser  = :newOwner,
+                   l.claimVersion  = COALESCE(l.claimVersion, 0) + 1
+             WHERE l.id              = :leadId
+               AND l.tenantId        = :tenantId
+               AND l.deletedAt      IS NULL
+               AND l.firstContactedAt IS NULL
+               AND l.leadStage   NOT IN :terminalStages
+               AND COALESCE(l.claimVersion, 0) = :expectedVersion
+            """)
+    int claimLead(@Param("leadId") Long leadId,
+                  @Param("tenantId") Long tenantId,
+                  @Param("newOwner") User newOwner,
+                  @Param("expectedVersion") int expectedVersion,
+                  @Param("terminalStages") Collection<LeadStage> terminalStages);
+
+    /**
+     * Close the claim window: stamp first contact and freeze the SLA clock.
+     *
+     * <p>No {@code expectedVersion} guard, on purpose. Marking contacted is idempotent in intent —
+     * whoever gets there first wins and the second click is a no-op, which is the correct behaviour
+     * for a button two people may press at once. The {@code firstContactedAt IS NULL} predicate is
+     * the guard that matters: it makes the stamp physically unrepeatable, so two concurrent calls
+     * can never write two different first-response times.
+     *
+     * <p>{@code leadStage} is set here too, in the same statement, so the lock and the stage can
+     * never disagree — a lead that is locked but still displays "New Lead" is a support ticket.
+     *
+     * @return 1 when this call closed the window, 0 when it was already closed or the lead is gone
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            UPDATE Lead l
+               SET l.firstContactedAt       = :contactedAt,
+                   l.firstContactedByUserId = :contactedByUserId,
+                   l.firstResponseSeconds   = :responseSeconds,
+                   l.leadStage              = :contactedStage,
+                   l.claimVersion           = COALESCE(l.claimVersion, 0) + 1
+             WHERE l.id                = :leadId
+               AND l.tenantId          = :tenantId
+               AND l.deletedAt        IS NULL
+               AND l.firstContactedAt IS NULL
+            """)
+    int markContacted(@Param("leadId") Long leadId,
+                      @Param("tenantId") Long tenantId,
+                      @Param("contactedAt") LocalDateTime contactedAt,
+                      @Param("contactedByUserId") Long contactedByUserId,
+                      @Param("responseSeconds") Long responseSeconds,
+                      @Param("contactedStage") LeadStage contactedStage);
+
+    /**
+     * Reopen the claim window on a locked lead (a manager undoing a mis-click).
+     *
+     * <p>{@code firstResponseSeconds} is deliberately left ALONE while the timestamp is cleared.
+     * Clearing both would let anyone erase a missed SLA by reopening and re-contacting; keeping the
+     * measurement while releasing the lock is what makes the undo safe to grant. The next contact
+     * re-stamps {@code firstContactedAt} but {@link #markContactedPreservingSla} keeps the original
+     * measurement, so the reported first-response time is always the true one.
+     *
+     * @return 1 when the window was reopened, 0 when the lead was not locked to begin with
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            UPDATE Lead l
+               SET l.firstContactedAt       = NULL,
+                   l.firstContactedByUserId = NULL,
+                   l.leadStage              = :reopenStage,
+                   l.claimVersion           = COALESCE(l.claimVersion, 0) + 1
+             WHERE l.id                 = :leadId
+               AND l.tenantId           = :tenantId
+               AND l.deletedAt         IS NULL
+               AND l.firstContactedAt IS NOT NULL
+               AND l.leadStage      NOT IN :terminalStages
+            """)
+    int reopenClaimWindow(@Param("leadId") Long leadId,
+                          @Param("tenantId") Long tenantId,
+                          @Param("reopenStage") LeadStage reopenStage,
+                          @Param("terminalStages") Collection<LeadStage> terminalStages);
+
+    /**
+     * Re-stamp first contact on a lead whose window was reopened, WITHOUT touching the frozen
+     * {@code firstResponseSeconds}. Split from {@link #markContacted} rather than made conditional:
+     * one statement that sometimes preserves and sometimes overwrites the SLA measurement is the
+     * kind of thing that reads as correct and is not.
+     *
+     * @return 1 when this call closed the window, 0 when it was already closed
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            UPDATE Lead l
+               SET l.firstContactedAt       = :contactedAt,
+                   l.firstContactedByUserId = :contactedByUserId,
+                   l.leadStage              = :contactedStage,
+                   l.claimVersion           = COALESCE(l.claimVersion, 0) + 1
+             WHERE l.id                = :leadId
+               AND l.tenantId          = :tenantId
+               AND l.deletedAt        IS NULL
+               AND l.firstContactedAt IS NULL
+            """)
+    int markContactedPreservingSla(@Param("leadId") Long leadId,
+                                   @Param("tenantId") Long tenantId,
+                                   @Param("contactedAt") LocalDateTime contactedAt,
+                                   @Param("contactedByUserId") Long contactedByUserId,
+                                   @Param("contactedStage") LeadStage contactedStage);
+
+    /**
+     * Move a LOCKED lead to a different owner (manager/admin reassignment after first contact).
+     * Requires the lead to BE locked — an open lead is claimed, not reassigned, and routing both
+     * through one endpoint would let a reassign silently bypass the claim CAS.
+     *
+     * @return 1 on success, 0 when the lead is open, terminal, deleted or in another tenant
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            UPDATE Lead l
+               SET l.assignedUser = :newOwner,
+                   l.claimVersion = COALESCE(l.claimVersion, 0) + 1
+             WHERE l.id                 = :leadId
+               AND l.tenantId           = :tenantId
+               AND l.deletedAt         IS NULL
+               AND l.firstContactedAt IS NOT NULL
+               AND l.leadStage      NOT IN :terminalStages
+            """)
+    int reassignLockedLead(@Param("leadId") Long leadId,
+                           @Param("tenantId") Long tenantId,
+                           @Param("newOwner") User newOwner,
+                           @Param("terminalStages") Collection<LeadStage> terminalStages);
 
     /**
      * ACTIVE-lead count per candidate user — the load input for load-based assignment. One GROUP BY
