@@ -3,6 +3,7 @@ package com.crm.travelcrm.booking.specification;
 import com.crm.travelcrm.booking.entity.Booking;
 import com.crm.travelcrm.booking.enums.BookingStatus;
 import com.crm.travelcrm.booking.enums.PaymentStatus;
+import com.crm.travelcrm.common.util.SearchSpec;
 import jakarta.persistence.criteria.Predicate;
 import org.springframework.data.jpa.domain.Specification;
 
@@ -18,17 +19,7 @@ public class BookingSpecification {
     // ── Search (booking code, customer name, destination) ────────────────────
 
     public static Specification<Booking> search(String keyword) {
-        return (root, query, cb) -> {
-            if (keyword == null || keyword.isBlank()) return cb.conjunction();
-
-            String pattern = "%" + keyword.toLowerCase() + "%";
-
-            return cb.or(
-                    cb.like(cb.lower(root.get("bookingCode")), pattern),
-                    cb.like(cb.lower(root.get("customerNameSnapshot")), pattern),
-                    cb.like(cb.lower(root.get("destinationSnapshot")), pattern)
-            );
-        };
+        return SearchSpec.contains(keyword, "bookingCode", "customerNameSnapshot", "destinationSnapshot");
     }
 
     // ── Filter ───────────────────────────────────────────────────────────────

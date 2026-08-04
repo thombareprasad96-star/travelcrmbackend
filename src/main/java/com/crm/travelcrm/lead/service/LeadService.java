@@ -10,6 +10,7 @@ import com.crm.travelcrm.lead.ingest.IngestPolicy;
 import com.crm.travelcrm.lead.ingest.LeadActor;
 import org.springframework.data.domain.Page;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -27,7 +28,9 @@ public interface LeadService {
      * {@link LeadActor} being un-forgeable. Read that class before widening its factories.
      */
     LeadResponseDto createLead(CreateLeadRequestDto request, LeadActor actor, IngestPolicy policy);
-    Page<LeadResponseDto> getAllLeads(int page, int size, String sortBy, String sortDir);
+    Page<LeadResponseDto> getAllLeads(int page, int size, String sortBy, String sortDir,
+                                      String search, String stage, String leadType,
+                                      LocalDate fromDate, LocalDate toDate);
     LeadResponseDto getLeadById(UUID publicId);                                // ← UUID
     LeadResponseDto searchLead(String keyword);
     LeadResponseDto updateLead(UUID publicId, CreateLeadRequestDto request);  // ← UUID

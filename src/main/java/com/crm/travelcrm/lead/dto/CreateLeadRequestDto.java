@@ -23,6 +23,10 @@ public class CreateLeadRequestDto {
 
     @NotBlank(message = "Customer name is required")
     @Size(min = 2, max = 150, message = "Customer name must be between 2 and 150 characters")
+    @Pattern(
+            regexp = "^[\\p{L}\\s.'-]+$",
+            message = "Customer name cannot contain numbers"
+    )
     private String customerName;
 
     @NotBlank(message = "Phone number is required")

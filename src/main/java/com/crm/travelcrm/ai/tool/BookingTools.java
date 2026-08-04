@@ -40,7 +40,7 @@ public class BookingTools {
                 () -> {
                     authorizer.require("BOOKING_READ");
                     return bookingService.getAll(ToolFmt.pageOrDefault(page), ToolFmt.sizeOrDefault(size),
-                                    "bookingDate", "desc")
+                                    "bookingDate", "desc", null, null, null, null, null)
                             .getData().stream().map(BookingTools::toSummary).toList();
                 });
     }

@@ -93,9 +93,15 @@ BookingController {
             @RequestParam(defaultValue = "0")    int    page,
             @RequestParam(defaultValue = "10")   int    size,
             @RequestParam(defaultValue = "createdAt") String sortBy,
-            @RequestParam(defaultValue = "desc") String sortDir) {
+            @RequestParam(defaultValue = "desc") String sortDir,
+            @RequestParam(required = false)      String  search,
+            @RequestParam(required = false)      String  status,
+            @RequestParam(required = false)      String  paymentStatus,
+            @RequestParam(required = false)      Integer bookingMonth,
+            @RequestParam(required = false)      Integer travelMonth) {
         log.info("GET /api/bookings - page: {}, size: {}", page, size);
-        return ResponseEntity.ok(bookingService.getAll(page, size, sortBy, sortDir));
+        return ResponseEntity.ok(bookingService.getAll(page, size, sortBy, sortDir,
+                search, status, paymentStatus, bookingMonth, travelMonth));
     }
 
     // ── Get by ID ────────────────────────────────────────────────────────────

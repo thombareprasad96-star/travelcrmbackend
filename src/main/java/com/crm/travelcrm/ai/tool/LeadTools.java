@@ -52,7 +52,7 @@ public class LeadTools {
                 () -> {
                     authorizer.require("LEAD_READ");
                     return leadService.getAllLeads(ToolFmt.pageOrDefault(page), ToolFmt.sizeOrDefault(size),
-                                    "createdAt", "desc")
+                                    "createdAt", "desc", null, null, null, null, null)
                             .getContent().stream().map(LeadTools::toSummary).toList();
                 });
     }

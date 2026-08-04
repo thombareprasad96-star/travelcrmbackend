@@ -45,7 +45,9 @@ public interface BookingService {
 
     BookingResponseDTO getByCode(String code);
 
-    PagedApiResponse<BookingResponseDTO> getAll(int page, int size, String sortBy, String sortDir);
+    PagedApiResponse<BookingResponseDTO> getAll(int page, int size, String sortBy, String sortDir,
+                                                String search, String status, String paymentStatus,
+                                                Integer bookingMonth, Integer travelMonth);
 
     BookingResponseDTO update(UUID publicId, UpdateBookingRequestDTO request);
 

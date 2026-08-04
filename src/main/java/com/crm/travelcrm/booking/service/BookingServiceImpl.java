@@ -40,6 +40,7 @@ import com.crm.travelcrm.booking.cancellation.service.CancellationCalculator;
 import com.crm.travelcrm.booking.cancellation.service.CancellationDocumentService;
 import com.crm.travelcrm.booking.cancellation.service.CancellationPolicyResolver;
 import com.crm.travelcrm.booking.specification.BookingSpecification;
+import com.crm.travelcrm.common.util.PageSupport;
 import com.crm.travelcrm.booking.util.BookingCodeGenerator;
 import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.common.context.TenantContext;
@@ -770,19 +771,42 @@ public class BookingServiceImpl implements BookingService {
 
     // ── Get All (Paginated) ──────────────────────────────────────────────────
 
+    /** Sort fields the bookings list may order by — anything else falls back to createdAt (no 500). */
+    private static final java.util.Set<String> BOOKING_SORTS = java.util.Set.of(
+            "createdAt", "bookingDate", "travelDate", "customerAmount",
+            "bookingCode", "customerNameSnapshot", "destinationSnapshot",
+            "status", "paymentStatus", "id");
+
     @Override
     @Transactional(readOnly = true)
-    public PagedApiResponse<BookingResponseDTO> getAll(int page, int size, String sortBy, String sortDir) {
-        Sort sort = sortDir.equalsIgnoreCase("desc")
-                ? Sort.by(sortBy).descending()
-                : Sort.by(sortBy).ascending();
+    public PagedApiResponse<BookingResponseDTO> getAll(int page, int size, String sortBy, String sortDir,
+                                                       String search, String status, String paymentStatus,
+                                                       Integer bookingMonth, Integer travelMonth) {
+        // Shared sort (whitelisted + stable id tiebreaker) + size cap — same rule as every paged list.
+        Pageable pageable = PageSupport.pageRequest(page, size,
+                PageSupport.buildSort(sortBy, sortDir, BOOKING_SORTS));
 
-        Pageable pageable  = PageRequest.of(page, size, sort);
-        Specification<Booking> spec = BookingSpecification.isActive();
+        // Forgiving enum parse: an unmatched value (incl. the FE's "All Status" sentinel) means
+        // "no filter" rather than a 500.
+        BookingStatus statusEnum = null;
+        if (status != null && !status.isBlank()) {
+            try { statusEnum = BookingStatus.valueOf(status.trim().toUpperCase()); }
+            catch (IllegalArgumentException ignored) { /* leave null ⇒ all statuses */ }
+        }
+        PaymentStatus payEnum = null;
+        if (paymentStatus != null && !paymentStatus.isBlank()) {
+            try { payEnum = PaymentStatus.valueOf(paymentStatus.trim().toUpperCase()); }
+            catch (IllegalArgumentException ignored) { /* leave null ⇒ all payment statuses */ }
+        }
+
+        // filter() already ANDs the soft-delete guard, so it fully replaces the old isActive() base.
+        Specification<Booking> spec = BookingSpecification
+                .filter(statusEnum, payEnum, bookingMonth, travelMonth, null, null, null, null, null)
+                .and(BookingSpecification.search(search));
         Long ownerFilter = subAgentScope.ownerFilter();
         if (ownerFilter != null) spec = spec.and(BookingSpecification.ownedBy(ownerFilter));
-        Page<Booking> bookingPage = bookingRepository.findAll(spec, pageable);
 
+        Page<Booking> bookingPage = bookingRepository.findAll(spec, pageable);
         List<BookingResponseDTO> content = toResponses(bookingPage.getContent());
 
         return PagedApiResponse.of(

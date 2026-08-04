@@ -19,17 +19,20 @@ import com.crm.travelcrm.lead.assignment.service.LeadAssignmentService;
 import com.crm.travelcrm.lead.entity.Lead;
 import com.crm.travelcrm.lead.entity.LeadItinerary;
 import com.crm.travelcrm.lead.enums.LeadStage;
+import com.crm.travelcrm.lead.enums.LeadType;
 import com.crm.travelcrm.lead.ingest.IngestPolicy;
 import com.crm.travelcrm.lead.ingest.LeadActor;
 import com.crm.travelcrm.lead.enums.LeadStageGroups;
 import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.common.exception.RestoreAvailableException;
+import com.crm.travelcrm.common.util.PageSupport;
 import com.crm.travelcrm.lead.exception.DuplicateLeadException;
 import com.crm.travelcrm.lead.exception.LeadQuotaExceededException;
 import com.crm.travelcrm.lead.exception.NoEligibleAssigneeException;
 import com.crm.travelcrm.lead.mapper.LeadMapper;
 import com.crm.travelcrm.lead.repository.LeadRepository;
+import com.crm.travelcrm.lead.specification.LeadSpecification;
 import com.crm.travelcrm.lead.util.LeadCodeGenerator;
 import com.crm.travelcrm.notification.api.NotifyEvent;
 import com.crm.travelcrm.notification.domain.enums.DeliveryChannel;
@@ -43,6 +46,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.*;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -50,6 +54,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -294,27 +299,46 @@ public class LeadServiceImpl implements LeadService {
     @Override
     @Transactional(readOnly = true)
     public Page<LeadResponseDto> getAllLeads(int page, int size,
-                                             String sortBy, String sortDir) {
+                                             String sortBy, String sortDir,
+                                             String search, String stage, String leadType,
+                                             LocalDate fromDate, LocalDate toDate) {
         Long tenantId = currentTenantId();
 
-        Sort sort = sortDir.equalsIgnoreCase("asc")
-                ? Sort.by(sortBy).ascending()
-                : Sort.by(sortBy).descending();
+        // Shared sort + size cap — the SAME rule as every other paged list in the app. buildSort
+        // appends a stable `id DESC` tiebreaker so tied createdAt rows can't straddle two pages, and
+        // pageRequest floors page/size and caps size (MAX 200). See common/util/PageSupport.
+        Pageable pageable = PageSupport.pageRequest(page, size, PageSupport.buildSort(sortBy, sortDir));
 
-        Pageable pageable = PageRequest.of(page, size, sort);
-
-        // Tenant + soft-delete, then row-level scope (own / team / all) for this user.
+        // Row-level scope (own / team / all). NONE short-circuits to an empty page before building
+        // any query. null ⇒ ALL (no owner restriction); a non-empty set ⇒ owner IN (ids).
         Set<Long> visibleIds = scopeResolver.visibleUserIds(currentUser(), "LEAD_READ");
-        Page<Lead> leadPage;
-        if (visibleIds == null) {                 // ALL — no owner restriction
-            leadPage = leadRepository.findAllByTenantIdAndDeletedAtIsNull(tenantId, pageable);
-        } else if (visibleIds.isEmpty()) {        // NONE — sees nothing
-            leadPage = Page.empty(pageable);
-        } else {                                  // OWN / TEAM — owner_id IN (visibleIds)
-            leadPage = leadRepository.findAllByTenantIdAndDeletedAtIsNullAndAssignedUser_IdIn(
-                    tenantId, visibleIds, pageable);
+        if (visibleIds != null && visibleIds.isEmpty()) {          // NONE — sees nothing
+            return new PageImpl<>(List.of(), pageable, 0);
         }
 
+        // An unknown stage string is treated as "no stage filter" rather than a 500 — the filter
+        // dropdown is forgiving, and @JsonValue drift on the wire should not crash the list.
+        LeadStage stageEnum = null;
+        if (stage != null && !stage.isBlank()) {
+            try { stageEnum = LeadStage.fromValue(stage); }
+            catch (IllegalArgumentException ignored) { /* leave null ⇒ all stages */ }
+        }
+
+        // Same forgiving parse as stage — an unknown type widens rather than 500s.
+        LeadType typeEnum = null;
+        if (leadType != null && !leadType.isBlank()) {
+            try { typeEnum = LeadType.fromValue(leadType); }
+            catch (IllegalArgumentException ignored) { /* leave null ⇒ all types */ }
+        }
+
+        Specification<Lead> spec = LeadSpecification.base(tenantId)
+                .and(LeadSpecification.search(search))
+                .and(LeadSpecification.hasStage(stageEnum))
+                .and(LeadSpecification.hasLeadType(typeEnum))
+                .and(LeadSpecification.createdBetween(fromDate, toDate))
+                .and(LeadSpecification.ownedByIds(visibleIds));    // null ⇒ no restriction
+
+        Page<Lead> leadPage = leadRepository.findAll(spec, pageable);
         List<Lead> leads = leadPage.getContent();
 
         List<LeadResponseDto> dtos = leads.stream()

@@ -19,11 +19,13 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -80,10 +82,15 @@ public class LeadController {
             @RequestParam(defaultValue = "0")         int page,
             @RequestParam(defaultValue = "10")        int size,
             @RequestParam(defaultValue = "createdAt") String sortBy,
-            @RequestParam(defaultValue = "desc")      String sortDir) {
+            @RequestParam(defaultValue = "desc")      String sortDir,
+            @RequestParam(required = false)           String search,
+            @RequestParam(required = false)           String stage,
+            @RequestParam(required = false)           String leadType,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fromDate,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate) {
 
         Page<LeadResponseDto> leadPage =
-                leadService.getAllLeads(page, size, sortBy, sortDir);
+                leadService.getAllLeads(page, size, sortBy, sortDir, search, stage, leadType, fromDate, toDate);
 
         return ResponseEntity.ok(
                 PagedApiResponse.of(
