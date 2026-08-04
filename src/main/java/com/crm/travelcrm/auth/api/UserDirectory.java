@@ -20,6 +20,16 @@ public interface UserDirectory {
     Optional<String> emailById(Long userId);
 
     /**
+     * Mobile number of a user by internal id, or empty if the user does not exist or has no number
+     * on file. Needed by the WhatsApp delivery channel, which must reach a staff member on their
+     * own phone — the notification module has no other route to {@code User.phoneNumber}.
+     *
+     * <p>Returns the raw stored value; E.164 normalisation is the sender's job
+     * ({@code WhatsAppMessagingService.normalize}).
+     */
+    Optional<String> phoneById(Long userId);
+
+    /**
      * Internal ids of all active {@code TENANT_ADMIN} users in the given tenant.
      * Returns an empty list when {@code tenantId} is null. Caller-side filtering
      * (e.g. excluding the acting user) stays with the caller.

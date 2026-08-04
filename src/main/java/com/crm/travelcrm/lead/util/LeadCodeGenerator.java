@@ -1,12 +1,10 @@
 package com.crm.travelcrm.lead.util;
 
 import com.crm.travelcrm.lead.entity.LeadSequence;
-import com.crm.travelcrm.lead.repository.LeadRepository;
 import com.crm.travelcrm.lead.repository.LeadSequenceRepository;
 import lombok.RequiredArgsConstructor;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
 
 import java.time.Year;
@@ -37,7 +35,7 @@ public class LeadCodeGenerator {
     private static final String PREFIX = "LD";
 
     private final LeadSequenceRepository sequenceRepository;
-    private final LeadRepository leadRepository;
+    private final LeadSequenceProvisioner provisioner;
 
     /**
      * Reserve and return the next reference for {@code tenantId}. The counter row is
@@ -45,8 +43,14 @@ public class LeadCodeGenerator {
      * atomic per tenant.
      */
     public String generate(Long tenantId) {
+        // Provision FIRST, in its own transaction, so a lost create-race cannot poison this one —
+        // and before the lock below, so the two never contend. See LeadSequenceProvisioner.
+        provisioner.ensureExists(tenantId);
+
         LeadSequence seq = sequenceRepository.findByTenantId(tenantId)
-                .orElseGet(() -> createInitial(tenantId));
+                .orElseThrow(() -> new IllegalStateException(
+                        "Lead counter row missing for tenant " + tenantId + " immediately after "
+                        + "provisioning — the row was deleted concurrently."));
 
         long next = seq.getLastValue() + 1;
         seq.setLastValue(next);
@@ -57,37 +61,4 @@ public class LeadCodeGenerator {
         return code;
     }
 
-    /**
-     * Lazily create the tenant's counter row on first use. Under a concurrent first-ever
-     * lead two threads could both miss the row and try to insert; the UNIQUE constraint
-     * on {@code tenant_id} lets exactly one win, and the loser re-reads it under the lock.
-     *
-     * <p><b>Starts at the tenant's existing lead count, not at 0 — and that difference from
-     * {@code BookingCodeGenerator} is the whole point.</b> Bookings shipped with their code column
-     * from day one, so a missing counter genuinely means "no bookings yet". Leads did not: a live
-     * tenant has rows that {@code db/indexes.sql} back-filled with {@code LD-YY-0001…N}. Starting a
-     * fresh counter at 0 there would re-issue {@code LD-YY-0001} and the very first lead created
-     * after the upgrade would die on {@code uq_leads_code_tenant}.
-     *
-     * <p>The SQL seed in {@code db/indexes.sql} normally makes this path unreachable on an upgraded
-     * database — but {@code spring.sql.init.continue-on-error=true} means that statement can fail
-     * SILENTLY, and {@code SQL_INIT_MODE=never} (set at the Flyway cutover) skips it entirely. This
-     * makes the collision impossible either way instead of trusting a statement nobody watches.
-     */
-    private LeadSequence createInitial(Long tenantId) {
-        try {
-            long existing = leadRepository.countByTenantId(tenantId);
-            if (existing > 0) {
-                log.info("No lead counter row for tenant {} but {} lead(s) exist — seeding the "
-                        + "counter from the row count so back-filled codes are never re-issued.",
-                        tenantId, existing);
-            }
-            return sequenceRepository.saveAndFlush(
-                    LeadSequence.builder().tenantId(tenantId).lastValue(existing).build());
-        } catch (DataIntegrityViolationException raceLost) {
-            log.debug("Lead sequence row for tenant {} created concurrently — re-reading", tenantId);
-            return sequenceRepository.findByTenantId(tenantId)
-                    .orElseThrow(() -> raceLost);
-        }
-    }
 }

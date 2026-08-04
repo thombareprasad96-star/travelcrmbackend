@@ -47,6 +47,25 @@ public class CancellationPolicyServiceImpl implements CancellationPolicyService 
         }
         validator.validate(request.getBands());
 
+        // A future effectiveFrom is refused, because version resolution is date-ordered and does NOT
+        // filter on `active` — deliberately, since a booking must be able to resolve the version that
+        // governed it even after that version was superseded. Combine the two and a post-dated version
+        // outlives its own retirement: publish v2 for 1 Jan next year, publish v3 today (which
+        // deactivates v2), and from 1 Jan `companyDefaultAsOf` starts returning the RETIRED v2,
+        // because its date sorts highest. Every booking pinned or cancelled from then on is charged
+        // under a policy the tenant already withdrew — on ₹1,00,000 cancelled 40 days out that was a
+        // ₹52,500 refund where the live policy says ₹94,500.
+        //
+        // Scheduling a policy ahead of time is a legitimate thing to want; it needs an effectiveTo on
+        // the superseded row so retirement can win over recency. Until that exists, refusing is the
+        // honest answer — the alternative is silently mispricing cancellations months later.
+        if (request.getEffectiveFrom() != null && request.getEffectiveFrom().isAfter(LocalDate.now())) {
+            throw new BusinessException(
+                    "A cancellation policy cannot be dated in the future (" + request.getEffectiveFrom()
+                            + "). Publish it on the day it takes effect.",
+                    HttpStatus.BAD_REQUEST);
+        }
+
         // Derive the next version and deactivate the prior active one (never mutated in place).
         List<CancellationPolicy> history = historyRows(tenantId, request.getLevel(), request.getOwnerPublicId());
         int nextVersion = history.isEmpty() ? 1 : history.get(0).getVersion() + 1;

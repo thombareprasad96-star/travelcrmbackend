@@ -361,10 +361,16 @@ public class CalendarServiceImpl implements CalendarService {
         return b.getBookingCode() != null ? "Booking " + b.getBookingCode() : "Trip";
     }
 
+    /**
+     * Delegates to {@code Booking.getPendingAmount()} rather than re-deriving
+     * {@code totalPayable − paidAmount} here. This was a fourth private copy of that formula, and
+     * copies drift: the entity's version is status-aware (a cancelled booking carries no live
+     * balance) and floored at zero, and this one was neither. It survived only because
+     * {@code TRIP_STATUSES} happens to exclude cancelled bookings upstream — a coincidence, not a
+     * guarantee.
+     */
     private static BigDecimal pendingAmount(Booking b) {
-        BigDecimal payable = b.getTotalPayable() != null ? b.getTotalPayable() : BigDecimal.ZERO;
-        BigDecimal paid = b.getPaidAmount() != null ? b.getPaidAmount() : BigDecimal.ZERO;
-        return payable.subtract(paid);
+        return b.getPendingAmount();
     }
 
     private static Instant dayInstant(LocalDate date) {

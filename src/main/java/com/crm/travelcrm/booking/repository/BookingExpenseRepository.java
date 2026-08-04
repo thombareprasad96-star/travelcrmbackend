@@ -71,11 +71,19 @@ public interface BookingExpenseRepository extends JpaRepository<BookingExpense, 
      * typed, so the scalar has to be maintained for it — otherwise {@code netProfit} is overstated
      * by the payable, and {@code CancellationCalculator} freezes {@code sunkVendorCost} wrong,
      * permanently.</p>
+     *
+     * <p>The {@code costType = VENDOR} predicate is load-bearing, not decoration. Without it this sum
+     * and {@link #sumInternalCosts} were not disjoint — the sibling filters on {@code costType} with
+     * no marketplace predicate, this one filtered on the marketplace link with no {@code costType}
+     * predicate, so a marketplace row reclassified to INTERNAL landed in BOTH. {@code netProfit} is
+     * {@code customerAmount − vendorCost − totalInternalCosts} and the payable sits inside
+     * {@code vendorCost}, so the same rupees were subtracted twice.</p>
      */
     @Query("""
            SELECT COALESCE(SUM(e.amount), 0) FROM BookingExpense e
            WHERE e.bookingId = :bookingId
              AND e.marketplaceBookingPublicId IS NOT NULL
+             AND e.costType = com.crm.travelcrm.booking.enums.ExpenseCostType.VENDOR
              AND e.deletedAt IS NULL
            """)
     BigDecimal sumMarketplacePayable(@Param("bookingId") Long bookingId);

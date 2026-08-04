@@ -3,6 +3,7 @@ package com.crm.travelcrm.lead.service;
 import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.auth.repository.UserRepository;
 import com.crm.travelcrm.common.context.TenantContext;
+import com.crm.travelcrm.common.context.TenantTimeZone;
 import com.crm.travelcrm.common.event.LeadSoftDeletedEvent;
 import com.crm.travelcrm.customer.dto.response.CustomerMatchResponse;
 import com.crm.travelcrm.customer.entity.Customer;
@@ -10,6 +11,7 @@ import com.crm.travelcrm.customer.service.CustomerMatcher;
 import com.crm.travelcrm.lead.dto.CreateLeadRequestDto;
 import com.crm.travelcrm.lead.dto.LeadBoardColumnDto;
 import com.crm.travelcrm.lead.dto.LeadResponseDto;
+import com.crm.travelcrm.lead.dto.LeadStatsSummaryDto;
 import com.crm.travelcrm.lead.dto.UserLeadStageCountDto;
 import com.crm.travelcrm.lead.dto.UserWorkloadDto;
 import com.crm.travelcrm.lead.alert.LeadAlertAssembler;
@@ -27,6 +29,7 @@ import com.crm.travelcrm.lead.sla.LeadSlaPolicy;
 import com.crm.travelcrm.lead.entity.Lead;
 import com.crm.travelcrm.lead.entity.LeadItinerary;
 import com.crm.travelcrm.lead.enums.LeadStage;
+import com.crm.travelcrm.lead.enums.LeadType;
 import com.crm.travelcrm.lead.ingest.IngestPolicy;
 import com.crm.travelcrm.lead.ingest.LeadActor;
 import com.crm.travelcrm.lead.enums.LeadStageGroups;
@@ -38,6 +41,7 @@ import com.crm.travelcrm.lead.exception.LeadQuotaExceededException;
 import com.crm.travelcrm.lead.exception.NoEligibleAssigneeException;
 import com.crm.travelcrm.lead.mapper.LeadMapper;
 import com.crm.travelcrm.lead.repository.LeadRepository;
+import com.crm.travelcrm.lead.specification.LeadSpecification;
 import com.crm.travelcrm.lead.util.LeadCodeGenerator;
 import com.crm.travelcrm.notification.api.NotifyEvent;
 import com.crm.travelcrm.notification.domain.enums.DeliveryChannel;
@@ -59,9 +63,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -94,6 +101,15 @@ public class LeadServiceImpl implements LeadService {
     private final LeadAlertBroadcaster alertBroadcaster;
     private final AssignableUserResolver assignableUserResolver;
     private final CustomerMatcher customerMatcher;
+    private final TenantTimeZone tenantTimeZone;
+
+    /**
+     * Ceiling on how many PROPOSAL_SENT leads the quoted-value roll-up prices in one call. It is a
+     * bound on an IN-clause and on the shared pricing formula being run per lead, not pagination:
+     * past this the summary reports the figure as a floor ({@code quotedValueComplete = false})
+     * rather than silently understating the pipeline.
+     */
+    private static final int MAX_QUOTED_VALUE_LEADS = 1000;
 
     // Terminal (closed) stages. A lead here no longer blocks a fresh lead for the same
     // contact, and CONVERTED specifically is owned by the booking lifecycle — it may be
@@ -111,8 +127,35 @@ public class LeadServiceImpl implements LeadService {
         return createLead(request, LeadActor.human(currentUser()), IngestPolicy.INTERACTIVE);
     }
 
+    /**
+     * The shared create, used by the human form AND by machine ingest.
+     *
+     * <h2>Why {@code noRollbackFor}</h2>
+     * The three listed exceptions are <b>pre-write declines</b>: quota, active-duplicate and
+     * trashed-match are all evaluated before {@code toEntity}, before the lead-code counter is
+     * touched and before any {@code save}. Nothing needs rolling back — and leaving the default in
+     * place actively breaks the caller.
+     *
+     * <p>{@code LeadIngestService} calls this CROSS-BEAN from inside its own transaction, so this
+     * proxy PARTICIPATES rather than starting a new transaction. On a rollback-worthy exception
+     * Spring's participating branch calls {@code doSetRollbackOnly} on the shared transaction, and
+     * the exception is then caught upstream and turned into a quarantine outcome that returns
+     * normally — at which point the OUTER commit throws {@code UnexpectedRollbackException}. The
+     * quarantine handler ends up never producing its status, and the delivery is recorded FAILED
+     * with no notification: exactly the silent-loss the quarantine model exists to prevent. Catching
+     * an exception cannot undo a rollback-only flag, so the flag must never be set.
+     *
+     * <p>{@link NoEligibleAssigneeException} is deliberately NOT listed. It is raised after
+     * {@code leadCodeGenerator.generate} has consumed a number from the tenant's gapless counter, so
+     * its transaction genuinely must roll back — and the ingest path rethrows it rather than
+     * quarantining, so no caller depends on the transaction surviving.
+     */
     @Override
-    @Transactional
+    @Transactional(noRollbackFor = {
+            LeadQuotaExceededException.class,
+            DuplicateLeadException.class,
+            RestoreAvailableException.class
+    })
     public LeadResponseDto createLead(CreateLeadRequestDto request, LeadActor actor,
                                       IngestPolicy policy) {
         Long tenantId = currentTenantId();
@@ -363,6 +406,15 @@ public class LeadServiceImpl implements LeadService {
     @Transactional(readOnly = true)
     public Page<LeadResponseDto> getAllLeads(int page, int size,
                                              String sortBy, String sortDir) {
+        return getAllLeads(page, size, sortBy, sortDir, null, null, null, null, null);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Page<LeadResponseDto> getAllLeads(int page, int size,
+                                             String sortBy, String sortDir,
+                                             String search, String stage, String leadType,
+                                             LocalDate fromDate, LocalDate toDate) {
         Long tenantId = currentTenantId();
 
         Sort sort = sortDir.equalsIgnoreCase("asc")
@@ -373,15 +425,18 @@ public class LeadServiceImpl implements LeadService {
 
         // Tenant + soft-delete, then row-level scope (own / team / all) for this user.
         Set<Long> visibleIds = scopeResolver.visibleUserIds(currentUser(), "LEAD_READ");
-        Page<Lead> leadPage;
-        if (visibleIds == null) {                 // ALL — no owner restriction
-            leadPage = leadRepository.findAllByTenantIdAndDeletedAtIsNull(tenantId, pageable);
-        } else if (visibleIds.isEmpty()) {        // NONE — sees nothing
-            leadPage = Page.empty(pageable);
-        } else {                                  // OWN / TEAM — owner_id IN (visibleIds)
-            leadPage = leadRepository.findAllByTenantIdAndDeletedAtIsNullAndAssignedUser_IdIn(
-                    tenantId, visibleIds, pageable);
+        if (visibleIds != null && visibleIds.isEmpty()) {   // NONE — sees nothing
+            return Page.empty(pageable);
         }
+
+        // One Specification carries scope AND the caller's filters, so a narrowed list can never
+        // widen what the row-level scope allows — both are AND-ed in the same WHERE clause.
+        Page<Lead> leadPage = leadRepository.findAll(
+                LeadSpecification.filter(tenantId, visibleIds, search,
+                        LeadSpecification.parseStage(stage),
+                        LeadSpecification.parseType(leadType),
+                        fromDate, toDate),
+                pageable);
 
         List<Lead> leads = leadPage.getContent();
 
@@ -800,6 +855,190 @@ public class LeadServiceImpl implements LeadService {
         if (visibleIds == null)        return leadRepository.countLeadsByStagePerUser(tenantId);
         if (visibleIds.isEmpty())      return List.of();
         return leadRepository.countLeadsByStagePerUserForUsers(tenantId, visibleIds);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public LeadStatsSummaryDto getStatsSummary(LocalDate from, LocalDate to) {
+        Long tenantId = currentTenantId();
+
+        // The TENANT's day, not the server's — same reasoning as LeadAlertService. An agency in
+        // Kathmandu must not have its evening leads counted against tomorrow because the JVM runs
+        // in UTC, and "follow-ups due today" is exactly the figure someone acts on at 6pm.
+        ZoneId zone = tenantTimeZone.forTenant(tenantId);
+        LocalDate today = LocalDate.now(zone);
+
+        // Default window = the tenant's current calendar month. Deliberately a real window rather
+        // than "all time": a conversion rate over all history never moves and nobody watches it.
+        LocalDate periodFrom = from != null ? from : today.withDayOfMonth(1);
+        LocalDate periodTo   = to   != null ? to   : today;
+        if (periodTo.isBefore(periodFrom)) {
+            throw new BusinessException("'to' cannot be earlier than 'from'", HttpStatus.BAD_REQUEST);
+        }
+        LocalDateTime windowStart = periodFrom.atStartOfDay();
+        // periodTo is INCLUSIVE for the caller; the queries are half-open, so add the day here once
+        // instead of in five separate predicates.
+        LocalDateTime windowEnd = periodTo.plusDays(1).atStartOfDay();
+
+        // Exactly the scope getAllLeads uses, so a card can never show more than its list can.
+        Set<Long> visibleIds = scopeResolver.visibleUserIds(currentUser(), "LEAD_READ");
+        if (visibleIds != null && visibleIds.isEmpty()) {
+            // NONE: zeros, not an error — and still fully zero-filled, so the client's card grid
+            // renders the same shape it always does.
+            return emptySummary(today, periodFrom, periodTo);
+        }
+        boolean unrestricted = visibleIds == null;
+
+        // ── Pipeline shape: one GROUP BY, reusing the per-user breakdown already in the repository.
+        List<UserLeadStageCountDto> stageRows = unrestricted
+                ? leadRepository.countLeadsByStagePerUser(tenantId)
+                : leadRepository.countLeadsByStagePerUserForUsers(tenantId, visibleIds);
+
+        Map<LeadStage, Long> stageTotals = new EnumMap<>(LeadStage.class);
+        for (UserLeadStageCountDto row : stageRows) {
+            stageTotals.merge(row.getStage(), row.getLeadCount(), Long::sum);
+        }
+        List<LeadStatsSummaryDto.StageCount> byStage = Arrays.stream(LeadStage.values())
+                .map(stage -> new LeadStatsSummaryDto.StageCount(
+                        stage, stageTotals.getOrDefault(stage, 0L)))
+                .toList();
+
+        long totalLeads   = stageTotals.values().stream().mapToLong(Long::longValue).sum();
+        long converted    = stageTotals.getOrDefault(LeadStage.CONVERTED, 0L);
+        long lost         = stageTotals.getOrDefault(LeadStage.LOST, 0L);
+        long proposalSent = stageTotals.getOrDefault(LeadStage.PROPOSAL_SENT, 0L);
+        // Derived as the complement, exactly like LeadStageGroups.ACTIVE_STAGES defines it, so a
+        // stage added to the enum later counts as active here without touching this line.
+        long activeLeads  = totalLeads - converted - lost;
+
+        // ── Type breakdown (the Fresh tab badge and the Hot card).
+        List<Object[]> typeRows = unrestricted
+                ? leadRepository.countLeadsByType(tenantId)
+                : leadRepository.countLeadsByTypeForUsers(tenantId, visibleIds);
+        Map<LeadType, Long> typeTotals = new EnumMap<>(LeadType.class);
+        for (Object[] row : typeRows) {
+            if (row[0] == null) continue;   // legacy rows written before the column was NOT NULL
+            typeTotals.merge((LeadType) row[0], ((Number) row[1]).longValue(), Long::sum);
+        }
+        List<LeadStatsSummaryDto.TypeCount> byType = Arrays.stream(LeadType.values())
+                .map(type -> new LeadStatsSummaryDto.TypeCount(
+                        type, typeTotals.getOrDefault(type, 0L)))
+                .toList();
+
+        // ── Money in play.
+        List<Object[]> budgetRows = unrestricted
+                ? leadRepository.sumActiveBudget(tenantId, TERMINAL_STAGES)
+                : leadRepository.sumActiveBudgetForUsers(tenantId, visibleIds, TERMINAL_STAGES);
+        BigDecimal activePipelineValue = BigDecimal.ZERO;
+        long activeWithBudget = 0L;
+        if (!budgetRows.isEmpty()) {
+            Object[] row = budgetRows.get(0);
+            activePipelineValue = toBigDecimal(row[0]);
+            activeWithBudget = row[1] == null ? 0L : ((Number) row[1]).longValue();
+        }
+
+        // ── Quoted value: price each PROPOSAL_SENT lead's LATEST quotation through the shared
+        // formula. Quotation stores no grand-total column (it is derived from the per-service
+        // amounts plus discount/tax/markup), so a SQL SUM would be a second copy of that formula.
+        Pageable quotedCap = PageRequest.of(0, MAX_QUOTED_VALUE_LEADS);
+        List<UUID> proposalSentIds = unrestricted
+                ? leadRepository.findPublicIdsByStage(tenantId, LeadStage.PROPOSAL_SENT, quotedCap)
+                : leadRepository.findPublicIdsByStageForUsers(
+                        tenantId, visibleIds, LeadStage.PROPOSAL_SENT, quotedCap);
+        boolean quotedValueComplete = proposalSentIds.size() < MAX_QUOTED_VALUE_LEADS;
+        if (!quotedValueComplete) {
+            log.warn("Quoted-value roll-up hit its {}-lead cap for tenant {} — the figure is a floor",
+                    MAX_QUOTED_VALUE_LEADS, tenantId);
+        }
+        BigDecimal quotedValue = quotationService.getLatestRefsByLeads(proposalSentIds)
+                .values().stream()
+                .map(QuotationRefDto::getGrandTotal)
+                .filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        // ── Today's work.
+        long followUpsOverdue = unrestricted
+                ? leadRepository.countFollowUpsBefore(tenantId, TERMINAL_STAGES, today)
+                : leadRepository.countFollowUpsBeforeForUsers(
+                        tenantId, visibleIds, TERMINAL_STAGES, today);
+        long followUpsDueToday = unrestricted
+                ? leadRepository.countFollowUpsInRange(
+                        tenantId, TERMINAL_STAGES, today, today.plusDays(1))
+                : leadRepository.countFollowUpsInRangeForUsers(
+                        tenantId, visibleIds, TERMINAL_STAGES, today, today.plusDays(1));
+
+        // ── Period figures. createdInPeriod and cohortConverted are the SAME population — that
+        // pairing is what makes the rate meaningful; convertedInPeriod is a different one (wins
+        // banked in the window, whenever the lead arrived) and is reported as its own number.
+        long createdInPeriod = unrestricted
+                ? leadRepository.countCreatedBetween(tenantId, windowStart, windowEnd)
+                : leadRepository.countCreatedBetweenForUsers(
+                        tenantId, visibleIds, windowStart, windowEnd);
+        long convertedInPeriod = unrestricted
+                ? leadRepository.countConvertedBetween(tenantId, windowStart, windowEnd)
+                : leadRepository.countConvertedBetweenForUsers(
+                        tenantId, visibleIds, windowStart, windowEnd);
+        long cohortConverted = unrestricted
+                ? leadRepository.countCreatedBetweenInStage(
+                        tenantId, LeadStage.CONVERTED, windowStart, windowEnd)
+                : leadRepository.countCreatedBetweenInStageForUsers(
+                        tenantId, visibleIds, LeadStage.CONVERTED, windowStart, windowEnd);
+
+        return LeadStatsSummaryDto.builder()
+                .totalLeads(totalLeads)
+                .activeLeads(activeLeads)
+                .convertedLeads(converted)
+                .lostLeads(lost)
+                .proposalSentLeads(proposalSent)
+                .byStage(byStage)
+                .byType(byType)
+                .activePipelineValue(activePipelineValue)
+                .activeWithBudget(activeWithBudget)
+                .quotedValue(quotedValue)
+                .quotedValueComplete(quotedValueComplete)
+                .followUpsOverdue(followUpsOverdue)
+                .followUpsDueToday(followUpsDueToday)
+                .today(today)
+                .periodFrom(periodFrom)
+                .periodTo(periodTo)
+                .createdInPeriod(createdInPeriod)
+                .convertedInPeriod(convertedInPeriod)
+                .cohortConverted(cohortConverted)
+                // Null when nothing was created in the window: "no leads to convert yet" and
+                // "converted none of them" are opposite facts and must not both render as 0%.
+                .conversionRate(createdInPeriod == 0
+                        ? null
+                        : Math.round(cohortConverted * 1000.0 / createdInPeriod) / 10.0)
+                .build();
+    }
+
+    /** Same shape, all zeros — for a caller whose LEAD_READ scope resolves to NONE. */
+    private LeadStatsSummaryDto emptySummary(LocalDate today, LocalDate periodFrom, LocalDate periodTo) {
+        return LeadStatsSummaryDto.builder()
+                .byStage(Arrays.stream(LeadStage.values())
+                        .map(stage -> new LeadStatsSummaryDto.StageCount(stage, 0L))
+                        .toList())
+                .byType(Arrays.stream(LeadType.values())
+                        .map(type -> new LeadStatsSummaryDto.TypeCount(type, 0L))
+                        .toList())
+                .activePipelineValue(BigDecimal.ZERO)
+                .quotedValue(BigDecimal.ZERO)
+                .quotedValueComplete(true)
+                .today(today)
+                .periodFrom(periodFrom)
+                .periodTo(periodTo)
+                .build();
+    }
+
+    /**
+     * {@code COALESCE(SUM(...), 0)} comes back as a BigDecimal on Postgres, but the literal in the
+     * COALESCE leaves the door open to an Integer on another dialect or an empty table. Normalise
+     * once here rather than casting at the call site and finding out in production.
+     */
+    private static BigDecimal toBigDecimal(Object value) {
+        if (value == null)                 return BigDecimal.ZERO;
+        if (value instanceof BigDecimal b) return b;
+        return new BigDecimal(value.toString());
     }
 
     /** Existence check only — unlike assignment, inactive users are fine here. */

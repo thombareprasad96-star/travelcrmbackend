@@ -58,4 +58,14 @@ public class RoomType extends BaseEntity {
     @Column(nullable = false)
     @Builder.Default
     private boolean active = true;
+
+    /**
+     * True when the catalog owns every field on this row. {@code HotelMasterProjectionService.syncRooms}
+     * rewrites name, size, occupancy, bedType, description, active and the whole image list on each
+     * sync, so a tenant edit here is not merely disallowed — it is silently reverted at the next
+     * catalog version. A room the tenant added to an imported hotel has no source id and stays theirs.
+     */
+    public boolean isPlatformOwned() {
+        return platformSourcePublicId != null;
+    }
 }

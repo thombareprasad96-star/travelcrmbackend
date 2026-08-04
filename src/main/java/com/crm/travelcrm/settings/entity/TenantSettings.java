@@ -5,6 +5,7 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -72,4 +73,24 @@ public class TenantSettings extends BaseTenantEntity {
 
     @Column(name = "wa_last_tested_at")
     private LocalDateTime waLastTestedAt;
+
+    // ── Overdue-task alerting (All Tasks screen) ─────────────────────────────
+    // IN_APP is always on and is not represented here. These two are OFF by default and must be
+    // switched on per tenant.
+    //
+    // Why a switch exists at all: there is no per-USER notification opt-out anywhere in this
+    // product yet (comm_notification_prefs is designed but read by no code), so without a
+    // tenant-level flag an agent would receive WhatsApp messages about their own overdue work with
+    // no way to stop them. Defaulting to false means turning this on is a deliberate act by an
+    // agency that wants it.
+
+    // @Builder.Default is required: this class is @SuperBuilder, which silently DISCARDS a plain
+    // field initializer (see the build warnings on Testimonial/Addon, which have that bug).
+    @Column(name = "task_overdue_alert_whatsapp", nullable = false)
+    @Builder.Default
+    private boolean taskOverdueAlertWhatsApp = false;
+
+    @Column(name = "task_overdue_alert_email", nullable = false)
+    @Builder.Default
+    private boolean taskOverdueAlertEmail = false;
 }

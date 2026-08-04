@@ -131,9 +131,9 @@ public enum Permission {
     // a catalog the platform curates is a different act from maintaining your own master data, and a
     // tenant can hold one without the other. Managing the catalog itself is not a tenant permission
     // at all — it lives in the SuperAdmin realm behind ROLE_SUPER_ADMIN.
-    HOTEL_MARKETPLACE_VIEW        ("Hotel Marketplace", "Search the platform hotel catalog"),
-    HOTEL_MARKETPLACE_SYNC_MASTER ("Hotel Marketplace", "Import a platform hotel into your hotel master"),
-    HOTEL_MARKETPLACE_BOOK        ("Hotel Marketplace", "Send a hotel booking request to the platform"),
+    HOTEL_MARKETPLACE_VIEW        ("Platform Hotel", "Search the platform hotel catalog"),
+    HOTEL_MARKETPLACE_SYNC_MASTER ("Platform Hotel", "Import a platform hotel into your hotel master"),
+    HOTEL_MARKETPLACE_BOOK        ("Platform Hotel", "Send a hotel booking request to the platform"),
     /**
      * Withdraw a pending request, or ask the platform to cancel a confirmed one.
      *
@@ -144,7 +144,7 @@ public enum Permission {
      * ever opens a conversation. (Contrast {@code FLEET_MONEY_READ}, withheld from sales roles
      * because settling driver cash freezes immediately with no second party in the loop.)</p>
      */
-    HOTEL_MARKETPLACE_CANCEL      ("Hotel Marketplace", "Cancel or withdraw a marketplace hotel booking"),
+    HOTEL_MARKETPLACE_CANCEL      ("Platform Hotel", "Cancel or withdraw a platform hotel booking"),
     /**
      * See what the tenant owes the PLATFORM on a marketplace booking.
      *
@@ -154,7 +154,7 @@ public enum Permission {
      * profit permission. It grants sight of marketplace expense rows ONLY; every other expense line,
      * and every margin figure, stays behind {@code BOOKING_PROFIT_READ}.</p>
      */
-    MARKETPLACE_PAYABLE_READ      ("Hotel Marketplace", "View what you owe the platform for a marketplace booking"),
+    MARKETPLACE_PAYABLE_READ      ("Platform Hotel", "View what you owe the platform for a platform hotel booking"),
 
     // ── User management (mirrors the existing USER_* authorities) ───────────
     USER_READ   ("User Management",   "View users"),

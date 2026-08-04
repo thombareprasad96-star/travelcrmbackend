@@ -9,9 +9,11 @@ import com.crm.travelcrm.booking.entity.Booking;
 import com.crm.travelcrm.booking.exception.BookingNotFoundException;
 import com.crm.travelcrm.booking.repository.BookingRepository;
 import com.crm.travelcrm.common.context.TenantContext;
+import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.permission.service.SubAgentScope;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -40,6 +42,22 @@ public class BookingCancellationServiceImpl implements BookingCancellationServic
     public CancellationQuote preview(UUID bookingPublicId, BigDecimal overrideChargeBase,
                                      BigDecimal vendorRecoverable) {
         Booking booking = findVisibleBooking(bookingPublicId);
+
+        // An already-cancelled booking has no "what would happen if" left — it happened, and what it
+        // settled at is frozen on the record and printed on a numbered credit/debit note. Re-running
+        // the calculator against today's date instead answered a different question and got a
+        // different number: a booking cancelled 60 days out at a 10% band (note: retain ₹10,500,
+        // refund ₹94,500) re-previewed after the travel date gives effectiveDays = max(0, −32) = 0,
+        // lands on the 100% floor band, and returns retained ₹1,05,000 / refund ₹0.00. cancel() 409s
+        // so no cash moved — but two endpoints on the same booking quoted ₹94,500 and ₹0 for the same
+        // refund, and the operator reads whichever the screen shows.
+        cancellationRepository.findByBookingIdAndDeletedAtIsNull(booking.getId()).ifPresent(r -> {
+            throw new BusinessException(
+                    "This booking is already cancelled (note " + r.getCreditNoteNumber()
+                            + "). Its settled figures are on the cancellation record, not a preview.",
+                    HttpStatus.CONFLICT);
+        });
+
         CancellationPolicy policy = resolveGoverningPolicy(booking);
         // With no override the charge is policy-computed and vendor cost is assumed fully sunk
         // (worst-case P&L); a supplied override/recovery lets the UI preview the exact settled figures.

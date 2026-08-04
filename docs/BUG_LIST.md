@@ -38,7 +38,7 @@
 | LEAD-03 | P2 | Update / claim window | `PUT /api/leads/{id}` writes `leadStage` directly, so the claim window never closes on the edit path — and the leads-list Stage dropdown is that path. |
 | LEAD-04 | P2 | Assignment / authorization | `PUT /api/leads/{id}` changes the lead owner through a validator that checks only tenant + active, bypassing the eligible pool and `LEAD_REASSIGN_LOCKED`. |
 | LEAD-05 | P2 | Machine ingest | Ingest handles 2 of the 4 exceptions `createLead` throws; the other two silently discard paid inbound leads and answer the provider `200`. |
-| LEAD-06 | P2 | Alerts / app chrome | The global new-lead alert host is permanently dead — it reads context keys the provider does not publish, so it renders `null` on every page. |
+| LEAD-06 | P2 | Alerts / app chrome | ~~The global new-lead alert host is permanently dead — it reads context keys the provider does not publish, so it renders `null` on every page.~~ **Fixed** in FE `408cd8b`; the audit read a pre-commit stash. See the resolution note in the LEAD-06 section. |
 | LEAD-07 | P2 | Follow-ups / reports | Follow-up "Mark complete" and bulk-complete never call the server; they mutate local state and report success. |
 | LEAD-08 | P2 | Leads list | The main lead list fetches one 100-row page and does all search, filtering and stat maths in memory — older leads are unreachable and uncounted. |
 | LEAD-09 | P3 | Claim / CONVERTED invariant | `markContacted` has no terminal-stage guard, so "Mark Contacted" flips a `CONVERTED` lead back into the live pipeline. |
@@ -196,7 +196,7 @@ Catch `DuplicateLeadException` and `RestoreAvailableException` in `LeadIngestSer
 
 ## LEAD-06 — The global new-lead alert host is permanently dead
 
-**Priority:** P2 · **Severity:** High · **Confidence:** Confirmed
+**Priority:** P2 · **Severity:** High · **Confidence:** Confirmed · **Status: FIXED** (see Resolution below)
 
 ### Evidence
 
@@ -216,6 +216,17 @@ A new lead is ingested. The backend fans `lead-alert` out to every open tab; the
 ### Recommended fix
 
 Rename the host's reads to the contract the provider publishes (`ctx?.cards`, `ctx?.dismissCard`), key the effect and render on `card.leadPublicId` rather than the non-existent `toastId` (use `arrivedAt` to decide whether to re-chime), and replace `ctx.dismissToast(alert.toastId)` at `:122`, `:156` and `:204` with `ctx.dismissCard(alert.leadPublicId)`. Since this is a cross-module contract with no compile-time check, export a named selector (e.g. `useLeadAlertCards()`) from the leads barrel so chrome cannot silently drift again.
+
+### Resolution — **Fixed**
+
+The audit read the working tree as it stood at stash `9810767` (4 Aug, 00:55). Frontend commit `408cd8b` (4 Aug, 10:39) replaced `LeadAlertHost.jsx` with a rewrite that already carries the fix; the file has never been committed in the broken form. Verified against the current tree:
+
+- The host reads `ctx?.cards` / `ctx?.dismissCard` and keys every effect, timer and DOM node on `card.leadPublicId`, restarting a card's clock off `arrivedAt` (`LeadAlertHost.jsx:134-135,166-180`). `toasts` / `dismissToast` / `toastId` no longer appear anywhere in the repo.
+- Every key the host touches — `cards`, `dismissCard`, `applyResult`, `patchLead`, `markClaimIneligible`, `canClaim` — is published by the provider's context value (`useLeadAlerts.jsx:407-426`).
+- Every card field the host renders — `leadPublicId`, `leadCode`, `customerName`, `phone`, `source`, `sourceKey`, `destination`, `value`, `ownerName`, `claimVersion`, `slaSecondsRemaining` — exists on `LeadAlertDto`, so the popup renders real data rather than a card of blanks.
+- The corroborating drift is closed too: `Alt+C` / `Alt+X` / `Alt+I` are registered on `document` (`LeadAlertHost.jsx:272-295`), matching what `LeadAlerts.jsx:750-752` advertises.
+
+The recommended drift guard was implemented as a dev-only contract assertion in the host (`LeadAlertHost.jsx:40-58,131-146`) rather than a named barrel selector: the shipped host needs six context keys, not just `cards`, so a `useLeadAlertCards()` selector would not have covered the surface that broke. `import.meta.env.DEV` folds the check out of the production bundle. The frontend has no test runner (`package.json` has no `test` script and no vitest/jest dependency), so the contract test suggested at the end of this document remains open as infrastructure work.
 
 ---
 
@@ -717,7 +728,7 @@ It also avoids two defects this audit found elsewhere: the constructed DTO is ru
 
 1. **Decide the sub-agent question first** (LEAD-01, LEAD-02). If franchise partners are a separate commercial party, these are P1 and lead the list. The fix is small — an eligibility check in `stampFirstContact` and a `CRM_FULL` gate on `LeadAlertController` — and it closes an invariant the codebase already states three times.
 2. **Close the third stage-write door** (LEAD-03, then LEAD-09). One extracted private method fixes the claim window, the SLA stamp, and the frontend's stage dropdown together; the missing `terminalStages` predicate is a one-line change on two queries.
-3. **Stop losing writes** (LEAD-05, LEAD-06, LEAD-07, LEAD-19). Four independent places where a user or a provider is told something succeeded that never happened. LEAD-06 in particular means a shipped feature has never worked.
+3. **Stop losing writes** (LEAD-05, ~~LEAD-06~~, LEAD-07, LEAD-19). Four independent places where a user or a provider is told something succeeded that never happened. LEAD-06 is already fixed — it was reported against a pre-commit stash — leaving three.
 4. **Restrict `updateLead`'s owner change** (LEAD-04) — simplest correct fix is to ignore `assignedUserId` there entirely.
 5. **Make the lead list server-side** (LEAD-08, then LEAD-22 and LEAD-16 together) — one change to the fetch contract addresses all three.
 6. **Harden ingest** (LEAD-10, LEAD-15) and the transaction/connection shape (LEAD-11).

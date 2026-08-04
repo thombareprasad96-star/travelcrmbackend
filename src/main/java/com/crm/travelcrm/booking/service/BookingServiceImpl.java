@@ -801,7 +801,25 @@ public class BookingServiceImpl implements BookingService {
 
         Booking booking = findActiveByPublicId(publicId);
         assertEditableBooking(booking);
-        boolean amountsChanged = request.getCustomerAmount() != null || request.getVendorCost() != null;
+
+        // Computed BEFORE the mapper overwrites the entity, and on "did it MOVE?" rather than the old
+        // "was it SENT?".
+        //
+        // Two defects met here. (1) overseasTourPackage was absent from the trigger although it is a
+        // tax INPUT: the mapper applies it (BookingMapperImpl.updateEntity), so reclassifying a booking
+        // persisted the new classification while leaving tcs / totalPayable / paymentStatus at the old
+        // one — the exact opposite of what this DTO's own javadoc promises. Under an OVERSEAS_ONLY
+        // tenant that is real money: flipping a ₹1,00,000 booking to domestic left ₹5,000 of s.206C(1G)
+        // TCS over-collected and still reported into sumTcsCollected().
+        // (2) Presence-based detection re-ran recomputeTotals on saves that changed nothing — and
+        // recomputeTotals reads the tenant's LIVE tax rates, no rate being pinned to the booking — so a
+        // form that round-trips every field silently re-rated an old booking at today's rate. Testing
+        // for an actual change removes the common case; pinning the rate is the real fix and is not
+        // one this method can make (see the note on recomputeTotals).
+        boolean amountsChanged = moved(request.getCustomerAmount(), booking.getCustomerAmount())
+                || moved(request.getVendorCost(), booking.getVendorCost())
+                || (request.getOverseasTourPackage() != null
+                    && request.getOverseasTourPackage() != booking.isOverseasTourPackage());
 
         bookingMapper.updateEntity(request, booking);   // applies non-null DTO fields → entity
 
@@ -817,12 +835,26 @@ public class BookingServiceImpl implements BookingService {
         // BookingProfitService FREEZES the figure on cancellation, the error becomes permanent in
         // the credit note. The marketplace cannot fix this from its side; it does not own the field.
         //
-        // Only when the client actually sent a value: a null means "unchanged", and the stored value
-        // is already typed + marketplace, so adding the sum again would double-count it.
+        // …but it is protected by a FLOOR, not by addition, and that is the correction here.
+        //
+        // This used to ADD sumMarketplacePayable to whatever the client sent, on the assumption that
+        // the client was sending the tenant-typed portion alone. It cannot: BookingResponseDTO exposes
+        // only the COMBINED figure and no field carries the split, so the edit form loads ₹80,000
+        // (₹60,000 typed + ₹20,000 platform) and posts ₹80,000 back — which became ₹1,00,000, then
+        // ₹1,20,000 on the next save. netProfit fell by ₹20,000 each time, and if the booking was later
+        // cancelled the inflated cost froze permanently into sunkVendorCost and the credit note.
+        //
+        // So the incoming value IS the whole vendorCost, and the payable is defended by refusing to go
+        // under it. That is also how CrmBookingLinkAdapter.syncVendorCost reads the field back
+        // (typedPortion = vendorCost − marketplacePayable), so writer and reader now agree on what the
+        // column means.
         if (request.getVendorCost() != null) {
             BigDecimal marketplacePayable = nz(expenseRepository.sumMarketplacePayable(booking.getId()));
-            if (marketplacePayable.signum() != 0) {
-                booking.setVendorCost(request.getVendorCost().add(marketplacePayable));
+            if (nz(booking.getVendorCost()).compareTo(marketplacePayable) < 0) {
+                throw new BusinessException(
+                        "Vendor cost ₹" + booking.getVendorCost() + " is below the ₹" + marketplacePayable
+                                + " payable to the hotel marketplace on this booking.",
+                        HttpStatus.CONFLICT);
             }
         }
 
@@ -920,6 +952,24 @@ public class BookingServiceImpl implements BookingService {
 
     private static boolean isTerminalStatus(BookingStatus status) {
         return status != null && TERMINAL_STATUSES.contains(status);
+    }
+
+    /**
+     * The payment ledger's own lifecycle gate — deliberately NARROWER than
+     * {@link #assertEditableBooking}, which also locks COMPLETED. A completed trip may still be
+     * collecting its final balance, so receipts must keep flowing; what must stop is moving
+     * {@code paidAmount} after a cancellation has frozen {@code refundDue} onto the credit/debit
+     * note. Kept in step with {@code BookingPaymentServiceImpl.assertLedgerMutable}, which guards
+     * the POST/DELETE {@code /payments} twins of this PATCH.
+     */
+    private static void assertLedgerMutable(Booking booking) {
+        if (booking.getStatus() == BookingStatus.CANCELLED
+                || booking.getStatus() == BookingStatus.REFUNDED) {
+            throw new BusinessException(
+                    "A " + booking.getStatus() + " booking's payment ledger is closed — its refund "
+                            + "settlement is already frozen on the cancellation note.",
+                    HttpStatus.CONFLICT);
+        }
     }
 
     // ── Update Status ────────────────────────────────────────────────────────
@@ -1211,6 +1261,9 @@ public class BookingServiceImpl implements BookingService {
         log.info("Updating payment for booking publicId: {}", publicId);
 
         Booking booking = findActiveByPublicId(publicId);
+        // Same freeze as POST/DELETE /payments: once cancelled, refundDue is frozen on the
+        // cancellation note and moving paidAmount underneath it desyncs what the agency owes.
+        assertLedgerMutable(booking);
 
         // ✅ Accumulate — this is an incremental payment, not a replacement
         BigDecimal newPaidAmount = booking.getPaidAmount().add(request.getAmount());
@@ -1626,7 +1679,7 @@ public class BookingServiceImpl implements BookingService {
      * that is owned by the payment ledger (POST/DELETE /payments, PATCH /payment), never by an edit
      * of the booking's amounts. Keeps totals consistent when customerAmount / vendorCost change.
      */
-    private void recomputeTotals(Booking booking, BigDecimal customerAmount, BigDecimal vendorCost) {
+    private void recomputeTotals(Booking booking, BigDecimal rawCustomerAmount, BigDecimal rawVendorCost) {
         // Every figure is scaled to the paise, matching numeric(12,2) on the columns. totalPayable is
         // scaled explicitly rather than inheriting whatever scale the client happened to send:
         // @Digits(fraction = 2) caps the INPUT at 2dp but does not force it there, so a request
@@ -1636,6 +1689,15 @@ public class BookingServiceImpl implements BookingService {
         // all, at what rate, and whether TCS applies never / only to overseas packages / always.
         // A domestic-only operator sets TCS to NEVER and stops collecting a tax that s.206C(1G)/394
         // does not impose on them.
+        //
+        // The two INPUTS are scaled here, not just the derived total: @Digits(fraction = 2) caps a
+        // request at 2dp but does not force it there, so "1000" arrives as scale 0 and "1000.5" as
+        // scale 1. Storing them raw left the in-memory entity — and therefore the create/update
+        // response — quoting "1000" where every later GET, having round-tripped numeric(12,2),
+        // quotes "1000.00". Same rupee, two strings, from the same endpoint.
+        BigDecimal customerAmount = scaleMoney(rawCustomerAmount);
+        BigDecimal vendorCost     = scaleMoney(rawVendorCost);
+
         BookingTaxCalculator.BookingTax tax = bookingTaxCalculator.compute(
                 customerAmount, booking.isOverseasTourPackage(), accountingSettings.loadOrCreate(requireTenantId()));
 
@@ -1787,6 +1849,20 @@ public class BookingServiceImpl implements BookingService {
                 .reference(reference)
                 .notes(notes)
                 .build());
+    }
+
+    /**
+     * True when the client sent a money field AND it differs from what is stored. {@code compareTo},
+     * not {@code equals} — the latter is scale-sensitive, so a form posting "1000" back against a
+     * stored "1000.00" would read as a change and re-rate the booking.
+     */
+    private static boolean moved(BigDecimal requested, BigDecimal stored) {
+        return requested != null && requested.compareTo(nz(stored)) != 0;
+    }
+
+    /** Null-safe 2dp normalisation, matching {@code numeric(12,2)} on every money column. */
+    private static BigDecimal scaleMoney(BigDecimal v) {
+        return (v != null ? v : BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
     }
 
     private PaymentStatus derivePaymentStatus(

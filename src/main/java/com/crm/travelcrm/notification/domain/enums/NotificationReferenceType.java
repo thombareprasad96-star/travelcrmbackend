@@ -13,7 +13,16 @@ public enum NotificationReferenceType {
     BOOKING,
     REMINDER,
     CUSTOMER,
-    VENDOR;
+    VENDOR,
+    /**
+     * Added with the All Tasks screen. Task notifications ({@code TASK_ASSIGNED}) had been published
+     * with {@code referenceType("TASK")} since the task module shipped, but this enum did not list it
+     * — so {@link #fromString} returned null and every one of them persisted
+     * {@code reference_type = NULL} and could not be deep-linked from the bell. The DB CHECK
+     * constraint is widened to match in V2 PART 18; adding a constant here without that migration
+     * would fail at INSERT.
+     */
+    TASK;
 
     /** Case-insensitive parse; returns {@code null} for blank or unrecognized values. */
     public static NotificationReferenceType fromString(String value) {

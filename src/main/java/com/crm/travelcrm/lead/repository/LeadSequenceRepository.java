@@ -18,4 +18,12 @@ public interface LeadSequenceRepository extends JpaRepository<LeadSequence, Long
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     Optional<LeadSequence> findByTenantId(Long tenantId);
+
+    /**
+     * Unlocked existence check for {@code LeadSequenceProvisioner}. Deliberately NOT the locked
+     * finder above: the provisioner runs in its own short {@code REQUIRES_NEW} transaction, and
+     * taking a row lock there would hold it on a second connection while the caller's transaction
+     * waits — the lock belongs to the caller's unit, not this probe.
+     */
+    boolean existsByTenantId(Long tenantId);
 }

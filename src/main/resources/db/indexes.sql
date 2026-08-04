@@ -665,10 +665,16 @@ CREATE INDEX IF NOT EXISTS idx_lie_dedup_key
 -- itself with the current enum values the first time it creates the table; this block is
 -- belt-and-braces for any FUTURE value (ddl-auto=update never alters an existing constraint).
 -- SchemaEnumConstraintValidator guards it at boot.
+--
+-- QUARANTINED_DUPLICATE / QUARANTINED_TRASHED are exactly that future value: any deployment whose
+-- lead_ingest_events table already exists carries the 8-value constraint Hibernate wrote when it
+-- first created the table, and ddl-auto=update will never widen it. Without this refresh the new
+-- statuses fail at INSERT on a webhook thread — which is the very silent-loss this change removes.
 ALTER TABLE lead_ingest_events DROP CONSTRAINT IF EXISTS lead_ingest_events_status_check;
 ALTER TABLE lead_ingest_events ADD CONSTRAINT lead_ingest_events_status_check
         CHECK (status IN ('RECEIVED','PROCESSED','APPENDED','DUPLICATE','IGNORED','DEFERRED',
-                          'QUARANTINED_QUOTA','FAILED'));
+                          'QUARANTINED_QUOTA','QUARANTINED_DUPLICATE','QUARANTINED_TRASHED',
+                          'FAILED'));
 
 -- ── lead_logs: FK gains ON DELETE CASCADE ───────────────────────────────────
 -- A PRE-EXISTING hole, widened by this framework and fixed here.
@@ -802,4 +808,70 @@ BEGIN
                 'REOPENED'
             ));
     END IF;
+END $do$;
+
+
+-- ── All Tasks grid: booking/guest link, creator snapshot, overdue alert mark ─
+-- Mirrors V2 PART 18 for pilot/dev boxes still booting with SQL_INIT_MODE=always (where Flyway is
+-- off and this file is the only thing that runs). Idempotent, so the two never fight.
+DO $do$
+BEGIN
+    IF to_regclass('public.tasks') IS NULL THEN
+        RETURN;   -- first boot: Hibernate has not created the table yet
+    END IF;
+
+    ALTER TABLE tasks
+        ADD COLUMN IF NOT EXISTS booking_id_ref          bigint,
+        ADD COLUMN IF NOT EXISTS booking_public_id       uuid,
+        ADD COLUMN IF NOT EXISTS booking_code            varchar(20),
+        ADD COLUMN IF NOT EXISTS customer_name_snapshot  varchar(255),
+        ADD COLUMN IF NOT EXISTS trip_source             varchar(50),
+        ADD COLUMN IF NOT EXISTS owner_name              varchar(150),
+        ADD COLUMN IF NOT EXISTS overdue_notified_at     timestamp(6) with time zone;
+END $do$;
+
+CREATE INDEX IF NOT EXISTS idx_task_booking
+    ON tasks (booking_id_ref) WHERE deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_task_tenant_assignee_due
+    ON tasks (tenant_id, assign_to_user_id, due_date) WHERE deleted_at IS NULL;
+
+-- The overdue sweeper polls across all tenants every minute; without this it full-scans `tasks`.
+CREATE INDEX IF NOT EXISTS idx_task_overdue_sweep
+    ON tasks (due_date)
+    WHERE deleted_at IS NULL AND overdue_notified_at IS NULL;
+
+-- ── notifications.reference_type: admit TASK ────────────────────────────────
+-- Task notifications have always persisted reference_type = NULL because this CHECK never listed
+-- TASK — which is why an existing TASK_ASSIGNED bell item cannot be deep-linked.
+DO $do$
+DECLARE
+    existing text;
+BEGIN
+    IF to_regclass('public.notifications') IS NULL THEN
+        RETURN;
+    END IF;
+
+    SELECT pg_get_constraintdef(oid) INTO existing
+    FROM pg_constraint WHERE conname = 'notifications_reference_type_check';
+
+    IF existing IS NULL OR existing NOT LIKE '%TASK%' THEN
+        ALTER TABLE notifications DROP CONSTRAINT IF EXISTS notifications_reference_type_check;
+        ALTER TABLE notifications ADD CONSTRAINT notifications_reference_type_check
+            CHECK (reference_type IN ('LEAD','BOOKING','REMINDER','CUSTOMER','VENDOR','TASK'));
+    END IF;
+END $do$;
+
+-- ── tenant_settings: per-tenant opt-in for the noisy overdue channels ───────
+-- IN_APP is always on; WhatsApp and email are off until an agency switches them on. There is no
+-- per-USER notification opt-out anywhere in this product yet, so this is the only off-ramp.
+DO $do$
+BEGIN
+    IF to_regclass('public.tenant_settings') IS NULL THEN
+        RETURN;
+    END IF;
+
+    ALTER TABLE tenant_settings
+        ADD COLUMN IF NOT EXISTS task_overdue_alert_whatsapp boolean NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS task_overdue_alert_email    boolean NOT NULL DEFAULT false;
 END $do$;

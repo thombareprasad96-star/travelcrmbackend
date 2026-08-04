@@ -3799,3 +3799,194 @@ WHERE  u.id = up.user_id
 --   -- A locked lead must never lack the actor that locked it.
 --   SELECT count(*) AS lock_without_actor FROM leads
 --   WHERE first_contacted_at IS NOT NULL AND first_contacted_by_user_id IS NULL;
+
+
+-- ╔══════════════════════════════════════════════════════════════════════════╗
+-- ║  PART 18 — All Tasks: booking/guest link, creator snapshot, alert mark    ║
+-- ╚══════════════════════════════════════════════════════════════════════════╝
+--
+-- Backs the Sembark-style "All Tasks" grid (docs/ALL_TASKS_MODULE_DESIGN.md). The `tasks` table
+-- itself ships in V1__baseline_schema.sql; this part only ADDS columns, so it is safe to re-run.
+--
+-- Why these columns exist at all: `tasks` had exactly one cross-aggregate link — to a lead. The
+-- grid needs three more facts (which trip, which guest, where the trip came from) and a creator
+-- display name, none of which were reachable. `BaseEntity.created_by` is a login-username string,
+-- not a joinable user reference, so "Created By" needs its own snapshot beside owner_user_id.
+--
+-- All four reference columns are DENORMALISED SNAPSHOTS, not joins. Two reasons, and the second is
+-- the load-bearing one: (1) a 50-row grid would otherwise cost 50 booking lookups, and (2) a task
+-- must stay readable after the booking or lead it points at is soft-deleted — "Trip#79799 · Mr.
+-- Piyush Patel" is the historical fact the row is about, and a join would blank it.
+--
+-- ddl-auto is `validate` on every profile, so every field added to Task.java must appear here or
+-- the next boot fails with `Schema-validation: missing column`. That is the intended failure.
+ALTER TABLE tasks
+    ADD COLUMN IF NOT EXISTS booking_id_ref          bigint,
+    ADD COLUMN IF NOT EXISTS booking_public_id       uuid,
+    ADD COLUMN IF NOT EXISTS booking_code            varchar(20),
+    ADD COLUMN IF NOT EXISTS customer_name_snapshot  varchar(255),
+    ADD COLUMN IF NOT EXISTS trip_source             varchar(50),
+    ADD COLUMN IF NOT EXISTS owner_name              varchar(150),
+    ADD COLUMN IF NOT EXISTS overdue_notified_at     timestamp(6) with time zone;
+
+-- ── 18.1  Indexes ──────────────────────────────────────────────────────────
+-- Partial (deleted_at IS NULL) to match every query the module issues; the existing
+-- idx_task_* indexes in V1 are unpartitioned and stay as they are.
+CREATE INDEX IF NOT EXISTS idx_task_booking
+    ON tasks (booking_id_ref) WHERE deleted_at IS NULL;
+
+-- The All Tasks list always narrows on (tenant, assignee, due window) together. idx_task_assignee
+-- alone leaves the Today/Yesterday/Overdue tabs scanning every task the assignee has ever had.
+CREATE INDEX IF NOT EXISTS idx_task_tenant_assignee_due
+    ON tasks (tenant_id, assign_to_user_id, due_date) WHERE deleted_at IS NULL;
+
+-- The overdue sweeper's poll runs across ALL tenants every minute and must touch only the few rows
+-- it can act on: open, past due, not yet alerted. Without this it is a full scan of `tasks` per tick.
+CREATE INDEX IF NOT EXISTS idx_task_overdue_sweep
+    ON tasks (due_date)
+    WHERE deleted_at IS NULL AND overdue_notified_at IS NULL;
+
+-- ── 18.2  notifications.reference_type gains TASK ──────────────────────────
+-- V1 pinned this CHECK to five values (LEAD, BOOKING, REMINDER, CUSTOMER, VENDOR). Task notifications
+-- have therefore ALWAYS been persisting reference_type = NULL — NotificationReferenceType.fromString
+-- ("TASK") returns null rather than throwing — which is why an existing TASK_ASSIGNED bell item
+-- cannot be deep-linked. Adding the value here is what makes the overdue alert clickable.
+ALTER TABLE notifications DROP CONSTRAINT IF EXISTS notifications_reference_type_check;
+ALTER TABLE notifications ADD CONSTRAINT notifications_reference_type_check
+    CHECK (reference_type IN ('LEAD','BOOKING','REMINDER','CUSTOMER','VENDOR','TASK'));
+
+-- ── 18.3  Per-tenant opt-in for the noisy overdue channels ─────────────────
+-- IN_APP is always on. WhatsApp and email are OFF by default and must be switched on per tenant.
+-- This is deliberate: there is no per-USER notification opt-out anywhere in this product yet
+-- (comm_notification_prefs is designed but unread by any code), so a tenant-level switch is the
+-- only off-ramp an agency has. Shipping WhatsApp alerts on-by-default would give every agent a
+-- message they cannot mute.
+ALTER TABLE tenant_settings
+    ADD COLUMN IF NOT EXISTS task_overdue_alert_whatsapp boolean NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS task_overdue_alert_email    boolean NOT NULL DEFAULT false;
+
+
+-- ── Verification (run by hand; all counts must be 0) ────────────────────────
+--   SELECT count(*) AS missing_cols FROM (
+--     SELECT unnest(ARRAY['booking_id_ref','booking_public_id','booking_code',
+--                         'customer_name_snapshot','trip_source','owner_name',
+--                         'overdue_notified_at']) AS c) w
+--   WHERE NOT EXISTS (SELECT 1 FROM information_schema.columns
+--                     WHERE table_name = 'tasks' AND column_name = w.c);
+--
+--   -- The reference_type CHECK must now admit TASK.
+--   SELECT count(*) AS task_ref_rejected FROM pg_constraint
+--   WHERE conname = 'notifications_reference_type_check'
+--     AND pg_get_constraintdef(oid) NOT LIKE '%TASK%';
+
+
+-- ╔══════════════════════════════════════════════════════════════════════════╗
+-- ║  PART 19 — Basic plan repair: VENDORS + WHATSAPP, and the lead-cap wall  ║
+-- ╚══════════════════════════════════════════════════════════════════════════╝
+--
+-- NUMBERED 19 BECAUSE 18 IS TAKEN TWICE. Two independent parts in this file both call themselves
+-- PART 18 — "Lead claim window" and "All Tasks". They touch disjoint tables so the collision is
+-- cosmetic and is NOT renumbered here (the file is stamped on the pilot; editing an applied part's
+-- text is how a checksum drift starts). Do not add a second 19.
+--
+-- NO DDL IN THIS PART. It is entirely a data backfill that carries a plan-catalogue change onto the
+-- tenants that already exist. Nothing here is required for the application to BOOT — ddl-auto is
+-- `validate` and no column changes — which is exactly why it is easy to forget and ship the Java
+-- half alone. That half does nothing on its own.
+--
+-- WHAT CHANGED IN THE JAVA, AND WHY NEITHER HALF REACHES A TENANT
+--   PlanCatalogueInitializer.backfillStarterEntitlements() grants VENDORS + WHATSAPP to the Basic
+--   (STARTER) plan and raises its lead cap 500 -> 5000. Both are PLAN-level facts, and a plan-level
+--   fact is invisible to a tenant that already exists:
+--     * modules — TenantEntitlementService.computeEffectiveModules returns the tenant's own
+--       tenant_modules snapshot whenever it is non-empty and never falls back to the plan;
+--       TenantServiceImpl snapshots the plan's modules once, at tenant creation.
+--     * max_leads — Tenant.max_leads is DENORMALISED from the plan and re-synced only by
+--       TenantServiceImpl.changePlan / TenantPlanApplier.applyPlan, i.e. only when the tenant
+--       actually moves plan. A Basic tenant that stays on Basic never re-reads the catalogue.
+--   So without 19.1 and 19.2 below, a live Basic tenant keeps 403-ing on /api/vendors and keeps
+--   walling shut at 500 leads, while the console shows a plan that says otherwise.
+--
+-- WHY THESE TWO MODULES, IN ONE LINE EACH
+--   VENDORS  — Basic grants BOOKINGS and the booking module is built on vendors (booking_expenses,
+--              booking_service_items, vendor assignment, profit). Without it the expense ledger
+--              renders with a vendor picker that cannot be filled: present and non-functional.
+--   WHATSAPP — PART 17 put the omnichannel inbox (COMMUNICATION) on every plan, but
+--              ModuleAccessFilter gates /api/settings/whatsapp on WHATSAPP, which was Pro-only.
+--              Basic got a WhatsApp inbox it had no way to connect.
+--   The Pro upsell is untouched: REPORTS, ACCOUNTING, MARKETING, FLEET, SUBAGENT stay out of Basic.
+--
+-- SAFE TO RE-RUN. Every statement is guarded by a NOT EXISTS or an equality on the old value.
+
+-- ── 19.1  tenant_modules backfill — VENDORS + WHATSAPP for Basic tenants ────────────────────
+-- Three guards, and all three are load-bearing:
+--   t.plan = 'STARTER'  — PRO and ENTERPRISE have held both keys since the original seed, so they
+--                         need nothing; FLEET must NOT receive them. modules = {FLEET} IS the
+--                         standalone Vehicle Diary product boundary (see PART 12), and handing a
+--                         transport operator two CRM keys sells them a CRM they never bought.
+--   EXISTS(snapshot)    — a tenant with an EMPTY snapshot correctly inherits its plan's modules.
+--                         Inserting one row would flip it from "inherits the plan" to "has an
+--                         explicit list of exactly these", silently REVOKING every other module it
+--                         holds. Same guard, same reason, as 17.14.
+--   NOT EXISTS(module)  — idempotence; there is no unique constraint on (tenant_id, module).
+--
+-- Effective modules are cached per tenant for 30 seconds and evicted only by updateModules(), so a
+-- DB-side insert takes up to that long to be seen. Run it during a deploy restart.
+INSERT INTO tenant_modules (tenant_id, module)
+SELECT t.id, m.module
+FROM   tenants t
+CROSS  JOIN (VALUES ('VENDORS'), ('WHATSAPP')) AS m(module)
+WHERE  t.deleted_at IS NULL
+  AND  t.plan = 'STARTER'
+  AND  EXISTS     (SELECT 1 FROM tenant_modules x WHERE x.tenant_id = t.id)
+  AND  NOT EXISTS (SELECT 1 FROM tenant_modules x
+                   WHERE x.tenant_id = t.id AND x.module = m.module);
+
+-- ── 19.2  tenants.max_leads — raise the Basic lifetime wall 500 -> 5000 ─────────────────────
+-- The cap is a LIFETIME total, not a monthly allowance: LeadServiceImpl.enforceLeadCap compares it
+-- against countByTenantIdAndDeletedAtIsNull, every lead the tenant has ever kept. At 500 a Basic
+-- agency working through Basic's own 50 bookings a month hits the wall in three or four months and
+-- can never create another lead, however long it keeps paying.
+--
+-- max_leads = 500 (not <= 5000) is the point of the WHERE: it fires only on tenants still carrying
+-- the seeded default. A SuperAdmin who tuned this tenant by hand keeps their number.
+--
+-- NOT quota_override is the same contract TenantPlanApplier honours (`if (!t.isQuotaOverride())`):
+-- a pinned SuperAdmin quota outranks the plan until it is cleared. Overwriting it here would undo a
+-- deliberate decision from the Usage & Quotas console with no trace.
+UPDATE tenants
+SET    max_leads = 5000
+WHERE  deleted_at IS NULL
+  AND  plan = 'STARTER'
+  AND  quota_override = false
+  AND  max_leads = 500;
+
+
+-- ── Verification (run by hand; all counts must be 0 unless stated) ──────────────────────────
+--   -- 1. Every Basic tenant that had a snapshot now holds both keys. Expect 0.
+--   SELECT count(*) AS starter_missing_keys FROM tenants t
+--   CROSS JOIN (VALUES ('VENDORS'),('WHATSAPP')) AS m(module)
+--   WHERE t.deleted_at IS NULL AND t.plan = 'STARTER'
+--     AND EXISTS     (SELECT 1 FROM tenant_modules x WHERE x.tenant_id = t.id)
+--     AND NOT EXISTS (SELECT 1 FROM tenant_modules x
+--                     WHERE x.tenant_id = t.id AND x.module = m.module);
+--
+--   -- 2. No tenant was given a snapshot it did not have before (that would have revoked its other
+--   --    modules). Compare against the count taken BEFORE applying; it must be UNCHANGED.
+--   SELECT count(DISTINCT tenant_id) AS tenants_with_snapshot FROM tenant_modules;
+--
+--   -- 3. No non-Basic tenant picked up the keys from this part. A Fleet tenant here is the
+--   --    standalone product boundary breached. Expect 0.
+--   SELECT count(*) AS non_starter_leaked FROM tenants t JOIN tenant_modules x ON x.tenant_id = t.id
+--   WHERE t.plan = 'FLEET' AND x.module IN ('VENDORS','WHATSAPP');
+--
+--   -- 4. No Basic tenant is still on the old wall. Expect 0.
+--   SELECT count(*) AS starter_still_at_500 FROM tenants
+--   WHERE deleted_at IS NULL AND plan = 'STARTER' AND quota_override = false AND max_leads = 500;
+--
+--   -- 5. The catalogue itself agrees (this is the Java half, applied at boot, not by this file).
+--   --    Expect one row: STARTER | 5000 | t | t
+--   SELECT p.code, p.max_leads,
+--          EXISTS (SELECT 1 FROM plan_modules pm WHERE pm.plan_id = p.id AND pm.module = 'VENDORS')  AS has_vendors,
+--          EXISTS (SELECT 1 FROM plan_modules pm WHERE pm.plan_id = p.id AND pm.module = 'WHATSAPP') AS has_whatsapp
+--   FROM plans p WHERE p.code = 'STARTER';

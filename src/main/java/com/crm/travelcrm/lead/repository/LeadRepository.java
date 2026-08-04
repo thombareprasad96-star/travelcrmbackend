@@ -9,6 +9,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -22,7 +23,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 @Repository
-public interface LeadRepository extends JpaRepository<Lead, Long> {
+public interface LeadRepository extends JpaRepository<Lead, Long>, JpaSpecificationExecutor<Lead> {
 
     // ── List ─────────────────────────────────────────────────────────────────
     @EntityGraph(attributePaths = "assignedUser")
@@ -566,4 +567,259 @@ public interface LeadRepository extends JpaRepository<Lead, Long> {
             GROUP BY l.lead.id
             """)
     List<Object[]> countLogsByLeadIds(@Param("leadIds") Collection<Long> leadIds);
+
+    // ── All-Leads dashboard summary ──────────────────────────────────────────
+    //
+    // Everything below comes in PAIRS: a tenant-wide form and a `...ForUsers` form limited to the
+    // caller's visible owner ids. That is the same shape findUserWorkload/findUserWorkloadForUsers
+    // already uses, and it exists because ScopeResolver answers with three different things — null
+    // (ALL, skip the owner predicate), an empty set (NONE, return nothing), or a set of owner ids.
+    // A single query with `IN :userIds` cannot express the ALL case without enumerating every user
+    // in the tenant, so the predicate is added or omitted by picking the method, not by passing a
+    // flag.
+    //
+    // These are all aggregates: they run in the database and never load a Lead. The point of the
+    // whole block is that the dashboard cards stop being computed from the 100 rows the list page
+    // happened to fetch.
+
+    /** Leads created inside the window, limited to the caller's visible owners. */
+    @Query("""
+            SELECT COUNT(l)
+            FROM Lead l
+            WHERE l.tenantId = :tenantId
+              AND l.deletedAt IS NULL
+              AND l.assignedUser.id IN :userIds
+              AND l.createdAt >= :from AND l.createdAt < :to
+            """)
+    long countCreatedBetweenForUsers(@Param("tenantId") Long tenantId,
+                                     @Param("userIds") Collection<Long> userIds,
+                                     @Param("from") LocalDateTime from,
+                                     @Param("to") LocalDateTime to);
+
+    /**
+     * Leads WON inside the window, measured on {@code convertedAt}.
+     *
+     * <p>Distinct from counting {@code leadStage = CONVERTED} today: cancelling a booking with
+     * MOVE_TO_LEAD clears {@code convertedAt} and reopens the lead, so this answers "what did we
+     * win in March" only for wins that still stand. That is the intended reading — a cancelled
+     * booking is not a win — and it is why the card built on it is labelled by period.
+     */
+    @Query("""
+            SELECT COUNT(l)
+            FROM Lead l
+            WHERE l.tenantId = :tenantId
+              AND l.deletedAt IS NULL
+              AND l.convertedAt >= :from AND l.convertedAt < :to
+            """)
+    long countConvertedBetween(@Param("tenantId") Long tenantId,
+                               @Param("from") LocalDateTime from,
+                               @Param("to") LocalDateTime to);
+
+    @Query("""
+            SELECT COUNT(l)
+            FROM Lead l
+            WHERE l.tenantId = :tenantId
+              AND l.deletedAt IS NULL
+              AND l.assignedUser.id IN :userIds
+              AND l.convertedAt >= :from AND l.convertedAt < :to
+            """)
+    long countConvertedBetweenForUsers(@Param("tenantId") Long tenantId,
+                                       @Param("userIds") Collection<Long> userIds,
+                                       @Param("from") LocalDateTime from,
+                                       @Param("to") LocalDateTime to);
+
+    /**
+     * The cohort numerator: of the leads CREATED in this window, how many sit in {@code stage} now.
+     *
+     * <p>This is the only honest denominator-mate for {@link #countCreatedBetween}. Dividing
+     * {@link #countConvertedBetween} by it would mix two populations — March's wins include leads
+     * that arrived in January — and the resulting "conversion rate" can exceed 100%.
+     */
+    @Query("""
+            SELECT COUNT(l)
+            FROM Lead l
+            WHERE l.tenantId = :tenantId
+              AND l.deletedAt IS NULL
+              AND l.leadStage = :stage
+              AND l.createdAt >= :from AND l.createdAt < :to
+            """)
+    long countCreatedBetweenInStage(@Param("tenantId") Long tenantId,
+                                    @Param("stage") LeadStage stage,
+                                    @Param("from") LocalDateTime from,
+                                    @Param("to") LocalDateTime to);
+
+    @Query("""
+            SELECT COUNT(l)
+            FROM Lead l
+            WHERE l.tenantId = :tenantId
+              AND l.deletedAt IS NULL
+              AND l.assignedUser.id IN :userIds
+              AND l.leadStage = :stage
+              AND l.createdAt >= :from AND l.createdAt < :to
+            """)
+    long countCreatedBetweenInStageForUsers(@Param("tenantId") Long tenantId,
+                                            @Param("userIds") Collection<Long> userIds,
+                                            @Param("stage") LeadStage stage,
+                                            @Param("from") LocalDateTime from,
+                                            @Param("to") LocalDateTime to);
+
+    /**
+     * Active leads whose follow-up date falls in {@code [from, to)} — used for DUE TODAY, as
+     * {@code [today, tomorrow)} in the tenant's own zone. A half-open range rather than
+     * {@code = today} so it stays correct if the card ever widens to "next 7 days".
+     *
+     * <p>Terminal leads are excluded: a follow-up date left on a lead that was lost or converted is
+     * a stale field, not a task somebody owes the customer.
+     */
+    @Query("""
+            SELECT COUNT(l)
+            FROM Lead l
+            WHERE l.tenantId = :tenantId
+              AND l.deletedAt IS NULL
+              AND l.leadStage NOT IN :terminalStages
+              AND l.followUpDate IS NOT NULL
+              AND l.followUpDate >= :from AND l.followUpDate < :to
+            """)
+    long countFollowUpsInRange(@Param("tenantId") Long tenantId,
+                               @Param("terminalStages") Collection<LeadStage> terminalStages,
+                               @Param("from") LocalDate from,
+                               @Param("to") LocalDate to);
+
+    @Query("""
+            SELECT COUNT(l)
+            FROM Lead l
+            WHERE l.tenantId = :tenantId
+              AND l.deletedAt IS NULL
+              AND l.assignedUser.id IN :userIds
+              AND l.leadStage NOT IN :terminalStages
+              AND l.followUpDate IS NOT NULL
+              AND l.followUpDate >= :from AND l.followUpDate < :to
+            """)
+    long countFollowUpsInRangeForUsers(@Param("tenantId") Long tenantId,
+                                       @Param("userIds") Collection<Long> userIds,
+                                       @Param("terminalStages") Collection<LeadStage> terminalStages,
+                                       @Param("from") LocalDate from,
+                                       @Param("to") LocalDate to);
+
+    /**
+     * Follow-ups that are already overdue: everything strictly before the caller's local today.
+     * No lower bound rather than a sentinel start date — a floor like {@code LocalDate.MIN} is
+     * outside the range Postgres accepts for a date and would fail at the driver.
+     */
+    @Query("""
+            SELECT COUNT(l)
+            FROM Lead l
+            WHERE l.tenantId = :tenantId
+              AND l.deletedAt IS NULL
+              AND l.leadStage NOT IN :terminalStages
+              AND l.followUpDate IS NOT NULL
+              AND l.followUpDate < :before
+            """)
+    long countFollowUpsBefore(@Param("tenantId") Long tenantId,
+                              @Param("terminalStages") Collection<LeadStage> terminalStages,
+                              @Param("before") LocalDate before);
+
+    @Query("""
+            SELECT COUNT(l)
+            FROM Lead l
+            WHERE l.tenantId = :tenantId
+              AND l.deletedAt IS NULL
+              AND l.assignedUser.id IN :userIds
+              AND l.leadStage NOT IN :terminalStages
+              AND l.followUpDate IS NOT NULL
+              AND l.followUpDate < :before
+            """)
+    long countFollowUpsBeforeForUsers(@Param("tenantId") Long tenantId,
+                                      @Param("userIds") Collection<Long> userIds,
+                                      @Param("terminalStages") Collection<LeadStage> terminalStages,
+                                      @Param("before") LocalDate before);
+
+    /**
+     * Active-pipeline money: {@code [Σ budget, how many rows carried one]}.
+     *
+     * <p>The count is selected alongside the sum on purpose — {@code budget} is nullable and often
+     * empty on a fresh enquiry, so a bare sum reads as "the pipeline is worth ₹X" when it may be
+     * describing four leads out of eighty. Returned as a single-row {@code List<Object[]>} (an
+     * aggregate with no GROUP BY always yields exactly one row) rather than a bare {@code Object[]},
+     * which Spring Data would be free to read as a multi-column projection.
+     */
+    @Query("""
+            SELECT COALESCE(SUM(l.budget), 0), COUNT(l.budget)
+            FROM Lead l
+            WHERE l.tenantId = :tenantId
+              AND l.deletedAt IS NULL
+              AND l.leadStage NOT IN :terminalStages
+            """)
+    List<Object[]> sumActiveBudget(@Param("tenantId") Long tenantId,
+                                   @Param("terminalStages") Collection<LeadStage> terminalStages);
+
+    @Query("""
+            SELECT COALESCE(SUM(l.budget), 0), COUNT(l.budget)
+            FROM Lead l
+            WHERE l.tenantId = :tenantId
+              AND l.deletedAt IS NULL
+              AND l.assignedUser.id IN :userIds
+              AND l.leadStage NOT IN :terminalStages
+            """)
+    List<Object[]> sumActiveBudgetForUsers(@Param("tenantId") Long tenantId,
+                                           @Param("userIds") Collection<Long> userIds,
+                                           @Param("terminalStages") Collection<LeadStage> terminalStages);
+
+    /**
+     * Lead count per type. Rows are {@code [LeadType, count (Long)]}; types with no leads are
+     * ABSENT (GROUP BY), so the caller zero-fills from the enum.
+     */
+    @Query("""
+            SELECT l.leadType, COUNT(l)
+            FROM Lead l
+            WHERE l.tenantId = :tenantId
+              AND l.deletedAt IS NULL
+            GROUP BY l.leadType
+            """)
+    List<Object[]> countLeadsByType(@Param("tenantId") Long tenantId);
+
+    @Query("""
+            SELECT l.leadType, COUNT(l)
+            FROM Lead l
+            WHERE l.tenantId = :tenantId
+              AND l.deletedAt IS NULL
+              AND l.assignedUser.id IN :userIds
+            GROUP BY l.leadType
+            """)
+    List<Object[]> countLeadsByTypeForUsers(@Param("tenantId") Long tenantId,
+                                            @Param("userIds") Collection<Long> userIds);
+
+    /**
+     * publicIds of the leads sitting in one stage, newest first — the input to the quoted-value
+     * roll-up, which has to price each lead's latest quotation through the shared formula rather
+     * than SUM a column that does not exist.
+     *
+     * <p>{@code Pageable} is the cap, not pagination: the caller asks for a bounded slice and
+     * reports the figure as approximate when the slice comes back full.
+     */
+    @Query("""
+            SELECT l.publicId
+            FROM Lead l
+            WHERE l.tenantId = :tenantId
+              AND l.deletedAt IS NULL
+              AND l.leadStage = :stage
+            ORDER BY l.createdAt DESC
+            """)
+    List<UUID> findPublicIdsByStage(@Param("tenantId") Long tenantId,
+                                    @Param("stage") LeadStage stage,
+                                    Pageable pageable);
+
+    @Query("""
+            SELECT l.publicId
+            FROM Lead l
+            WHERE l.tenantId = :tenantId
+              AND l.deletedAt IS NULL
+              AND l.assignedUser.id IN :userIds
+              AND l.leadStage = :stage
+            ORDER BY l.createdAt DESC
+            """)
+    List<UUID> findPublicIdsByStageForUsers(@Param("tenantId") Long tenantId,
+                                            @Param("userIds") Collection<Long> userIds,
+                                            @Param("stage") LeadStage stage,
+                                            Pageable pageable);
 }
