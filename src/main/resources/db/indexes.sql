@@ -225,29 +225,116 @@ ALTER TABLE billing_records DROP CONSTRAINT IF EXISTS billing_records_status_che
 ALTER TABLE billing_records ADD CONSTRAINT billing_records_status_check
         CHECK (status IN ('UNPAID','PAID','VOID','CREDIT'));
 
-ALTER TABLE platform_audit_logs DROP CONSTRAINT IF EXISTS platform_audit_logs_action_check;
-ALTER TABLE platform_audit_logs ADD CONSTRAINT platform_audit_logs_action_check
-        CHECK (action IN ('LOGIN','LOGIN_FAILED','LOGOUT',
-                'MFA_SETUP','MFA_CHALLENGE','MFA_VERIFY','MFA_VERIFY_FAILED',
-                'MFA_ENABLE_FAILED','MFA_ENABLED','MFA_DISABLE_FAILED','MFA_DISABLED',
+-- WAS AN UNGUARDED DROP + ADD OF A HAND-MAINTAINED LIST, AND IT HAD ROTTED TO 63 OF THE 83
+-- PlatformAuditAction CONSTANTS — every MARKETPLACE_* value was missing. Because this file runs
+-- AFTER Flyway (spring.jpa.defer-datasource-initialization=true), the old block did not merely fail
+-- to widen the constraint: it DROPPED the correct 83-value one that V2 PART 16.3 had just written
+-- and replaced it with the stale one. SchemaEnumConstraintValidator then refused the boot. So on any
+-- environment running with sql.init.mode=always, this block was the regression, not the repair.
+--
+-- Now guarded exactly like its twin at V2 PART 16.3 — it rebuilds only when the live constraint is
+-- absent or predates the cancellation-consent actions, and is otherwise a no-op. KEEP THE VALUE LIST
+-- IDENTICAL TO V2 PART 16.3; adding a PlatformAuditAction constant means editing both, and the guard
+-- needle (MARKETPLACE_CANCELLATION_QUOTED) must then be moved to the newly added constant or the
+-- refresh will not fire.
+DO $do$
+DECLARE
+    existing text;
+BEGIN
+    SELECT pg_get_constraintdef(oid) INTO existing
+    FROM pg_constraint WHERE conname = 'platform_audit_logs_action_check';
+
+    IF existing IS NULL OR existing NOT LIKE '%MARKETPLACE_CANCELLATION_QUOTED%' THEN
+        ALTER TABLE platform_audit_logs DROP CONSTRAINT IF EXISTS platform_audit_logs_action_check;
+        ALTER TABLE platform_audit_logs ADD CONSTRAINT platform_audit_logs_action_check
+            CHECK (action IN (
+                'ANNOUNCEMENT_SEND',
+                'BILLING_ISSUE',
+                'BILLING_MARK_PAID',
+                'BILLING_MARK_UNPAID',
+                'BILLING_VOID',
+                'CONFIG_CHANGE',
+                'DATA_EXPORT',
+                'FEATURE_FLAG_CHANGE',
+                'IMPERSONATION_END',
+                'IMPERSONATION_START',
+                'LOGIN',
+                'LOGIN_FAILED',
+                'LOGIN_NOTIFICATION',
+                'LOGIN_NOTIFICATION_FAILED',
+                'LOGOUT',
+                'MAINTENANCE_TOGGLE',
+                'MARKETPLACE_BOOKING_APPROVE',
+                'MARKETPLACE_BOOKING_CANCEL',
+                'MARKETPLACE_BOOKING_CANCEL_REQUESTED',
+                'MARKETPLACE_BOOKING_CRM_SYNC_FAILED',
+                'MARKETPLACE_BOOKING_REJECT',
+                'MARKETPLACE_BOOKING_REQUEST',
+                'MARKETPLACE_BOOKING_REVIEW',
+                'MARKETPLACE_BOOKING_REVISION_ACCEPTED',
+                'MARKETPLACE_BOOKING_REVISION_DECLINED',
+                'MARKETPLACE_BOOKING_REVISION_EXPIRED',
+                'MARKETPLACE_BOOKING_REVISION_REQUESTED',
+                'MARKETPLACE_CANCELLATION_QUOTED',
+                'MARKETPLACE_CANCELLATION_QUOTE_ACCEPTED',
+                'MARKETPLACE_CANCELLATION_QUOTE_DECLINED',
+                'MARKETPLACE_CANCELLATION_QUOTE_EXPIRED',
+                'MARKETPLACE_COMMISSION_ACCRUED',
+                'MARKETPLACE_COMMISSION_ADJUSTED',
+                'MARKETPLACE_COMMISSION_REVERSED',
+                'MARKETPLACE_COMMISSION_SETTLED',
+                'MARKETPLACE_VOUCHER_ISSUED',
+                'MARKETPLACE_VOUCHER_REVOKED',
+                'MFA_CHALLENGE',
+                'MFA_DISABLED',
+                'MFA_DISABLE_FAILED',
+                'MFA_ENABLED',
+                'MFA_ENABLE_FAILED',
+                'MFA_SETUP',
+                'MFA_VERIFY',
+                'MFA_VERIFY_FAILED',
+                'PAYMENT_CAPTURED',
+                'PAYMENT_FAILED',
+                'PAYMENT_ORDER_CREATED',
+                'PLAN_ASSIGN',
+                'PLAN_CHANGE',
+                'PLAN_UPDATE',
+                'PLATFORM_HOTEL_CREATE',
+                'PLATFORM_HOTEL_DELETE',
+                'PLATFORM_HOTEL_PUBLISH',
+                'PLATFORM_HOTEL_UNPUBLISH',
+                'PLATFORM_HOTEL_UPDATE',
+                'QUOTA_OVERRIDE',
+                'SUBAGENT_LICENSE_APPROVE',
+                'SUBAGENT_LICENSE_CANCEL',
+                'SUBAGENT_LICENSE_CREATE',
+                'SUBAGENT_LICENSE_REJECT',
+                'SUBSCRIPTION_ACTIVATED',
+                'SUBSCRIPTION_CANCELLED',
+                'SUBSCRIPTION_EXPIRED',
+                'SUPER_ADMIN_INVITE_ACCEPT',
+                'SUPER_ADMIN_INVITE_CREATE',
                 'SUPER_ADMIN_MFA_RESET',
                 'SUPER_ADMIN_PASSWORD_CHANGE',
-                'SUPER_ADMIN_INVITE_CREATE','SUPER_ADMIN_INVITE_ACCEPT',
-                'LOGIN_NOTIFICATION','LOGIN_NOTIFICATION_FAILED',
-                'TENANT_CREATE','TENANT_UPDATE','TENANT_SUSPEND','TENANT_REACTIVATE',
-                'TENANT_SOFT_DELETE','TENANT_RESTORE','TENANT_HARD_DELETE',
-                'PLAN_ASSIGN','PLAN_CHANGE','PLAN_UPDATE','SUBSCRIPTION_EXPIRED',
-                'BILLING_ISSUE','BILLING_MARK_PAID','BILLING_MARK_UNPAID',
-                'BILLING_VOID',
-                'PAYMENT_ORDER_CREATED','PAYMENT_CAPTURED','PAYMENT_FAILED',
-                'SUBSCRIPTION_ACTIVATED','SUBSCRIPTION_CANCELLED','TENANT_PAST_DUE',
-                'UPGRADE_REQUEST_CREATE','UPGRADE_REQUEST_APPROVE','UPGRADE_REQUEST_REJECT','UPGRADE_REQUEST_CANCEL',
-                'SUBAGENT_LICENSE_CREATE','SUBAGENT_LICENSE_APPROVE','SUBAGENT_LICENSE_REJECT','SUBAGENT_LICENSE_CANCEL',
-                'IMPERSONATION_START','IMPERSONATION_END','USER_FORCE_RESET','USER_LOCK','USER_UNLOCK',
-                'FEATURE_FLAG_CHANGE','CONFIG_CHANGE','QUOTA_OVERRIDE','USAGE_LIMIT_EXCEEDED',
-                'ANNOUNCEMENT_SEND','MAINTENANCE_TOGGLE','DATA_EXPORT',
-                'PLATFORM_HOTEL_CREATE','PLATFORM_HOTEL_UPDATE','PLATFORM_HOTEL_PUBLISH',
-                'PLATFORM_HOTEL_UNPUBLISH','PLATFORM_HOTEL_DELETE'));
+                'TENANT_CREATE',
+                'TENANT_HARD_DELETE',
+                'TENANT_PAST_DUE',
+                'TENANT_REACTIVATE',
+                'TENANT_RESTORE',
+                'TENANT_SOFT_DELETE',
+                'TENANT_SUSPEND',
+                'TENANT_UPDATE',
+                'UPGRADE_REQUEST_APPROVE',
+                'UPGRADE_REQUEST_CANCEL',
+                'UPGRADE_REQUEST_CREATE',
+                'UPGRADE_REQUEST_REJECT',
+                'USAGE_LIMIT_EXCEEDED',
+                'USER_FORCE_RESET',
+                'USER_LOCK',
+                'USER_UNLOCK'
+            ));
+    END IF;
+END $do$;
 
 -- ── UpgradeRequest enum CHECK constraint refresh ────────────────────────────
 -- upgrade_requests is a NEW table, so Hibernate creates its *_check constraints with the current enum

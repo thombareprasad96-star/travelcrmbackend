@@ -3990,3 +3990,94 @@ WHERE  deleted_at IS NULL
 --          EXISTS (SELECT 1 FROM plan_modules pm WHERE pm.plan_id = p.id AND pm.module = 'VENDORS')  AS has_vendors,
 --          EXISTS (SELECT 1 FROM plan_modules pm WHERE pm.plan_id = p.id AND pm.module = 'WHATSAPP') AS has_whatsapp
 --   FROM plans p WHERE p.code = 'STARTER';
+
+
+-- ╔══════════════════════════════════════════════════════════════════════════╗
+-- ║  PART 20 — lead_ingest_events.status: the constraint db/indexes.sql owns ║
+-- ║            and the Flyway cutover switches off                           ║
+-- ╚══════════════════════════════════════════════════════════════════════════╝
+--
+-- ADDED FOR THE FLYWAY CUTOVER. This part fixes nothing that is broken today; it fixes something
+-- that breaks the moment FLYWAY_ENABLED=true, which is the point of the deploy that carries it.
+--
+-- THE FAILURE, END TO END
+--   1. V1 creates lead_ingest_events with an INLINE, unnamed check over EIGHT statuses
+--      (V1__baseline_schema.sql, the `status varchar(32) not null check (status in (...))` column).
+--      Postgres auto-names it lead_ingest_events_status_check. The pilot's table was written the
+--      same way by ddl-auto=update, so it carries the same eight.
+--   2. LeadIngestStatus has since grown to TEN — QUARANTINED_DUPLICATE and QUARANTINED_TRASHED.
+--   3. The DROP/ADD that widens it to ten lives ONLY in db/indexes.sql. Nothing in V1 or V2
+--      touched it, because until now db/indexes.sql always ran (spring.sql.init.mode=always).
+--   4. ProductionConfigValidator REFUSES to boot when spring.flyway.enabled=true unless
+--      spring.sql.init.mode=never. So enabling Flyway is exactly the act that stops db/indexes.sql
+--      from running — and the widening silently stops happening with it.
+--   5. SchemaEnumConstraintValidator guards this column by name. It compares the live
+--      pg_get_constraintdef against the Java enum and throws IllegalStateException on a missing
+--      constant. The app does not start. Not a 500 on one endpoint — no boot at all.
+--
+-- WHY LOCAL NEVER CAUGHT IT: the local database already holds the ten-value constraint (somebody
+-- applied db/indexes.sql by hand before application-local.properties set sql.init.mode=never), and
+-- @SpringBootTest does not invoke ApplicationRunner beans, so the test suite never runs the guard
+-- either. A fresh V1+V2 database with sql.init.mode=never — i.e. production after the cutover — is
+-- the only configuration that exhibits it, and no environment had ever been in that configuration.
+--
+-- THE DUPLICATE IN db/indexes.sql IS DELIBERATE AND STAYS. Any environment still running with
+-- sql.init.mode=always is served by that copy; this one serves every Flyway-managed environment.
+-- Both are guarded, so whichever runs second is a no-op.
+--
+-- SAFE TO RE-RUN. The DO block re-adds only when the constraint is absent or stale, and the ADD is
+-- validated against existing rows — every stored value is one of the eight the old constraint
+-- already allowed, so widening can never be rejected by live data.
+DO $do$
+DECLARE
+    existing text;
+BEGIN
+    IF to_regclass('public.lead_ingest_events') IS NULL THEN
+        RAISE NOTICE 'PART 20 skipped: lead_ingest_events does not exist.';
+        RETURN;
+    END IF;
+
+    SELECT pg_get_constraintdef(oid) INTO existing
+    FROM   pg_constraint
+    WHERE  conrelid = 'public.lead_ingest_events'::regclass
+      AND  contype  = 'c'
+      AND  conname  = 'lead_ingest_events_status_check';
+
+    IF existing IS NULL OR existing NOT LIKE '%QUARANTINED_TRASHED%' THEN
+        ALTER TABLE lead_ingest_events DROP CONSTRAINT IF EXISTS lead_ingest_events_status_check;
+        ALTER TABLE lead_ingest_events ADD CONSTRAINT lead_ingest_events_status_check
+            CHECK (status IN ('RECEIVED','PROCESSED','APPENDED','DUPLICATE','IGNORED','DEFERRED',
+                              'QUARANTINED_QUOTA','QUARANTINED_DUPLICATE','QUARANTINED_TRASHED',
+                              'FAILED'));
+    END IF;
+END
+$do$;
+
+
+-- ── Verification ────────────────────────────────────────────────────────────────────────────
+--   -- Must print all ten values. A definition without QUARANTINED_TRASHED means this part did
+--   -- not run, and the next boot will stop at SchemaEnumConstraintValidator.
+--   SELECT pg_get_constraintdef(oid) FROM pg_constraint
+--   WHERE conname = 'lead_ingest_events_status_check';
+
+
+-- ╔══════════════════════════════════════════════════════════════════════════╗
+-- ║  END OF V2 — the next schema change is V3__<description>.sql             ║
+-- ╚══════════════════════════════════════════════════════════════════════════╝
+--
+-- PART 20 IS THE LAST PART. It ships in the deploy that turns Flyway on in production, and from
+-- that moment V2 is applied there. Every "V2 has not reached the deployment database, so editing it
+-- in place is safe" note earlier in this file (PARTs 2, 3, 4, 5, and the V3/V4 fold-back rationale)
+-- describes a window that is now CLOSED. Those comments are kept because rewriting an applied
+-- migration's text is itself how checksum drift starts — read them as history, not as instructions.
+--
+-- Appending a PART 21 would change this file's checksum. Under the cutover's S1 baseline that would
+-- not even fail loudly: Flyway records V2 as a BASELINE row, and MigrationInfoImpl.validate() skips
+-- checksum validation for versions <= the applied baseline, so production would boot happily
+-- WITHOUT the new SQL and then fail later at Hibernate validate on a missing column, far from the
+-- cause. Local and CI still validate the checksum and would fail immediately.
+--
+-- So: new schema change => a new V3__<description>.sql file.
+-- Do NOT name it V3__hotel_marketplace.sql, V3__fleet_expenses_compliance_and_product_family.sql,
+-- or V3__lead_booking_fe_alignment.sql — three older design docs still reference those filenames for
+-- work that ultimately shipped as PARTs of THIS file, and reusing a name makes the history unreadable.
