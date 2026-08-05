@@ -31,9 +31,17 @@ public record MatchInput(
         BigDecimal budget,
 
         /** Month of {@code Lead.travelDate}, 1–12. */
-        Integer travelMonth
+        Integer travelMonth,
+
+        /**
+         * Services the customer asked for — {@code Lead.services} normalised, or a quotation's
+         * {@code allowedServices} snapshot. Never null; <b>empty means "not stated"</b> and makes the
+         * dimension inapplicable rather than scoring every package zero.
+         */
+        List<String> services
 ) {
     public MatchInput {
         cities = cities == null ? List.of() : List.copyOf(cities);
+        services = services == null ? List.of() : List.copyOf(services);
     }
 }

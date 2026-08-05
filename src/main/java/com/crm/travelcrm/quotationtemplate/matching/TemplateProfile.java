@@ -23,10 +23,20 @@ public record TemplateProfile(
         Integer nights,
         Integer hotelTier,
         BigDecimal basePrice,
-        Set<Integer> seasonMonths
+        Set<Integer> seasonMonths,
+
+        /** Section keys this package covers; <b>empty means "not stated"</b>, not "covers nothing". */
+        List<String> services,
+
+        /**
+         * How many quotations have been cloned from this template. Breaks EXACT percentage ties only
+         * — it can never lift a worse match above a better one.
+         */
+        int timesApplied
 ) {
     public TemplateProfile {
         cities = cities == null ? List.of() : List.copyOf(cities);
         seasonMonths = seasonMonths == null ? Set.of() : Set.copyOf(seasonMonths);
+        services = services == null ? List.of() : List.copyOf(services);
     }
 }

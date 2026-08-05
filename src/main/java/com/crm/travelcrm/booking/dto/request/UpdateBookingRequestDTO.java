@@ -48,10 +48,31 @@ public class UpdateBookingRequestDTO {
     @Digits(integer = 10, fraction = 2, message = "Invalid amount format")
     private BigDecimal customerAmount;
 
-    @DecimalMin(value = "0.0", inclusive = false,
-            message = "Vendor cost must be greater than 0")
+    // Inclusive of zero, matching the create contract: an agent who booked no supplier through the
+    // booking itself — because the spend is itemised in the expense ledger — must be able to say so.
+    // The exclusive minimum made clearing a mistyped figure impossible; the only way down was 0.01.
+    @DecimalMin(value = "0.0", message = "Vendor cost cannot be negative")
     @Digits(integer = 10, fraction = 2, message = "Invalid amount format")
     private BigDecimal vendorCost;
+
+    /**
+     * Re-point the booking at a different supplier, by {@code publicId}. Null leaves it unchanged,
+     * per this DTO's patch semantics — so a client that never sends the field cannot accidentally
+     * unlink the vendor. Resolved tenant-scoped; an unknown id is a 404.
+     */
+    private java.util.UUID vendorPublicId;
+
+    /**
+     * Explicitly UNLINK the supplier. Exists because {@link #vendorPublicId} cannot express it: under
+     * this DTO's patch contract null means "leave alone", so an emptied vendor dropdown would
+     * otherwise be indistinguishable from a request that simply never mentioned the field — and the
+     * booking would silently keep a supplier the user had removed.
+     *
+     * <p>Wins over {@link #vendorPublicId} when both are sent, so a confused client unlinks rather
+     * than re-links. Pair it with {@code vendorCost = 0}: a booking with no supplier owes no
+     * supplier money, and the server does not infer that for you.
+     */
+    private Boolean clearVendor;
 
     /**
      * Reclassify the booking as an overseas tour package (or back). Null leaves it unchanged, per

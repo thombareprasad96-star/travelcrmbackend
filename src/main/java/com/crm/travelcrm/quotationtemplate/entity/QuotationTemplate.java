@@ -71,6 +71,35 @@ public class QuotationTemplate extends BaseTenantEntity {
     @Column(name = "cancellation_policy_public_id")
     private java.util.UUID cancellationPolicyPublicId;
 
+    // ── Provenance & usage ────────────────────────────────────────────────────
+
+    /**
+     * The {@code Quotation.publicId} this template was captured from, when it was created through
+     * "Save as Template" rather than authored by hand. Logical reference with no DB FK, like
+     * {@code Booking.leadId}: if that quotation is later deleted the template stands on its own and
+     * this simply stops resolving.
+     */
+    @Column(name = "source_quotation_public_id")
+    private java.util.UUID sourceQuotationPublicId;
+
+    /**
+     * How many quotations have been cloned from this template. Breaks EXACT ties in the ranking — a
+     * package the agency has actually sold beats an equally-scoring one nobody has used. It can only
+     * reorder templates on the same percentage, never lift a worse match above a better one.
+     */
+    @Column(name = "times_applied", nullable = false)
+    @Builder.Default
+    private Integer timesApplied = 0;
+
+    @Column(name = "last_applied_at")
+    private java.time.LocalDateTime lastAppliedAt;
+
+    /** One clone of this template. Kept here so the counter and the timestamp can never drift. */
+    public void recordApplied(java.time.LocalDateTime at) {
+        this.timesApplied = (this.timesApplied == null ? 0 : this.timesApplied) + 1;
+        this.lastAppliedAt = at;
+    }
+
     // ── Scoring dimensions ────────────────────────────────────────────────────
 
     /** Total nights the package runs for. Derived from the itinerary when the client omits it. */
@@ -119,6 +148,27 @@ public class QuotationTemplate extends BaseTenantEntity {
     @BatchSize(size = 50)
     @Builder.Default
     private List<QuotationTemplateHotel> hotels = new ArrayList<>();
+
+    /**
+     * The {@code QuotationSection} keys this package covers — the sixth scoring dimension.
+     *
+     * <p>Stored as free strings rather than an enum, and matched case-insensitively, because the
+     * lead-side vocabulary is deliberately open: {@code visa}/{@code insurance}/{@code passport} are
+     * real lead services that map to no section, and an integration may invent more. Same shape as
+     * {@code Quotation.allowedServices}, which is where a saved-from-quotation template gets its
+     * value.
+     *
+     * <p><b>Empty means "not stated", not "covers nothing"</b> — the scorer marks the dimension
+     * inapplicable and redistributes its weight, so every template authored before this column
+     * existed keeps exactly the score it had.
+     */
+    @ElementCollection(fetch = FetchType.LAZY)
+    @CollectionTable(name = "quotation_template_services", joinColumns = @JoinColumn(name = "template_id"))
+    @Column(name = "service", length = 50)
+    @OrderColumn(name = "sort_order")
+    @BatchSize(size = 50)
+    @Builder.Default
+    private List<String> services = new ArrayList<>();
 
     @ElementCollection(fetch = FetchType.LAZY)
     @CollectionTable(name = "quotation_template_inclusions", joinColumns = @JoinColumn(name = "template_id"))
