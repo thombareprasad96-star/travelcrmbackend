@@ -88,6 +88,13 @@ public class LeadController {
      * the enum's {@code displayName} ("New Lead"), and Spring's default enum binding matches the
      * CONSTANT name ({@code NEW_LEAD}) and would 400 on every real request. The service resolves
      * them through {@code fromValue}, which accepts either spelling.
+     *
+     * <p>{@code activeOnly} and {@code followUpDueBy} are the two WORK-QUEUE filters and are not
+     * stages — "Active" is the complement of the terminal stages, "Follow-ups" is a date predicate.
+     * They exist so the list can express exactly what the Active and Follow-ups dashboard cards
+     * count; the client used to send {@code stage=Active}, which {@code LeadStage.fromValue}
+     * rejects. {@code size} is clamped and {@code sortBy} whitelisted in the service
+     * ({@code PageSupport}), so neither can reach Hibernate unvalidated.
      */
     @GetMapping
     public ResponseEntity<PagedApiResponse<LeadResponseDto>> getAllLeads(
@@ -99,10 +106,13 @@ public class LeadController {
             @RequestParam(required = false)           String stage,
             @RequestParam(required = false)           String leadType,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fromDate,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate) {
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate,
+            @RequestParam(required = false)           Boolean activeOnly,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate followUpDueBy) {
 
         Page<LeadResponseDto> leadPage = leadService.getAllLeads(
-                page, size, sortBy, sortDir, search, stage, leadType, fromDate, toDate);
+                page, size, sortBy, sortDir, search, stage, leadType, fromDate, toDate,
+                activeOnly, followUpDueBy);
 
         return ResponseEntity.ok(
                 PagedApiResponse.of(

@@ -47,6 +47,18 @@ public class LeadResponseDto {
     private LocalDate travelDate;
     private BigDecimal budget;
     private Long logCount;
+
+    /**
+     * When this lead was last touched — the newest non-deleted {@code LeadLog.createdAt}.
+     *
+     * <p>Null means no activity has ever been logged, which is NOT the same as never contacted:
+     * {@link #firstContactedAt} is the server's own stamp and an agent can move the stage without
+     * writing a log. Read the two together.
+     *
+     * <p>Exists so the list can tell a lead that is going cold from one worked this morning.
+     * {@code logCount} answered "has anyone ever spoken to them"; it could never answer "when".
+     */
+    private LocalDateTime lastActivityAt;
     private String departCountry;
     private String departCity;
 

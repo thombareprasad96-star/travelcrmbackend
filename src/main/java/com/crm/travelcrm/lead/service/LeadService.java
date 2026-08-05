@@ -37,10 +37,17 @@ public interface LeadService {
      * enums' wire {@code displayName} ("New Lead", "Fresh"), not the constant name; {@code fromDate}
      * /{@code toDate} bound {@code createdAt} inclusively. Any null/blank filter is simply not
      * applied, so this is a superset of {@link #getAllLeads(int, int, String, String)}.
+     *
+     * <p>{@code activeOnly} and {@code followUpDueBy} are the two WORK-QUEUE filters, and they are
+     * not stages: "Active" is the complement of the terminal stages and "Follow-ups" is a date
+     * predicate. They exist so the list can express exactly what the Active and Follow-ups dashboard
+     * cards count — before them the client sent {@code stage=Active}, which
+     * {@code LeadStage.fromValue} rejects with a 400.
      */
     Page<LeadResponseDto> getAllLeads(int page, int size, String sortBy, String sortDir,
                                       String search, String stage, String leadType,
-                                      LocalDate fromDate, LocalDate toDate);
+                                      LocalDate fromDate, LocalDate toDate,
+                                      Boolean activeOnly, LocalDate followUpDueBy);
     LeadResponseDto getLeadById(UUID publicId);                                // ← UUID
     LeadResponseDto searchLead(String keyword);
     LeadResponseDto updateLead(UUID publicId, CreateLeadRequestDto request);  // ← UUID

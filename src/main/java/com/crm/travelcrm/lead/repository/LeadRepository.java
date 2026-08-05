@@ -559,8 +559,19 @@ public interface LeadRepository extends JpaRepository<Lead, Long>, JpaSpecificat
     List<UserLeadStageCountDto> countLeadsByStagePerUserForUsers(@Param("tenantId") Long tenantId,
                                                                  @Param("userIds") Collection<Long> userIds);
 
+    /**
+     * Per-lead activity roll-up for the list: {@code [leadId, logCount, lastActivityAt]}.
+     *
+     * <p>The {@code MAX(createdAt)} rides on the GROUP BY that was already running for the count, so
+     * "when did we last touch this lead" costs nothing extra. It is what the leads list needs to say
+     * a lead is going cold — until now the client could only tell whether a lead had EVER been
+     * contacted ({@code firstContactedAt}, {@code logCount > 0}), never when, so a lead last spoken
+     * to nine days ago looked identical to one called this morning.
+     *
+     * <p>Deleted logs are excluded, so removing the only log correctly takes the timestamp with it.
+     */
     @Query("""
-            SELECT l.lead.id, COUNT(l)
+            SELECT l.lead.id, COUNT(l), MAX(l.createdAt)
             FROM LeadLog l
             WHERE l.lead.id IN :leadIds
               AND l.deletedAt IS NULL

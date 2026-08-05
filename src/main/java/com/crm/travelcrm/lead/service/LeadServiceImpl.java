@@ -36,6 +36,7 @@ import com.crm.travelcrm.lead.enums.LeadStageGroups;
 import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.common.exception.RestoreAvailableException;
+import com.crm.travelcrm.common.util.PageSupport;
 import com.crm.travelcrm.lead.exception.DuplicateLeadException;
 import com.crm.travelcrm.lead.exception.LeadQuotaExceededException;
 import com.crm.travelcrm.lead.exception.NoEligibleAssigneeException;
@@ -69,6 +70,7 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -406,22 +408,38 @@ public class LeadServiceImpl implements LeadService {
     @Transactional(readOnly = true)
     public Page<LeadResponseDto> getAllLeads(int page, int size,
                                              String sortBy, String sortDir) {
-        return getAllLeads(page, size, sortBy, sortDir, null, null, null, null, null);
+        return getAllLeads(page, size, sortBy, sortDir, null, null, null, null, null, null, null);
     }
+
+    /**
+     * Columns a client may sort the leads list by.
+     *
+     * <p>A whitelist, not a convenience: {@code sortBy} arrives as a free-form request string and
+     * used to go straight into {@code Sort.by(...)}, where an unknown property is not rejected at
+     * bind time but blows up inside Hibernate as a {@code PropertyReferenceException} — a 500, not
+     * the 400 it is. Anything outside this set falls back to {@code createdAt}
+     * ({@link PageSupport#buildSort}).
+     */
+    private static final Set<String> LEAD_SORT_WHITELIST = Set.of(
+            "createdAt", "updatedAt", "customerName", "leadCode",
+            "travelDate", "followUpDate", "budget", "leadStage", "leadType");
 
     @Override
     @Transactional(readOnly = true)
     public Page<LeadResponseDto> getAllLeads(int page, int size,
                                              String sortBy, String sortDir,
                                              String search, String stage, String leadType,
-                                             LocalDate fromDate, LocalDate toDate) {
+                                             LocalDate fromDate, LocalDate toDate,
+                                             Boolean activeOnly, LocalDate followUpDueBy) {
         Long tenantId = currentTenantId();
 
-        Sort sort = sortDir.equalsIgnoreCase("asc")
-                ? Sort.by(sortBy).ascending()
-                : Sort.by(sortBy).descending();
-
-        Pageable pageable = PageRequest.of(page, size, sort);
+        // Whitelisted property, clamped size, and a stable `id DESC` tiebreaker — all three from
+        // PageSupport, the same helper every other paged list uses. The tiebreaker is the one that
+        // matters now that the client actually pages: ordering on a non-unique column alone lets
+        // Postgres arrange tied rows differently per page, so a lead can appear on two pages while
+        // another never appears at all — which reads to the user as a deleted record.
+        Pageable pageable = PageSupport.pageRequest(page, size,
+                PageSupport.buildSort(sortBy, sortDir, LEAD_SORT_WHITELIST));
 
         // Tenant + soft-delete, then row-level scope (own / team / all) for this user.
         Set<Long> visibleIds = scopeResolver.visibleUserIds(currentUser(), "LEAD_READ");
@@ -435,7 +453,7 @@ public class LeadServiceImpl implements LeadService {
                 LeadSpecification.filter(tenantId, visibleIds, search,
                         LeadSpecification.parseStage(stage),
                         LeadSpecification.parseType(leadType),
-                        fromDate, toDate),
+                        fromDate, toDate, activeOnly, followUpDueBy),
                 pageable);
 
         List<Lead> leads = leadPage.getContent();
@@ -610,7 +628,7 @@ public class LeadServiceImpl implements LeadService {
                 .referencePublicId(updated.getPublicId())
                 .channels(Set.of(DeliveryChannel.IN_APP))
                 .build());
-        return leadMapper.toResponse(updated);
+        return toEnrichedResponse(updated);
     }
 
     // ── Delete (soft) ─────────────────────────────────────────────────────────
@@ -698,8 +716,13 @@ public class LeadServiceImpl implements LeadService {
     }
 
     /**
-     * Batch-populate logCount on lead DTOs using one grouped count query.
-     * Counts are matched through the public id exposed on the DTO.
+     * Batch-populate {@code logCount} AND {@code lastActivityAt} on lead DTOs from one grouped
+     * query. Values are matched through the public id exposed on the DTO.
+     *
+     * <p>Both come from the same {@code GROUP BY}, so the timestamp is free — see
+     * {@code LeadRepository.countLogsByLeadIds}. A lead with no logs gets count 0 and a NULL
+     * timestamp; null is deliberate and must not be coerced to "now" or to createdAt, because the
+     * list renders "no activity yet" and "last touched today" as two different verdicts.
      */
     private void enrichWithLogCounts(List<LeadResponseDto> dtos, List<Lead> leads) {
         if (dtos.isEmpty()) return;
@@ -709,22 +732,53 @@ public class LeadServiceImpl implements LeadService {
                 .filter(Objects::nonNull)
                 .toList();
 
-        Map<Long, Long> countsByLeadId = leadIds.isEmpty()
-                ? Map.of()
-                : leadRepository.countLogsByLeadIds(leadIds).stream()
-                .collect(Collectors.toMap(
-                        row -> ((Number) row[0]).longValue(),
-                        row -> ((Number) row[1]).longValue()));
+        Map<Long, Long> countsByLeadId = new HashMap<>();
+        Map<Long, LocalDateTime> lastActivityByLeadId = new HashMap<>();
+        if (!leadIds.isEmpty()) {
+            for (Object[] row : leadRepository.countLogsByLeadIds(leadIds)) {
+                Long leadId = ((Number) row[0]).longValue();
+                countsByLeadId.put(leadId, ((Number) row[1]).longValue());
+                // row[2] is MAX(createdAt); null only if every log for this lead had a null stamp.
+                if (row[2] != null) {
+                    lastActivityByLeadId.put(leadId, (LocalDateTime) row[2]);
+                }
+            }
+        }
 
-        Map<UUID, Long> countsByPublicId = leads.stream()
-                .filter(lead -> lead.getPublicId() != null)
-                .collect(Collectors.toMap(
-                        Lead::getPublicId,
-                        lead -> countsByLeadId.getOrDefault(lead.getId(), 0L),
-                        (first, second) -> first));
+        Map<UUID, Long> countsByPublicId = new HashMap<>();
+        Map<UUID, LocalDateTime> lastActivityByPublicId = new HashMap<>();
+        for (Lead lead : leads) {
+            UUID publicId = lead.getPublicId();
+            if (publicId == null) continue;
+            // putIfAbsent mirrors the old toMap merge function: first wins on a duplicate id.
+            countsByPublicId.putIfAbsent(publicId, countsByLeadId.getOrDefault(lead.getId(), 0L));
+            LocalDateTime last = lastActivityByLeadId.get(lead.getId());
+            if (last != null) lastActivityByPublicId.putIfAbsent(publicId, last);
+        }
 
-        dtos.forEach(dto -> dto.setLogCount(
-                countsByPublicId.getOrDefault(dto.getId(), 0L)));
+        dtos.forEach(dto -> {
+            dto.setLogCount(countsByPublicId.getOrDefault(dto.getId(), 0L));
+            dto.setLastActivityAt(lastActivityByPublicId.get(dto.getId()));
+        });
+    }
+
+    /**
+     * Map ONE lead to the same shape the list and detail reads return — {@code latestQuotation} and
+     * {@code logCount} included.
+     *
+     * <p>Every mutation used to return a bare {@code leadMapper.toResponse(...)}, which leaves both
+     * fields null because the mapper does not populate them; only the read paths called the two
+     * enrichers. A client that patches its row from the mutation response therefore watched the
+     * Quote Value column and the log-count badge go blank immediately after a successful save, and
+     * had to refetch the whole page to get them back. Both enrichers are batch queries over a
+     * one-element list here, so this costs two queries, not N.
+     */
+    private LeadResponseDto toEnrichedResponse(Lead lead) {
+        LeadResponseDto dto = leadMapper.toResponse(lead);
+        List<LeadResponseDto> one = List.of(dto);
+        enrichWithLatestQuotation(one);
+        enrichWithLogCounts(one, List.of(lead));
+        return dto;
     }
 
     @Override
@@ -738,8 +792,9 @@ public class LeadServiceImpl implements LeadService {
         LeadStage oldStage = lead.getLeadStage();
         if (oldStage == newStage) {
             // No-op move (dropped back into the same column) — skip the write
-            // and the notification entirely.
-            return leadMapper.toResponse(lead);
+            // and the notification entirely. Still enriched: the caller cannot tell a no-op from a
+            // real move, so the two must answer with the same shape.
+            return toEnrichedResponse(lead);
         }
 
         // CONVERTED is owned by the booking lifecycle — reject drag/edit crossings.
@@ -763,7 +818,7 @@ public class LeadServiceImpl implements LeadService {
             log.info("Lead stage changed with first-contact stamp | publicId: {} | {} -> {} | tenantId: {}",
                     publicId, oldStage, newStage, tenantId);
             publishStageChangedNotification(contacted, oldStage, newStage, tenantId);
-            return leadMapper.toResponse(contacted);
+            return toEnrichedResponse(contacted);
         }
 
         lead.setLeadStage(newStage);
@@ -773,7 +828,7 @@ public class LeadServiceImpl implements LeadService {
 
         publishStageChangedNotification(updated, oldStage, newStage, tenantId);
 
-        return leadMapper.toResponse(updated);
+        return toEnrichedResponse(updated);
     }
 
     /**

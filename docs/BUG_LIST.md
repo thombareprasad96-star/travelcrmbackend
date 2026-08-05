@@ -1,6 +1,6 @@
 # Lead Module — Bug List
 
-**Audit date:** 2026-08-04
+**Audit dates:** 2026-08-04 (LEAD-01 … LEAD-31) · 2026-08-05, second pass (LEAD-32 … LEAD-62)
 **Scope:** the Lead module only — backend `lead/` (87 sources: core, claim, assignment, alert, SLA, attribution, logs, ingest), the `leadsource/` gateway path that creates leads, and every frontend screen that reads or writes lead data (`features/leads/` plus the lead touchpoints in app chrome, dashboard, reports, settings and the lead→quotation/booking/reminder hand-offs).
 **Repos:** backend `D:\CRM PROJECT\travelcrmbackend`; frontend `D:\CRM PROJECT\travelcrmfe\travelcrmfrontend` (cited below as `[FE]`).
 
@@ -13,6 +13,16 @@
 - Findings are marked `Confirmed` where the failure follows directly from the cited code, and `Plausible` where the mechanism is real but the impact is bounded or depends on configuration.
 - **This is a static audit. No test suite was run and nothing was reproduced against a live database.** Existing lead tests were read to avoid reporting covered behaviour — note there is no `LeadServiceImplTest` anywhere under `src/test/java/com/crm/travelcrm/lead/`, so the core create/update paths have no unit coverage at all.
 - Design decisions recorded as deliberate in the code are **not** reported as bugs: the tenant-wide claim-window widening (`LeadAccessGuard.java:53-98`), the unpaged Kanban board fetch, enum `displayName` wire values, and name-based city resolution.
+
+### Second pass — method (2026-08-05)
+
+- Four parallel readers re-covered the module on a hard slice — backend lead core; backend satellites (`alert/ claim/ assignment/ bulkimport/ ingest/ attribution/` plus the whole `leadsource/` package); the frontend feature plus its router and access wiring; and a docs-conformance reader whose sole job was to check every factual claim in the seven lead docs against the code. **184 files were read** and **67 candidate findings** produced.
+- A single adversarial verifier then re-opened every cited line and tried to **refute** each finding, defaulting to rejection when uncertain. **4 were rejected outright**, roughly a third were re-graded downward, and duplicates across the four readers were merged — leaving **44 confirmed**.
+- Of those 44, **13 were already logged** as LEAD-01 … LEAD-31 and are not repeated; the **31 new** findings are LEAD-32 … LEAD-62.
+- Two rejections are worth recording because they change how this file should be read:
+  1. *"`useLeadAlerts.isMine` falls back to a `userName` key almost nothing writes"* — **false**. `[FE] AdminLogin.jsx:439` writes it on every staff login. The reader took this from `CLAUDE.md`'s localStorage inventory, which is stale and additionally cites a line number that does not exist. **`CLAUDE.md` manufactured a finding that does not exist** — which is itself now logged as LEAD-40.
+  2. *"Editing a lead to `Converted` bypasses the booking flow"* — **half false**. `updateLead` 409s via `assertConversionStageTransitionAllowed`; only the **create** path is open. Logged with corrected scope as LEAD-35.
+- Same limits as the first pass: static reading only, no test suite run, nothing reproduced against a live database. There is still no `LeadServiceImplTest`.
 
 ## Severity → priority
 
@@ -64,6 +74,42 @@
 | LEAD-29 | P4 | Dashboard | Four hero cards render hardcoded trend percentages next to a "Live Data" badge. |
 | LEAD-30 | P4 | Logs enum drift | The lead-logs stage filter offers a phantom "Ready to Book" stage and omits the real "Reopened". |
 | ~~LEAD-31~~ | ✅ Fixed | Leads list | ~~The Import button opens a file picker whose `<input type="file">` has no `onChange`.~~ Bulk CSV/Excel import shipped — see below. |
+
+### Second pass — 2026-08-05
+
+| ID | Priority | Area | Finding |
+|---|---|---|---|
+| LEAD-32 | P2 | Leads list | The list fetches a filtered server page into `leads`/`meta` and renders a different, unfiltered 200-row array — so stage edits snap back, deletes and imports don't show, and the truncation notice is unreachable. Supersedes the live half of LEAD-08. |
+| LEAD-33 | P3 | Lead logs | All-Lead-Logs discards the server's `total`/`totalPages` and caps at `perPage=1000`; both hero counters are page figures dressed as tenant totals. |
+| LEAD-34 | P3 | Lead form | `transformItinerary` rewrites a 0-night stop to 1 night on every save — including an inline stage change, which re-sends the whole lead. |
+| LEAD-35 | P3 | Stage rules | A lead can be **created** already `Converted` with no booking; `createLead` has no stage guard (the edit path does). |
+| LEAD-36 | P3 | Ingest | The phone-normalisation backfill uses `OFFSET` over a result set its own `UPDATE` shrinks, silently skipping half the rows and logging them as un-canonicalisable. |
+| LEAD-37 | P3 | Lead sources | `WebsiteFormAdapter` offers an "Allowed website addresses" setting that no code enforces. |
+| LEAD-38 | P3 | Lead list | `LeadSpecification` has no predicate for Active or Follow-ups, so those two tabs send `stage=Active` and 400. Blocks LEAD-32. |
+| LEAD-39 | P3 | Lead logs | All-Lead-Logs' breadcrumb and "Back to Leads" both navigate to `"/allleads "` — a trailing space that matches no route and renders a blank page. |
+| LEAD-40 | P3 | Docs | `CLAUDE.md` states `ddl-auto=update` and "No Flyway"; the tree boots on `validate` with V1+V2. Bites the first schema change. |
+| LEAD-41 | P3 | Docs | `BACKEND-CONTRACT-LEAD-BOOKING.md`'s correction table is itself inverted on `LeadType` — following row 1 would 400 every lead save. |
+| LEAD-42 | P3 | Docs | `LEADS-LIST-UI-REDESIGN.md`'s premise ("no server-side filtering exists") is false, and every §2 line citation is stale. |
+| LEAD-43 | P3 | Time handling | Three different clocks in one feature — `getLogStats` (no zone), `getStatsSummary` (tenant zone), `LeadAlertService` (tenant zone vs JVM-zone timestamps). Extends LEAD-12. |
+| LEAD-44 | P4 | Lead DTO | `PATCH /stage`, `PUT` and `POST /leads` return `latestQuotation` and `logCount` as null, so a row patched from the response loses both. |
+| LEAD-45 | P4 | Assignment | `EligibleUserDto.activeLeads` carries the composite workload score but both assign dropdowns render it as "N active" leads. |
+| LEAD-46 | P4 | Access wiring | Create/Edit Lead has no permission gate at route or page — the whole 30-field form is filled before the 403. |
+| LEAD-47 | P4 | Access wiring | `AllLeads`' overview fetch is the one effect not gated on `LEAD_READ`, so a 403 toast lands on top of `AccessDenied`. |
+| LEAD-48 | P4 | Leads list | The delete confirmation and type-change toast print the raw lead UUID instead of the lead code. |
+| LEAD-49 | P4 | Dead code | `pages/EditLead.jsx` (1,275 lines) and three components are entirely dead — the Edit route resolves to `CreateLead`. |
+| LEAD-50 | P4 | Dead code | `ConvertToBookingModal` (474 lines) is imported by `AllLeads` and never rendered. |
+| LEAD-51 | P4 | Dead code | `QuotationsModal`'s preview-design picker is unreachable, so `webViewStyle` is permanently null. |
+| LEAD-52 | P4 | Dead code | Six `leadService` methods have zero callers, including `getLeadLogStats` — the endpoint that would fix LEAD-33. |
+| LEAD-53 | P4 | Dead code | Five dead members in the lead module, including a second `ApiResponse` envelope that contradicts the house rule. |
+| LEAD-54 | P4 | Lead entity | `Lead.origin`, `sourceIntegrationId` and `customerLinkedAt` are written on every create and read by nothing. |
+| LEAD-55 | P4 | Lead logs | `/logs/summary` silently widens on an unparseable `stage` or `userId`; `/api/leads` 400s on the same input. |
+| LEAD-56 | P4 | Bulk import | CSV row numbers count records, not lines, so the report points at the wrong row when the file has blank lines or multi-line cells. |
+| LEAD-57 | P4 | Bulk import | The assignee lookup does not filter `isActive` although the error message says "active" — a READY preview row then fails at commit. |
+| LEAD-58 | P4 | Authorization | `LeadMetaController` has no class-level `@PreAuthorize`, so a method added there would fail open. |
+| LEAD-59 | P4 | Leads list | Row selection is fully wired but has no bulk action — the checkboxes only feed a counter. |
+| LEAD-60 | P4 | Routing | `/WhatsAppPanel` is routed with no lead: an unclosable overlay pointing at an empty `wa.me` link. |
+| LEAD-61 | P4 | Accessibility | No `AllLeads` modal closes on Escape, none has a dialog role, and no close button has an accessible name. |
+| LEAD-62 | P4 | Docs / comments | Board comments cite seven columns and a deleted `LeadKanban.jsx`; `LeadStage` has eight values. `LeadSource` cites a removed `LeadType` constant. |
 
 ---
 
@@ -276,6 +322,46 @@ An agency has 400 leads. An agent searches the phone number of a customer whose 
 ### Recommended fix
 
 Move the list server-side: pass `pagination.pageIndex`/`pageSize` into `getAllLeads`, set `manualPagination: true`, and drive `totalElements`/`totalPages` from the `PagedApiResponse` pagination meta. Push search, the date window and the stage/type tab to the backend as query params (`/leads/logs/summary` is the existing filtered-list pattern), and source the stat cards from a server aggregate — `/leads/stats/by-stage` already exists and is unconsumed. Until then, at minimum show "showing the newest 100 of N" when the returned count equals the requested size. Same root cause as LEAD-22.
+
+> **Superseded in part.** Most of this fix has since been *written* — server-side filtering shipped on the backend and `leadService.listLeads` + `fetchLeads()` were added on the frontend. It is not *wired*: the table still renders a different array. See **LEAD-32**, which replaces this entry as the live description of the defect.
+
+---
+
+## LEAD-32 — The leads list fetches a filtered server page and then renders a different, unfiltered array
+
+**Priority:** P2 · **Severity:** High · **Confidence:** Confirmed · **Supersedes the live half of LEAD-08**
+
+### Evidence
+
+- `[FE] src/features/leads/pages/AllLeads.jsx:1642-1670` — `fetchLeads()` calls `leadService.listLeads({page, size, sortBy, sortDir, q: debouncedSearch, ...serverParams})`, guards against out-of-order responses with `reqId`, and writes the result: `setLeads(body.data)` (`:1656`), `setMeta(body.pagination)` (`:1657`).
+- `[FE] AllLeads.jsx:1846` — `const safeLeads = useMemo(() => (Array.isArray(overviewLeads) ? overviewLeads : []), [overviewLeads]);` — **the table's data source is `overviewLeads`, not `leads`.**
+- `[FE] AllLeads.jsx:1715-1727` — `overviewLeads` is a one-shot `leadService.getAllLeads(0, 200)` in a `useEffect` with an empty dependency array: no filters, no search, no paging, and it never refetches.
+- `[FE] AllLeads.jsx:1987-2040` → `:2055` → `:2066` — `filteredLeads` re-applies search, the date window and the tab **client-side** over `safeLeads`, then TanStack re-paginates it with `getPaginationRowModel()` (`:2063`), and `pageRows` renders that.
+- `meta` is written at `:1657` and **read nowhere** — the only other occurrence is the `useState` declaration at `:1559`.
+- `setTotalCount` is called at exactly one site, `:1820`, and it is a *decrement* inside `handleDelete`. `totalCount` is therefore permanently `null`, so `listTruncated` (`:1876`) is always `false` and the truncation notice at `:2270-2275` — the honesty fix LEAD-08 asked for — **can never render**. The header badge (`:2139`) and the "All" tab count (`:2325`) silently fall through to `safeLeads.length`, i.e. the 200 cap.
+- The four optimistic patches all target the array nothing renders: `openLeadWeblinkWithStyle` (`:1744`), `handleStageChange` (`:1777`), `handleTypeChange` (`:1804`), `handleDelete` (`:1818`), plus `handleLogAdded` (`:1837`). All call `setLeads`.
+- `ImportLeadsModal onImported={() => { fetchLeads(); fetchStats(); }}` (`:2103`) refetches `leads` — which is not on screen.
+- Backend confirms the server side is complete: `LeadController.java:92-102` declares `search`, `stage`, `leadType`, `fromDate`, `toDate`; `LeadSpecification.java:43-94` implements each predicate in SQL, AND-ed with the tenant predicate and the row scope; `leadService.js:282-286` maps `q` → `search` and strips blanks.
+
+### Failure scenario
+
+Three distinct user-visible failures, all from the same line:
+
+1. **Stage changes appear to fail.** An agent picks "Qualified" in the row's Stage dropdown. The PUT succeeds, `setLeads` patches `leads`, and the `<select>` — which is controlled on `lead.leadStage` read from `overviewLeads` — re-renders with the **old** stage. The agent sees the value snap back and changes it again. Identical for the Type dropdown.
+2. **Deleted leads stay on screen, imported leads never appear.** `handleDelete` filters `leads`; the row is rendered from `overviewLeads`, so it remains until a hard reload. After a successful bulk import, `fetchLeads()` runs and the new leads are invisible.
+3. **Filtering is still truncated, and the notice that was written to admit it is unreachable.** Two full list requests fire on mount; the useful one is discarded. Search and the tabs narrow 200 in-memory rows, and past 200 leads the behaviour is exactly LEAD-08 with a larger number — except `listTruncated` can never be true, so nothing says so.
+
+### Recommended fix
+
+**Do not simply swap `safeLeads` to `leads` at `:1846`** — that makes it worse: the page would fetch server page N and then client-filter and re-paginate *within* it, so page 2 of a filtered result renders empty and the counter reports the page size. Split the two datasets explicitly:
+
+1. Feed the table `leads` directly; delete the `filteredLeads` predicates that duplicate the server params already sent at `:1626-1634` and `:1651`.
+2. Remove `getPaginationRowModel()` (`:2063`) — with sorting and paging both server-side, TanStack is doing nothing on this page except adding the `row.original` footgun already commented at `:2414`. Render `leads` and key on `lead.id`.
+3. Drive `CommonPagination` from `meta.totalElements` / `meta.totalPages`, and set `totalCount` from `body.pagination?.totalElements` inside `fetchLeads` (`:1657`).
+4. Keep `overviewLeads` **only** as the pre-summary fallback for the cards, or delete it once `/leads/stats/summary` is trusted — and gate it on `LEAD_READ` either way (**LEAD-47**).
+5. Make the five local patches `setLeads`, and prefer patching from the mutation response once **LEAD-44** completes that DTO.
+
+Two prerequisites, or this ships broken: **LEAD-38** (the `Active` and `Follow-ups` tabs have no server-side predicate and currently send `stage=Active`, which `LeadStage.fromValue` throws on) and **LEAD-16** (`sortBy` has no whitelist and the page size is unclamped).
 
 ---
 
@@ -598,6 +684,245 @@ Read the real total from `pagination.totalElements`, or page the fallback to com
 
 ---
 
+## LEAD-33 — All-Lead-Logs throws away the server's total and caps the dataset at 1000
+
+**Priority:** P3 · **Severity:** Medium · **Confidence:** Confirmed
+
+### Evidence
+
+- `[FE] src/features/leads/pages/AllLeadLogs.jsx:192` — `leadService.getLeadLogSummary({ page: 1, perPage: 1000 })`.
+- `[FE] AllLeadLogs.jsx:194-197` — `const body = res.data?.data ?? res.data;` then only `body.leads` is read into state. `body.total`, `body.totalPages`, `body.page` and `body.perPage` are never touched.
+- `lead/service/LeadLogServiceImpl.java:151-158` — the server builds `.total(total).totalPages(totalPages)` on every response, and applies **no** cap to `perPage`, so the 1000 is the client's own ceiling.
+- `[FE] AllLeadLogs.jsx:235` — `const totalLogs = data.reduce((s, l) => s + l.logCount, 0);` and `:317-318` — `<HeroCard value={data.length} label="Total Leads"/>`. Both hero figures are computed over the truncated array.
+- `[FE] AllLeadLogs.jsx:210-222` — search and the stage/user filters are client-side over the same array.
+- `GET /api/leads/logs/stats` exists for exactly these two figures (`LeadController.java:196`) and has zero callers (**LEAD-52**).
+
+### Failure scenario
+
+A tenant past 1,000 leads-with-logs opens All-Lead-Logs. "Total Leads" and "Total Logs" describe the first 1,000 rows while reading as tenant totals, with no truncation notice. A lead outside the window is unfindable on this screen — the search box narrows the same truncated array — so an agent looking up an older customer's call history concludes none was recorded. The correct total is already in the payload and is discarded.
+
+### Recommended fix
+
+Read `body.total` into state and render it on the Total Leads card; call the already-written `leadService.getLeadLogStats()` for the hero figures. Then either page server-side using `body.totalPages`, or render a truncation notice while `body.total > data.length`. Same family as LEAD-08 / LEAD-32 / LEAD-22.
+
+---
+
+## LEAD-34 — `transformItinerary` silently rewrites a 0-night stop to 1 night on every save
+
+**Priority:** P3 · **Severity:** Medium · **Confidence:** Confirmed
+
+### Evidence
+
+- `[FE] src/features/leads/api/leadService.js:173-175` — `// A row that exists is at least one night. The Nights input allows 0 and the backend's @Min(1) rejected it, taking the whole lead down with it.` followed by `nights: Math.max(1, Number(nights) || 0),`.
+- `[FE] src/features/leads/pages/CreateLead.jsx:1721` — the Nights input is `min={0}`, so the form genuinely offers the value the transformer refuses to transmit.
+- `[FE] src/features/leads/pages/AllLeads.jsx:1770-1775` and `:1797-1802` — `handleStageChange` and `handleTypeChange` pass `leadToUpdate.itinerary` back through `leadService.updateLead`, i.e. through the same transformer.
+
+### Failure scenario
+
+A clerk records a transit stop as 0 nights. It saves as 1N, and the row's total-nights figure and the form's day count are both one too high. Worse, it happens with no edit at all: changing a lead's stage from the AllLeads dropdown re-sends the whole lead, so a lead that was *correctly* stored with a 0-night leg has its stored itinerary silently rewritten the first time anyone touches its stage. The coercion was added to stop a `@Min(1)` 400 from taking the whole save down — it fixed the crash by falsifying the data.
+
+### Recommended fix
+
+Make the form agree with the wire contract rather than papering over it: set `min={1}` on the Nights input (`CreateLead.jsx:1721`) and on `blankRow()`, and surface a field-level validation error for 0. If a 0-night leg is genuinely meaningful, relax the backend `@Min(1)` instead — but do not keep a transformer that changes stored values behind the user's back. Related: the stage-change path should be a `PATCH /{publicId}/stage` (LEAD-03), which would stop sending the itinerary at all.
+
+---
+
+## LEAD-35 — A lead can be *created* already Converted, with no booking behind it
+
+**Priority:** P3 · **Severity:** Medium · **Confidence:** Confirmed
+
+### Evidence
+
+- `[FE] src/features/leads/pages/CreateLead.jsx:836-839` — `const LEAD_STAGES = ["New Lead", "Contacted", "Follow Up", "Qualified", "Proposal Sent", "Converted", "Reopened", "Lost"];`, rendered as a plain `<select>` at `:1796-1798`.
+- `[FE] src/features/leads/pages/AllLeads.jsx:67-70` states the opposite rule for the same field and excludes Converted: *"conversion runs through the Convert-to-booking flow, not a manual pick"*.
+- `lead/mapper/LeadMapper.java:74` — `createLead`'s path is `.leadStage(request.getLeadStage())` with **no** validation.
+- Contrast `lead/service/LeadServiceImpl.java:524` — `updateLead` calls `assertConversionStageTransitionAllowed` (`:809-821`), which throws a 409 on any non-`CONVERTED` → `CONVERTED` transition.
+
+**Scope correction.** An earlier reading of this claimed that *editing* a lead to Converted also works. It does not — `updateLead` 409s. The hole is **create-only**, and the backend is where it must be closed; a frontend-only fix leaves the API open.
+
+### Failure scenario
+
+A lead is created with stage Converted. `convertedBookingPublicId` is null, so `AllLeads.jsx:622` treats it as converted and renders "Booked ↗" linking to `/BookingDetails/` with an empty publicId; the Convert action disappears, so the lead can never be converted properly. `getStatsSummary`'s converted count and the conversion-rate card both include a lead that produced no revenue.
+
+### Recommended fix
+
+Backend first: reject `request.getLeadStage() == CONVERTED` in `createLead`, reusing `assertConversionStageTransitionAllowed`'s message. Frontend: drop "Converted" from `LEAD_STAGES` in `CreateLead.jsx` while still prepending the lead's real stage when it falls outside the set — the idiom already at `AllLeads.jsx:655`.
+
+---
+
+## LEAD-36 — The phone-normalisation backfill offsets over a shrinking result set and skips half the rows
+
+**Priority:** P3 · **Severity:** Medium · **Confidence:** Confirmed
+
+### Evidence
+
+- `lead/ingest/LeadPhoneNormalizationBackfill.java:87-89` — `SELECT id, phone FROM leads WHERE phone_normalized IS NULL AND phone IS NOT NULL ORDER BY id LIMIT <BATCH> OFFSET <total>`.
+- `:100` — `jdbc.batchUpdate("UPDATE leads SET phone_normalized = ? WHERE id = ?", batch)` — the UPDATE removes those rows from the very predicate the next page offsets into.
+- `:105` — `total += rows.size();` with the comment *"OFFSET advances by rows READ, not rows written"*.
+- Traced on 2,000 canonicalisable rows: batch 1 writes rows 1–500 and advances `OFFSET` to 500, so batch 2 reads what are now rows 1001–1500. Exactly 1,000 rows are left `NULL` and the loop exits.
+- `:73-75` — the boot log then reports the skipped rows as *"un-canonicalisable (phone has no recognisable form)"*, which is false and hides the defect.
+
+### Failure scenario
+
+Leads skipped by the backfill never match `findOpenLeadByPhone` (`LeadIngestService.java:153`), so a repeat WhatsApp or JustDial enquiry from an existing customer is not appended to their open lead — it is quarantined as a duplicate or opens a second lead. Mitigating: each restart processes another slice, so it converges over repeated boots; the window is finite but silent, and the log actively misdescribes it.
+
+### Recommended fix
+
+Keyset paging on the primary key: track `lastId`, query `WHERE phone_normalized IS NULL AND phone IS NOT NULL AND id > :lastId ORDER BY id LIMIT 500`, and advance `lastId` to the maximum id **read** in the batch. That is correct and still immune to the infinite loop on un-canonicalisable rows that the OFFSET was working around.
+
+---
+
+## LEAD-37 — `WebsiteFormAdapter` advertises an `allowedOrigins` restriction that nothing enforces
+
+**Priority:** P3 · **Severity:** Medium · **Confidence:** Confirmed
+
+### Evidence
+
+- `leadsource/adapter/WebsiteFormAdapter.java:126-129` — `.configFields(List.of(new ChannelCatalogEntry.ConfigField("allowedOrigins", "Allowed website addresses", false, "Comma-separated, e.g. https://yoursite.com. Leave blank to accept from anywhere.")))`.
+- A repo-wide grep for `allowedOrigins` across `src/main` returns exactly three hits: this declaration and two in `SecurityConfig.java` (`:52`, `:142`) for unrelated browser CORS.
+- Neither `LeadIngestGateway` nor `WebsiteFormAdapter.parse` ever reads the value. It is stored as connection JSON and echoed back to the settings UI only.
+
+### Failure scenario
+
+A tenant fills in "Allowed website addresses" believing they have restricted who may post to their ingest URL — the helper text says blank means "accept from anywhere", so a non-blank value must mean otherwise. It does not. A website form's ingest URL is by definition embedded in a public page, so this is precisely the case where a tenant reaches for the control. The ingest token is still required, so this is a defence-in-depth gap and a false promise rather than an open door — which is why it is P3 and not P2.
+
+### Recommended fix
+
+Enforce it or remove it. To enforce: have `LeadIngestGateway` read the connection's parsed config and, when `allowedOrigins` is non-empty, reject deliveries whose `Origin`/`Referer` falls outside the list, using the same rejection shape as every other ingest failure. Otherwise delete the config field so nothing false is offered.
+
+---
+
+## LEAD-38 — `GET /api/leads` cannot express the "Active" or "Follow-ups" filter at all
+
+**Priority:** P3 · **Severity:** Medium · **Confidence:** Confirmed
+
+### Evidence
+
+- `lead/specification/LeadSpecification.java:43-49` — `filter()` accepts only `tenantId, visibleUserIds, search, stage, leadType, fromDate, toDate`, and `stage` is a **single** `LeadStage`.
+- `:66-68` — the stage predicate is `cb.equal(root.get("leadStage"), stage)`. There is no NOT-IN-terminal predicate and no `followUpDate` predicate anywhere in the file.
+- `lead/controller/LeadController.java:92-102` declares the same five filter params and nothing more.
+- `[FE] src/features/leads/pages/AllLeads.jsx:1626-1634` — `serverParams` maps every non-`Fresh` tab to `p.stage = activeTab`, so the `Active`, `Follow-ups` and `Hot` tabs currently send `stage=Active`, `stage=Follow-ups`, `stage=Hot`.
+- `LeadSpecification.parseStage` (`:102-104`) has no catch, and `LeadStage.fromValue` (`LeadStage.java:39`) throws `IllegalArgumentException` on an unknown value → 400.
+
+### Failure scenario
+
+Today this is invisible only because the table renders a different array (**LEAD-32**) — the 400 is discarded along with the response. The moment LEAD-32 is fixed, the two tabs the dashboard cards click into break outright, and `Hot` breaks because it is a `leadType`, not a stage. There is no server-side representation to fall back to, so the alternative is client-side filtering over one page — which is the exact truncation `getStatsSummary` was built to eliminate, and it guarantees the card count and the list it opens will disagree.
+
+### Recommended fix
+
+Add two optional parameters to `LeadSpecification.filter()` and to the controller:
+
+- `Boolean activeOnly` → `cb.not(root.get("leadStage").in(LeadStageGroups.TERMINAL_STAGES))`
+- `LocalDate followUpDueBy` → `cb.and(cb.isNotNull(followUpDate), cb.lessThanOrEqualTo(followUpDate, date))`, combined with `activeOnly` so it matches what `countFollowUpsBefore` / `countFollowUpsInRange` already count for the card.
+
+Then change the frontend mapping to send `activeOnly=true` / `followUpDueBy=<today>` instead of `stage=Active` / `stage=Follow-ups`, and route `Hot`/`Warm`/`Cold`/`Fresh` to `leadType`. Blocking prerequisite for **LEAD-32**.
+
+---
+
+## LEAD-39 — All-Lead-Logs' breadcrumb and "Back to Leads" both navigate to `"/allleads "` with a trailing space
+
+**Priority:** P3 · **Severity:** Medium · **Confidence:** Confirmed
+
+### Evidence
+
+- `[FE] src/features/leads/pages/AllLeadLogs.jsx:288` — `<span … onClick={() => navigate("/allleads ")}>Leads</span>`.
+- `[FE] AllLeadLogs.jsx:295` — `<button onClick={() => navigate("/allleads ")}> … Back to Leads`.
+- `[FE] src/app/router.jsx:282` registers `path="allleads"` with no trailing space, and there is **no catch-all**: the tree uses `<Routes>` (`router.jsx:203`) with no `path="*"`, so an unmatched URL renders `null`.
+- `[FE] src/features/leads/pages/LeadLogs.jsx:128` and `:173` get the same navigation right, so this is a typo, not a convention.
+
+### Failure scenario
+
+Both the breadcrumb and the page's primary escape hatch dead-end at `/allleads%20`, which renders a completely blank page — not a 404, not the layout chrome, nothing. The only way out is the sidebar or the browser Back button.
+
+### Recommended fix
+
+Remove the trailing space in both literals. While in `router.jsx`, add a `path="*"` catch-all — a blank screen is currently the app's 404, which is also what makes **LEAD-20** so hard to notice.
+
+---
+
+## LEAD-40 — `CLAUDE.md` tells every reader `ddl-auto=update` and "No Flyway"; the tree boots on `validate` with two migrations
+
+**Priority:** P3 · **Severity:** Medium · **Confidence:** Confirmed
+
+### Evidence
+
+- `CLAUDE.md` — the configuration table states `spring.jpa.hibernate.ddl-auto=update | Schema is auto-managed`, and the Pitfalls section states *"No Flyway: Schema is managed by `spring.jpa.hibernate.ddl-auto=update`. Do not add Flyway migrations unless switching to `validate` for production."*
+- `src/main/resources/application.properties:64` — `spring.jpa.hibernate.ddl-auto=${JPA_DDL_AUTO:validate}`; `application-prod.properties:47` the same.
+- `application.properties:93-100` configures `spring.flyway.*`, and `src/main/resources/db/migration` holds `V1__baseline_schema.sql` and `V2__lead_code.sql`.
+- `docs/BACKEND-CONTRACT-LEAD-BOOKING.md` row 4 already records the correct position, so the two docs contradict each other.
+
+### Failure scenario
+
+This bites the first lead change that adds a column. Following `CLAUDE.md`, a developer adds a field to `Lead.java` expecting Hibernate to create it; the application then hard-fails at boot on schema validation with no obvious link back to the doc that caused it. `CLAUDE.md` is the first file anyone (or any agent) reads, and it states the inverse of the truth.
+
+### Recommended fix
+
+Correct both `CLAUDE.md` entries: `ddl-auto` defaults to `validate` (override via `JPA_DDL_AUTO`); schema changes are appended as a new PART to `V2__lead_code.sql` and applied by hand while `spring.flyway.enabled` defaults to false. While in the file, fix the localStorage key inventory: it claims only `MyProfile.jsx` writes `userName`, but `[FE] AdminLogin.jsx:439` does — that stale line manufactured a false finding during this audit and was only caught on verification.
+
+---
+
+## LEAD-41 — `BACKEND-CONTRACT-LEAD-BOOKING.md`'s correction table is itself inverted on `LeadType`
+
+**Priority:** P3 · **Severity:** Medium · **Confidence:** Confirmed
+
+### Evidence
+
+- `docs/BACKEND-CONTRACT-LEAD-BOOKING.md:21` — row 1 reads: *"It claims LeadType is already Fresh/Hot/Warm/Cold; the FE list is stale | **Truth:** LeadType.java is `FRESH_LEAD("Fresh Lead")`, `REPEAT_CUSTOMER`, `CORPORATE`, `VIP`. The FE matches the backend exactly. | **Consequence of believing it:** Changing the FE array 400s every lead save."*
+- `lead/enums/LeadType.java:32-35` at HEAD — `FRESH("Fresh"), HOT("Hot"), WARM("Warm"), COLD("Cold")`, with a javadoc describing the completed migration.
+- `[FE] src/features/leads/pages/CreateLead.jsx:835` — `const LEAD_TYPES = ["Fresh", "Hot", "Warm", "Cold"]`. Frontend and backend already agree.
+- `docs/BACKEND-CONTRACT-LEAD-BOOKING.md:55` (§3) — *"Lead drops 20 of the 41 fields the form sends"* is also complete: `DepartureMode.java` exists and `Lead.java:190-278` persists `anniversaryDate`, `followUpDate`, `departureMode`, `pickupDateTime` and the special-assistance block.
+
+### Failure scenario
+
+This is a correction table whose entire purpose is to stop someone acting on stale information, and it has itself become the stale one — with its stated consequence exactly inverted. Reverting the frontend array to `Fresh Lead / Repeat Customer / Corporate / VIP` per this row would 400 every lead save against the current `LeadType.fromValue`.
+
+### Recommended fix
+
+Strike row 1 of §1; mark §3 and §4 DONE with pointers to `LeadType.java:32-35`, `DepartureMode.java` and `Lead.java:190-278`. Keep row 4 (`ddl-auto=validate`) — it is the one entry still correct, and **LEAD-40** shows `CLAUDE.md` contradicts it.
+
+---
+
+## LEAD-42 — `LEADS-LIST-UI-REDESIGN.md`'s central premise is false and every §2 line citation is stale
+
+**Priority:** P3 · **Severity:** Medium · **Confidence:** Confirmed
+
+### Evidence
+
+- `docs/LEADS-LIST-UI-REDESIGN.md:93-96` — *"Backend confirms there is no server-side alternative today: `GET /api/leads` (`LeadController.java:78-93`) accepts only `page`, `size`, `sortBy`, `sortDir`."*
+- `lead/controller/LeadController.java:92-102` also declares `search`, `stage`, `leadType`, `fromDate` and `toDate` and passes all nine to the service; `lead/specification/LeadSpecification.java:43-94` implements every predicate in SQL, AND-ed with the tenant predicate and the row scope.
+- `docs/LEADS-LIST-UI-REDESIGN.md:53` — *"All line numbers refer to `AllLeads.jsx` as it stood before any change (2024 lines)."* The file is **2468 lines** at HEAD. Spot-checked drift: `LEAD_COLUMNS` cited `:143-161` is `:193-210`; `colorForIndex` `:49` is `:50`; `filteredLeads` `:1625-1664` is `:1987-2040`; the selection strip `:1928-1933` is `:2366-2371`.
+- §2.3 (four tabs, no stage dropdown) — nine tabs exist at `:2324-2341`. §2.11 (four gradient cards, client-side `setInterval` count-up) — nine cards fed by `/leads/stats/summary` + `/leads/alerts/stats`, `:1897-1984`. §2.9 (dead `margin`/`viewCount`) — fixed; the row reads both at `:646` and `:650`.
+
+### Failure scenario
+
+The false premise is load-bearing for §2.2, for §3.9's "Backend needed: server-side filtering with paging", and for §10 item 2 — so an implementer following the doc rebuilds a filtering layer that already exists, or re-declares the params and breaks `LeadSpecification`'s scope AND. The stale line numbers mean every §2 citation must be re-found by grep, and the doc reads as authoritative right up to the point it sends someone to the wrong code.
+
+### Recommended fix
+
+Rewrite §2.2: backend filtering is **DONE** (`LeadController.java:92-102` + `LeadSpecification.java:43-94`); the remaining gap is purely frontend wiring (**LEAD-32**) plus the two missing predicates (**LEAD-38**). Delete the "Backend needed" half of §3.9. Annotate §10 item 2 as "BE done — FE wiring only" and item 10 as "written but unreachable; `totalCount` is never set". Add a banner under §2 instructing readers to re-locate by symbol, not by line.
+
+---
+
+## LEAD-43 — Three different clocks inside one feature
+
+**Priority:** P3 · **Severity:** Medium · **Confidence:** Confirmed · **Extends LEAD-12**
+
+### Evidence
+
+- `lead/service/LeadLogServiceImpl.java:198` — `String today = LocalDate.now().format(DATE_ONLY);` — no zone at all.
+- `lead/service/LeadServiceImpl.java:868-869` — the opposite, and it says why: `ZoneId zone = tenantTimeZone.forTenant(tenantId); LocalDate today = LocalDate.now(zone);`.
+- `lead/alert/LeadAlertService.java:74-93` — a third behaviour: tenant-zone `now` and day boundaries compared against `Lead.createdAt`, a plain `LocalDateTime` written by `@CreatedDate` in the **JVM** zone (`BaseEntity.java:43-45`), with the write side using `LocalDateTime.now()` (`LeadClaimService.java:176`).
+
+### Failure scenario
+
+Latent today only because the container pins `TZ=Asia/Kolkata` (`Dockerfile:27`) and `TenantTimeZone.DEFAULT` matches. For a Nepal tenant (NPT +05:45 — the case `TenantTimeZone`'s own javadoc cites), `now` runs 15 minutes ahead of every stored `createdAt`, so open leads read older than they are and the SLA-breach tile disagrees with the per-lead `slaBreached` flag. The All-Lead-Logs "today" card also shows a different date from the All-Leads cards for the same tenant. Changing the server timezone breaks every tenant at once.
+
+### Recommended fix
+
+One clock per comparison. Inject `TenantTimeZone` into `LeadLogServiceImpl` for the display date, and in `LeadAlertService` convert the tenant-local day boundaries into server-zone `LocalDateTime` before querying — `today.atStartOfDay(zone).withZoneSameInstant(ZoneId.systemDefault()).toLocalDateTime()` — so boundaries and stored values share a frame. LEAD-12 covers the alert tiles specifically; this entry is the feature-wide inconsistency, and LEAD-26 is the same class in the reminder scheduler.
+
+---
+
 # P4 — Low
 
 ## LEAD-23 — `LeadCodeGenerator` re-reads inside an aborted transaction
@@ -724,16 +1049,249 @@ It also avoids two defects this audit found elsewhere: the constructed DTO is ru
 
 ---
 
+## LEAD-44 — Mutation responses return a `LeadResponseDto` with `latestQuotation` and `logCount` always null
+
+**Priority:** P4 · **Severity:** Low · **Confidence:** Confirmed
+
+**Evidence.** `lead/service/LeadServiceImpl.java:766` and `:776` — both return paths of `updateLeadStage` end in `leadMapper.toResponse(updated)`, and `updateLead` ends the same way. Neither calls `enrichWithLatestQuotation` (`:692`) or `enrichWithLogCounts` (`:704`); only `getAllLeads` (`:447-448`), `getLeadById` (`:460-461`), `searchLead` and `getLeadBoard` (`:681-682`) do. `LeadMapper.toResponse` never sets either field, so `PATCH /{id}/stage`, `PUT /{id}` and `POST /leads` all answer with both keys null.
+
+**Impact.** Any client that replaces a row with the mutation response blanks that row's Quote Value column (`lead.latestQuotation.grandTotal`) and its log-count badge until a full refetch — the row visibly loses data immediately after a successful save. It is also why the correct fix for LEAD-32's optimistic patches (patch from the response) is unavailable today, forcing a refetch instead.
+
+**Fix.** In `updateLead` and both return paths of `updateLeadStage`, build the DTO then run the two lines `getLeadById` already uses: `enrichWithLatestQuotation(List.of(dto)); enrichWithLogCounts(List.of(dto), List.of(updated));`.
+
+---
+
+## LEAD-45 — `EligibleUserDto.activeLeads` carries the composite workload score but is rendered as a lead count
+
+**Priority:** P4 · **Severity:** Low · **Confidence:** Confirmed
+
+**Evidence.** `lead/assignment/service/LeadAssignmentService.java:110-113` — `new EligibleUserDto(u.getPublicId(), u.getName(), u.getEmail(), counts.getOrDefault(u.getId(), 0L))` where `counts = workloadScores(...)` → `workloadService.scoresFor(...)` (`:343-348`), documented at `LoadBasedAssignmentStrategy.java:16` as `UserWorkload.score()` = todo + inProgress + activeLeads + openReminders. The DTO field is `private long activeLeads; // current active-lead count` (`EligibleUserDto.java:19`). Live render sites: `[FE] CreateLead.jsx:1178` — `` label: typeof u.activeLeads === "number" ? `${u.name} · ${u.activeLeads} active` : u.name `` — and `[FE] LeadHistoryDrawer.jsx:295`.
+
+**Impact.** An agent with zero leads but five open tasks and two reminders shows as "· 7 active" in the Assign To dropdown and the reassign picker. A manager choosing an assignee reads a number that is not what it claims, and routes leads away from the person with actual capacity. The DTO javadoc asserts the wrong meaning, so the next reader propagates it.
+
+**Fix.** Rename the DTO field to `workloadScore` and update the two render sites to say "workload" — or, if the word "active" must stay, populate it from the lead-only component of `UserWorkload` rather than `score()`.
+
+---
+
+## LEAD-46 — Create Lead and Edit Lead have no permission gate at the route or the page
+
+**Priority:** P4 · **Severity:** Low · **Confidence:** Confirmed
+
+**Evidence.** `[FE] src/app/router.jsx:296` — `<Route path="createlead" element={<CreateLead />} />` and `:359` — `<Route path="/EditLead/:id" element={<EditLead />}/>`; neither is wrapped in `<Guard>`, unlike the sibling `leads/incoming` at `:286-293`. `[FE] CreateLead.jsx:827` imports `hasPermission`/`P` but uses them for exactly one thing, `canReadCustomers` at `:1928`. There is no `LEAD_CREATE`/`LEAD_UPDATE` check and no `AccessDenied` path, though `AccessDenied` exists in this feature and `AllLeads.jsx` uses it.
+
+**Impact.** UX only — the backend `@PreAuthorize` is the real gate and holds. But an agent without `LEAD_CREATE` (or a viewer opening `/EditLead/:id` without `LEAD_UPDATE`) gets the full 30-field form, the assignment-recommendation call and the customer-lookup probes, fills everything in, presses Save, and only then receives a 403 with the typed record lost.
+
+**Fix.** Wrap both routes in `<Guard allow={hasPermission(P.LEAD_CREATE)}>` / `<Guard allow={hasPermission(P.LEAD_UPDATE)}>` and add the same check inside the page before the loading branch, rendering `<AccessDenied/>`.
+
+---
+
+## LEAD-47 — `AllLeads`' overview fetch is the one effect not gated on `LEAD_READ`
+
+**Priority:** P4 · **Severity:** Low · **Confidence:** Confirmed
+
+**Evidence.** `[FE] AllLeads.jsx:1700-1703` and `:1705-1708` — the two effects above it are guarded (`if (!hasPermission(P.LEAD_READ)) return;`) with the comment *"without this a user who reaches /allleads by URL without LEAD_READ fires requests that all 403 — and the shared interceptor toasts each one on top of the access-denied screen"*. The effect at `:1714-1727` then does exactly that, ungated: `useEffect(() => { leadService.getAllLeads(0, 200).then(...).catch(() => setOverviewLeads([])); }, []);`. The route itself is unguarded (`router.jsx:282`), so this effect is the only thing between a URL and the request.
+
+**Impact.** Opening `/allleads` by URL without `LEAD_READ` still fires `GET /api/leads?page=0&size=200`, the interceptor toasts the 403, and `AccessDenied` renders with a permission error floating over it — precisely the regression the two guards above were added to prevent.
+
+**Fix.** Add `if (!hasPermission(P.LEAD_READ)) return;` as the first line of the effect. This code disappears entirely if **LEAD-32** removes `overviewLeads`.
+
+---
+
+## LEAD-48 — The delete confirmation and the type-change toast print the raw lead UUID
+
+**Priority:** P4 · **Severity:** Low · **Confidence:** Confirmed
+
+**Evidence.** `[FE] AllLeads.jsx:493` — `Are you sure you want to delete lead <span …>#{lead?.id} ({lead?.customerName || 'N/A'})</span>?` and `:1806` — `` showToast(`Lead #${leadToUpdate.id} set to ${newType}!`) ``. `LeadResponseDto.java:26` is `private UUID id;   // ← was Long, now UUID (exposes publicId)`, so `lead.id` **is** the raw UUID. The same file states the rule at `:624-631` (*"A UUID is not a lead reference anyone can read out on a call"*), and the sibling toasts at `:1781` and `:1822` already use `leadCode || customerName`.
+
+**Impact.** The delete dialog reads "delete lead #296ebd28-af1f-40db-9e1f-f8d84f5ffb58 (Priya)". A user cannot verify they are deleting the right record from a UUID — on the one irreversible action on the page — and it is the exact anti-pattern the Lead ID column was fixed to avoid.
+
+**Fix.** Use the neighbouring idiom: `{lead?.leadCode || lead?.customerName || 'this lead'}` at `:493`, and `` `Lead ${leadToUpdate.leadCode || leadToUpdate.customerName || ''}` `` at `:1806`.
+
+---
+
+## LEAD-49 — `pages/EditLead.jsx` (1,275 lines) and three components are entirely dead
+
+**Priority:** P4 · **Severity:** Low · **Confidence:** Confirmed
+
+**Evidence.** `[FE] src/features/leads/index.js:6` — `export { default as EditLead } from "./pages/CreateLead";` with the comment *"Create and Edit routes intentionally use one mode-aware page"*; `router.jsx:18` reads that named export. A repo-wide grep for `pages/EditLead` returns zero importers. The same holds for `components/LeadInformation.jsx`, `LeadSummary.jsx` and `ServicesSection.jsx` — every reference is inside a commented-out block in `CreateLead.jsx` (`:9-13`, `:212-311`, `:644-746`) or in `EditLead.jsx` itself.
+
+**Impact.** 1,275 lines of plausible, partially-live edit-form code that nothing renders, duplicating the reset/prefill logic in `CreateLead.jsx`. It is the natural file to open when someone reports "the edit form loses X", and a fix applied there has no effect. `LeadInformation.jsx` is actively hazardous: during this audit it was cited as evidence for two separate "live" behaviours and both citations were wrong *because the file is dead*.
+
+**Fix.** Delete `pages/EditLead.jsx`, `components/LeadInformation.jsx`, `components/LeadSummary.jsx` and `components/ServicesSection.jsx`, after confirming nothing in the commented blocks is still wanted.
+
+---
+
+## LEAD-50 — `ConvertToBookingModal` is imported by `AllLeads` but never rendered
+
+**Priority:** P4 · **Severity:** Low · **Confidence:** Confirmed
+
+**Evidence.** `[FE] AllLeads.jsx:32` — `import ConvertToBookingModal from "../components/ConvertToBookingModal";`. A repo-wide grep for the identifier returns exactly two hits: this import and the component's own `export default` at `ConvertToBookingModal.jsx:53`. Conversion actually runs through `handleConvertNavigate` (`:1832-1834`), `` navigate(`/CreateBooking/${lead.publicId || lead.id}`) ``, wired at `:2435`.
+
+**Impact.** A 474-line dead component with its own conversion API calls ships in the leads chunk on every page load, and the live import makes it look wired — anyone maintaining the convert flow may read and edit the wrong file. Its `onConverted` callback is the in-place "flip the row to Booked" capability the navigate-away path gave up.
+
+**Fix.** Delete the import at `:32` and delete `components/ConvertToBookingModal.jsx`. If the in-place conversion UX is wanted back, render it from `handleConvertNavigate` instead of navigating away.
+
+---
+
+## LEAD-51 — `QuotationsModal`'s preview-design picker is unreachable, so `webViewStyle` is permanently null
+
+**Priority:** P4 · **Severity:** Low · **Confidence:** Confirmed
+
+**Evidence.** `[FE] AllLeads.jsx:945` — `const [previewPickFor, setPreviewPickFor] = useState(null);`. Every reference to the setter is `setPreviewPickFor(null)` — at `:1252` inside `onSelect` and `:1254` as `onClose` — and both live inside the `{previewPickFor && (…)}` block at `:1245` that `previewPickFor` itself gates. Nothing ever sets it to a quotation. Consequently `webViewStyle` (`:946`) is only written at `:1250` inside that unreachable block, so `<QuotationWebView styleOverride={webViewStyle}/>` (`:1240`) and `copyLink(webViewQ, webViewStyle)` (`:1226`) always pass null.
+
+**Impact.** The "preview a design without saving it" path that `mode="preview"` `QuotationStyleModal` advertises can never open. Reading the file, a maintainer concludes the web view supports a one-off style override; it does not — the overlay always renders the stored style, and Copy link never carries one. ~15 lines of misleading state and JSX. (Noted as "dead state" in `LEADS-LIST-UI-REDESIGN.md` §2.11 and still live.)
+
+**Fix.** Either wire an entry point (a "Preview design" button calling `setPreviewPickFor(q)`) or delete `previewPickFor`, `webViewStyle`, the block at `:1245-1256`, and simplify `:1226` and `:1240`.
+
+---
+
+## LEAD-52 — Six `leadService` methods have zero callers, including one that exists to replace client-side maths
+
+**Priority:** P4 · **Severity:** Low · **Confidence:** Confirmed
+
+**Evidence.** Repo-wide greps excluding `leadService.js` itself return no callers for `getLeadLogStats` (`:324`), `getUserWorkload` (`:401`), `getLeadsByStagePerUser` (`:404`), `getLeadCountForUser` (`:407`) and `findLeadByPhone` (`:371`); `searchByPhone` appears only inside commented blocks (`CreateLead.jsx:146`, `:578`, and dead `EditLead.jsx:646`). Meanwhile `[FE] AllLeadLogs.jsx:235` computes `totalLogs` client-side over a capped page while `GET /leads/logs/stats` serves exactly that (`LeadController.java:196`). `GET /leads/board` has no service method at all.
+
+**Impact.** The All-Lead-Logs stat cards report truncated client-side sums when an accurate server roll-up is one already-written call away — the same defect `/stats/summary` fixed on AllLeads (**LEAD-33**). The other five read as live API surface, so a reviewer assumes a workload dashboard exists somewhere.
+
+**Fix.** Call `getLeadLogStats` from `AllLeadLogs` and render its figures on the hero cards (this is also LEAD-33's fix). Delete `getUserWorkload`, `getLeadsByStagePerUser`, `getLeadCountForUser` and `findLeadByPhone`, or comment each with the screen it is reserved for.
+
+---
+
+## LEAD-53 — Five dead members in the lead module, including a second `ApiResponse` envelope
+
+**Priority:** P4 · **Severity:** Low · **Confidence:** Confirmed
+
+**Evidence.** `lead/dto/ApiResponseDto.java:12` — `public class ApiResponseDto<T>` with success/failure factories; a grep across `src/main` and `src/test` finds references only inside its own file, while every lead endpoint uses `common.dto.ApiResponse`. Also zero-caller: `LeadRepository.java:30` `findAllByTenantIdAndDeletedAtIsNull(Long, Pageable)`, `LeadRepository.java:69` `findAllByTenantIdAndDeletedAtIsNullAndAssignedUser_IdIn(…, Pageable)` (only the `…OrderByCreatedAtDesc` sibling at `:72` is used), `LeadLogRepository.java:20` `countByLead_IdAndDeletedAtIsNull`, and `LeadNotFoundException` (thrown nowhere; only `GlobalExceptionHandler:90` handles it).
+
+**Impact.** `ApiResponseDto` is a live trap: a developer adding a lead endpoint can pick the module-local envelope and ship a response shape no frontend unwrapper expects, violating the house rule. The two orphaned paged finders read as "the scope-filtered paged path lives here" when `getAllLeads` actually goes through `LeadSpecification` — which is where a scope change must be made.
+
+**Fix.** Delete `ApiResponseDto.java`, `LeadNotFoundException.java` (and its handler branch), `LeadRepository:30` and `:69`, and `LeadLogRepository:20`. If `ApiResponseDto` must survive, mark it `@Deprecated` pointing at `common.dto.ApiResponse`.
+
+---
+
+## LEAD-54 — `Lead.origin`, `sourceIntegrationId` and `customerLinkedAt` are written on every create and read by nothing
+
+**Priority:** P4 · **Severity:** Low · **Confidence:** Confirmed
+
+**Evidence.** `lead/entity/Lead.java:102` — `@Enumerated(EnumType.STRING) @Column(name="origin", length=20) @Builder.Default private LeadOrigin origin = LeadOrigin.MANUAL;`, set from the actor by `LeadMapper.toEntity:70-71`. `grep -rn "getOrigin()"` across `src/main` and `src/test` returns **zero** hits; likewise `getSourceIntegrationId()` and `getCustomerLinkedAt()`. `LeadResponseDto` exposes none of the three, and no repository query filters on them.
+
+**Impact.** `LeadOrigin`'s stated reason to exist is unrealised: its javadoc says that without it *"source-wise conversion reporting silently mixes machine-verified provenance with a human's guess"* — but no report, DTO or query reads the column. Same for `customerLinkedAt`, whose javadoc promises it distinguishes "checked, nobody matched" from "never checked". Three columns plus a CHECK-constraint maintenance burden with no reader, and a future reader will assume historical rows are populated.
+
+**Fix.** Add `origin` (and optionally `sourceIntegrationId`) to `LeadResponseDto` + `LeadMapper.toResponse` and to the source breakdown in `getStatsSummary` — or delete the columns. Do not leave write-only columns.
+
+---
+
+## LEAD-55 — The log-summary endpoint silently widens on a bad `stage` or `userId`, while `/api/leads` 400s on the same input
+
+**Priority:** P4 · **Severity:** Low · **Confidence:** Confirmed
+
+**Evidence.** `lead/service/LeadLogServiceImpl.java:270-277` — `try { return LeadStage.fromValue(stage); } catch (IllegalArgumentException e) { return null;   // unknown filter value → no stage restriction }`. `:279-284` — `resolveUserFilter` maps an unresolvable publicId to `null`, i.e. also no filter. Both params are exposed on `GET /leads/logs/summary` (`LeadController.java:184-186`). `LeadSpecification.parseStage` (`:102-104`) has no catch, so the same bad stage on `GET /api/leads` throws and becomes a 400.
+
+**Impact.** Latent rather than live — `AllLeadLogs` filters entirely client-side and sends neither param (which is also why the phantom "Ready to Book" produces an *empty* grid rather than an unfiltered one; see LEAD-30). But this is public API: `?stage=garbage` or a foreign `?userId=` returns the caller's full visible list instead of an empty one, and the two lead endpoints answer identical malformed input two different ways.
+
+**Fix.** Throw on both: a `BadRequestException("Unknown stage: …")` in `parseStage`, and `ResourceNotFoundException` (or an empty-page sentinel) in `resolveUserFilter` when the publicId does not resolve. Never fall back to "no filter".
+
+---
+
+## LEAD-56 — CSV import row numbers do not match the user's file
+
+**Priority:** P4 · **Severity:** Low · **Confidence:** Confirmed
+
+**Evidence.** `lead/bulkimport/CsvLeadImportReader.java:56` — the parser is built with `.setIgnoreEmptyLines(true)`; `:78-81` — `// record.getRecordNumber() is 1-based and counts the header, which is exactly the line number the user sees in their editor.` then `new LeadImportSheet.LeadImportRow((int) record.getRecordNumber(), values)`. `getRecordNumber()` counts parsed **records**, not source lines: an ignored empty line produces no record, and a quoted field containing a newline spans several lines in one record. `ExcelLeadImportReader.java:99` uses the true index — `new LeadImportSheet.LeadImportRow(row.getRowNum() + 1, values)`.
+
+**Impact.** The import report is the only way to locate a bad row in a file of up to 2,000, and the frontend prints the number verbatim. One blank line shifts every subsequent reported row by one; a Notes cell with a line break shifts it further. The user opens the named row and finds a different, valid lead — and the two readers disagree for byte-equivalent data.
+
+**Fix.** Use the line-based accessor `record.getStartLineNumber()` (Commons CSV ≥ 1.9), or capture `parser.getCurrentLineNumber()` before each record, so the number matches the source file the way the Excel reader's already does.
+
+---
+
+## LEAD-57 — Bulk-import assignee lookup does not filter `isActive`, despite the error message promising it
+
+**Priority:** P4 · **Severity:** Low · **Confidence:** Confirmed
+
+**Evidence.** `lead/bulkimport/LeadImportRowMapper.java:192-197` — `Optional<User> user = userRepository.findByUsernameAndTenantIdAndDeletedAtIsNull(username, tenantId); if (user.isEmpty()) { errors.add("No **active** user with username \"" + username + "\" in this organisation"); }`. The finder checks `deletedAt IS NULL` only; `isActive` is never consulted.
+
+**Impact.** A row naming a deactivated user passes preview as READY, then fails at commit inside `LeadAssignmentService.resolveSubmittedAssignee` ("Cannot assign lead to inactive user"), where the import catches it as a generic `RuntimeException` and reports SKIPPED with a message the preview never warned about. The preview's contract — a READY row will import — is broken for exactly this case.
+
+**Fix.** Add `|| !Boolean.TRUE.equals(user.get().getIsActive())` to the check, so the row is flagged INVALID at preview time with the message that is already written.
+
+---
+
+## LEAD-58 — `LeadMetaController` has no class-level `@PreAuthorize`
+
+**Priority:** P4 · **Severity:** Low · **Confidence:** Confirmed
+
+**Evidence.** `lead/controller/LeadMetaController.java:26-29` — `@RestController @RequestMapping("/api/leads/meta") @RequiredArgsConstructor public class LeadMetaController {`, with no class annotation. Only `getLeadSources` carries `@PreAuthorize("hasAnyAuthority('LEAD_READ','LEAD_CREATE','LEAD_UPDATE')")` (`:42`). Both `LeadController` (`:37`) and `LeadClaimController` (`:35`) deliberately carry a class default, and `LeadClaimController`'s javadoc (`:26-29`) explains that a new method there "fails CLOSED".
+
+**Impact.** The current single method is safe. The class, however, has no floor: a method added here without its own annotation is reachable by every logged-in user of every tenant — and unlike its two siblings there is no default to fall back to. This is the same fails-open shape `LeadController`'s own class comment warns about.
+
+**Fix.** Add `@PreAuthorize("hasAnyAuthority('LEAD_READ','LEAD_CREATE','LEAD_UPDATE')")` at class level as the floor, keeping the method-level annotation as documentation.
+
+---
+
+## LEAD-59 — Row selection is fully wired but has no bulk action
+
+**Priority:** P4 · **Severity:** Low · **Confidence:** Confirmed
+
+**Evidence.** `[FE] AllLeads.jsx:1605` declares `selectedIds`; `:2074` and `:2075-2077` build it via `toggleSelect`/`toggleSelectAll`, driven by a per-row checkbox (`:2426-2427`) and a header select-all (`:2387`). Its only render consumer is `:2366-2371`: `{selectedIds.length > 0 && (… <span>{selectedIds.length} selected</span> <button onClick={() => setSelectedIds([])}>Clear</button> …)}`. No bulk delete, assign, stage change or export exists anywhere in the file.
+
+**Impact.** Every row and the header carry a checkbox that promises a bulk operation and delivers a counter with a Clear button. Users tick twenty rows looking for an action bar and find nothing. It also costs a per-row re-render on a 16-column table for no functionality. (`LEADS-LIST-UI-REDESIGN.md` §2.6 records the same observation.)
+
+**Fix.** Either add the bulk action the UI promises — bulk stage change and bulk delete both already have single-row service calls, and `leadAlertService.reassign` exists for bulk assign — or remove the select column, both checkboxes, `selectedIds` and the strip.
+
+---
+
+## LEAD-60 — `/WhatsAppPanel` is routed with no lead
+
+**Priority:** P4 · **Severity:** Low · **Confidence:** Confirmed
+
+**Evidence.** `[FE] src/app/router.jsx:361` — `<Route path="/WhatsAppPanel" element={<WhatsAppPanel/>}/>`, with no props. `[FE] WhatsAppPanel.jsx:84` — `export default function WhatsAppPanel({ lead, onClose })`, and `:98-100` — `` const phone = cleanPhone(lead?.phone); const name = lead?.customerName || lead?.name || "Lead"; const waBase = `https://wa.me/${phone}`; ``. The component is designed as an overlay and is rendered correctly that way from `AllLeads.jsx:2106`.
+
+**Impact.** Navigating to `/WhatsAppPanel` produces a full-screen chat panel titled "Lead" whose Call and Open Chat anchors point at `https://wa.me/`, and whose Close button and backdrop both invoke an undefined `onClose` — the user is stuck until they press browser Back.
+
+**Fix.** Delete the route (`router.jsx:361` and the `lazyPage` at `:22`) and the `WhatsAppPanel` export from `index.js:10`. `AllLeads` already renders it correctly as an overlay.
+
+---
+
+## LEAD-61 — No `AllLeads` modal can be closed with Escape, and none has an accessible name
+
+**Priority:** P4 · **Severity:** Low · **Confidence:** Confirmed
+
+**Evidence.** `ViewLeadModal` (`:394`), `DeleteConfirm` (`:487`), `QuotationsModal` (`:1129`), `AddLogModal` (`:1336`) and `LogsModal` (`:1469`) each register only an `onClick` on the backdrop. A grep for `onKeyDown|keydown|Escape|role="dialog"|aria-modal` across the whole 2,468-line file returns exactly one hit — `StatCard`'s clickable handler at `:341`. The close buttons carry neither `aria-label` nor `title`: `:414` `<button onClick={onClose} className="w-8 h-8 rounded-full bg-white/20 …"><X size={16} /></button>`, identically at `:1140`, `:1349` and `:1480`. Separately the row Stage and Type selects (`:901`, `:909`) combine `appearance-none` with `outline-none` and no `focus-visible` replacement. `[FE] LeadHistoryDrawer.jsx:105-115` shows the correct pattern inside the same feature.
+
+**Impact.** Keyboard and screen-reader users cannot dismiss any lead modal without tabbing to a button that announces only as "button"; Escape does nothing, and in the destructive `DeleteConfirm` the only alternative is Tab-to-Cancel. Focus is neither trapped nor restored. On the table itself, the two fastest inline edits have no visible focus indicator and no dropdown affordance.
+
+**Fix.** Extract `LeadHistoryDrawer`'s pattern into a `useEscapeClose(onClose)` hook and call it in all five modals; add `role="dialog" aria-modal="true" aria-label=…` on each panel and `aria-label="Close"` on the five X buttons; add `focus-visible:ring-2 focus-visible:ring-blue-400` to `:901` and `:909`.
+
+---
+
+## LEAD-62 — Board and enum comments cite seven columns, a deleted file, and a removed `LeadType` constant
+
+**Priority:** P4 · **Severity:** Low · **Confidence:** Confirmed
+
+**Evidence.** `lead/controller/LeadController.java:116` — `/** All leads grouped into the seven pipeline columns — powers LeadKanban.jsx. */`; `LeadBoardColumnDto.java:14-15` — "returns all seven `LeadStage` columns"; `LeadServiceImpl.java:659-660` — "all seven lanes". `LeadStage.java:8-16` has **eight** constants and `getLeadBoard` emits `Arrays.stream(LeadStage.values())` (`:661`). No `LeadKanban.jsx` exists in the frontend. Separately `LeadSource.java:83` documents `REPEAT_CUSTOMER` against `LeadType.REPEAT_CUSTOMER`, a constant that no longer exists (`LeadType` is FRESH/HOT/WARM/COLD).
+
+**Impact.** A reader trusting "seven lanes" will size a UI or a test for seven and silently drop `REOPENED`. Low on its own, but it is the same drift class that let LEAD-35 (Converted offered in the create form) and LEAD-30 ("Ready to Book") survive: nobody re-checks the enum when it grows.
+
+**Fix.** Say "one column per `LeadStage` (currently eight)" at `LeadController:116`, `LeadBoardColumnDto:14` and `LeadServiceImpl:659`; drop the `LeadKanban.jsx` reference; rewrite the `LeadSource.REPEAT_CUSTOMER` note to cite the historical `LeadType`. If the board is deleted (LEAD-16), all three comments go with it.
+
+---
+
 ## Recommended repair order
 
-1. **Decide the sub-agent question first** (LEAD-01, LEAD-02). If franchise partners are a separate commercial party, these are P1 and lead the list. The fix is small — an eligibility check in `stampFirstContact` and a `CRM_FULL` gate on `LeadAlertController` — and it closes an invariant the codebase already states three times.
-2. **Close the third stage-write door** (LEAD-03, then LEAD-09). One extracted private method fixes the claim window, the SLA stamp, and the frontend's stage dropdown together; the missing `terminalStages` predicate is a one-line change on two queries.
-3. **Stop losing writes** (LEAD-05, ~~LEAD-06~~, LEAD-07, LEAD-19). Four independent places where a user or a provider is told something succeeded that never happened. LEAD-06 is already fixed — it was reported against a pre-commit stash — leaving three.
-4. **Restrict `updateLead`'s owner change** (LEAD-04) — simplest correct fix is to ignore `assignedUserId` there entirely.
-5. **Make the lead list server-side** (LEAD-08, then LEAD-22 and LEAD-16 together) — one change to the fetch contract addresses all three.
-6. **Harden ingest** (LEAD-10, LEAD-15) and the transaction/connection shape (LEAD-11).
-7. **Timezone and session lifetime** (LEAD-12, LEAD-13, LEAD-26).
-8. **The remaining P4 correctness cleanups**, cheapest first: LEAD-29, LEAD-30, LEAD-27. (LEAD-31 is done.)
+*Revised 2026-08-05 to fold in LEAD-32 … LEAD-62.*
+
+1. **Fix the three docs first — they are cheap and they are actively causing defects** (LEAD-40, LEAD-41, LEAD-42, and the comments in LEAD-62). This is not housekeeping: `CLAUDE.md`'s stale `ddl-auto` line will hard-fail the boot of the first schema change anyone makes for the items below, and its stale localStorage inventory already manufactured a false finding during this very audit. An hour here prevents rework in every step that follows.
+2. **Decide the sub-agent question** (LEAD-01, LEAD-02). If franchise partners are a separate commercial party, these are P1 and lead the list. The fix is small — an eligibility check in `stampFirstContact` and a `CRM_FULL` gate on `LeadAlertController` — and it closes an invariant the codebase already states three times.
+3. **Close the third stage-write door** (LEAD-03, then LEAD-09, then LEAD-35). One extracted private method fixes the claim window, the SLA stamp and the frontend's stage dropdown together; the missing `terminalStages` predicate is a one-line change on two queries; and while you are in `createLead`, reject a `CONVERTED` stage there the way `updateLead` already does.
+4. **Stop losing writes** (LEAD-20 → LEAD-19, then LEAD-05, LEAD-07). Do LEAD-20 first: the routes have no `:id`, so the faked-save page is currently unreachable and fixing it in isolation proves nothing. These are the places where a user or a provider is told something succeeded that never happened. (LEAD-06 was already fixed — it was reported against a pre-commit stash.)
+5. **Restrict `updateLead`'s owner change** (LEAD-04) — simplest correct fix is to ignore `assignedUserId` there entirely.
+6. **Make the lead list actually server-side.** Order matters: **LEAD-38** (add the `activeOnly` / `followUpDueBy` predicates) and **LEAD-16** (whitelist `sortBy`, clamp the page size, add a stable tiebreaker) must land *before* **LEAD-32** (wire the table to the server page), or the fix ships with two tabs that 400 and an unstable sort. **LEAD-44** makes the optimistic patches correct instead of forcing a refetch; **LEAD-47** disappears with it. Then **LEAD-33** and **LEAD-22** — the same defect on the log screen and the dashboard — and **LEAD-52**, which supplies the endpoint LEAD-33 needs.
+7. **Harden ingest** (LEAD-10, LEAD-15, LEAD-36) and the transaction/connection shape (LEAD-11). LEAD-36 is a self-contained keyset-paging change and can go any time.
+8. **Timezone and session lifetime** (LEAD-43 as the umbrella, covering LEAD-12 and LEAD-26; then LEAD-13). Pick one clock per comparison rather than patching each site.
+9. **Silent-widening and preview-contract fixes** (LEAD-55, LEAD-57, LEAD-56, LEAD-34). Each is small, and each is a place where the system quietly returns or stores something other than what was asked for.
+10. **Delete the dead code, in one sweep** (LEAD-49, LEAD-50, LEAD-51, LEAD-52, LEAD-53, LEAD-54, LEAD-60). ~2,000 frontend lines and five backend members. Worth doing as a single pass rather than piecemeal: two findings in this audit were *based on* dead files and had to be rejected on verification, so this directly reduces the cost of the next audit.
+11. **The remaining polish**, cheapest first: LEAD-39, LEAD-48, LEAD-30, LEAD-29, LEAD-27, LEAD-45, LEAD-58, LEAD-46, LEAD-59, LEAD-61, LEAD-37. (LEAD-31 is done.)
 
 ## Regression tests to add
 
@@ -747,3 +1305,14 @@ The lead module has **no `LeadServiceImplTest`** — `createLead`, `updateLead`,
 - Paged-list tests: `sortBy` outside the whitelist → 400 not 500; `size` above `MAX_PAGE_SIZE` clamped; `perPage=-1` on `/logs/summary` → 400 not 500 (LEAD-14, LEAD-16).
 - A repeat-business test: create → convert → trash → create again with the same phone succeeds (LEAD-17).
 - Concurrency: two simultaneous first-ever lead creations for a fresh tenant (LEAD-23); two concurrent reassigns of one locked lead (LEAD-25); ten concurrent creates in one tenant against a pool of 10 (LEAD-11).
+
+### Added by the second pass
+
+- `createLead` with `leadStage = CONVERTED` → 409, parameterised alongside `updateLead` so both doors are asserted by one test (LEAD-35). The existing `assertConversionStageTransitionAllowed` test covers only the update path, which is why the create hole survived.
+- `GET /api/leads?activeOnly=true` and `?followUpDueBy=<today>` returning exactly what `getStatsSummary`'s `activeLeads` and `followUpsOverdue + followUpsDueToday` count, for the same fixture (LEAD-38). If the Specification and the roll-up ever disagree, a card and the list it opens show two different pipelines — assert them against one another, not against literals.
+- `GET /leads/logs/summary?stage=garbage` → 400 not a silently widened list, and `?userId=<foreign-uuid>` → empty or 404, never the caller's full list (LEAD-55).
+- `LeadPhoneNormalizationBackfill` over 2,000 canonicalisable rows in one run → **zero** rows left with `phone_normalized IS NULL` (LEAD-36). The current OFFSET implementation leaves exactly half and reports them as un-canonicalisable, so a naive "did it log success?" assertion passes.
+- A CSV fixture containing a blank line and a quoted multi-line Notes cell, asserting the reported row number equals the source line number and matches what `ExcelLeadImportReader` reports for the byte-equivalent sheet (LEAD-56).
+- Import preview with a **deactivated** assignee username → INVALID at preview, not READY-then-SKIPPED at commit (LEAD-57).
+- The mutation-response contract: `PATCH /{id}/stage`, `PUT /{id}` and `POST /leads` all return a non-null `logCount` and, where one exists, `latestQuotation` (LEAD-44). This is the test that makes optimistic row-patching safe.
+- A frontend test — currently there are none for this feature — that the leads table renders the array `fetchLeads` populates, and that a successful stage change leaves the rendered row on the new stage (LEAD-32). The whole defect is one identifier on one line, and no test in either repo would have caught it.

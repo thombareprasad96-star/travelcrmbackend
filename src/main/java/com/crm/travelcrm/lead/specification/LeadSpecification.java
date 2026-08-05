@@ -2,6 +2,7 @@ package com.crm.travelcrm.lead.specification;
 
 import com.crm.travelcrm.lead.entity.Lead;
 import com.crm.travelcrm.lead.enums.LeadStage;
+import com.crm.travelcrm.lead.enums.LeadStageGroups;
 import com.crm.travelcrm.lead.enums.LeadType;
 import jakarta.persistence.criteria.JoinType;
 import jakarta.persistence.criteria.Predicate;
@@ -31,14 +32,8 @@ public final class LeadSpecification {
     }
 
     /**
-     * The full predicate for one list request. Every argument except {@code tenantId} is optional —
-     * a null (or blank) value contributes no predicate at all, so the unfiltered call returns
-     * exactly what {@code findAllByTenantIdAndDeletedAtIsNull} used to.
-     *
-     * @param visibleUserIds row-level scope: {@code null} means unrestricted (see
-     *                       {@code LeadScopeResolver}); a non-null collection restricts to those
-     *                       assignees. An EMPTY collection is never passed here — the caller
-     *                       short-circuits to an empty page, because {@code IN ()} is not valid SQL.
+     * Back-compatible overload without the two work-queue filters. Kept so callers that only ever
+     * narrow by stage/type/date do not have to pass two nulls.
      */
     public static Specification<Lead> filter(Long tenantId,
                                              Collection<Long> visibleUserIds,
@@ -47,6 +42,40 @@ public final class LeadSpecification {
                                              LeadType leadType,
                                              LocalDate fromDate,
                                              LocalDate toDate) {
+        return filter(tenantId, visibleUserIds, search, stage, leadType, fromDate, toDate,
+                null, null);
+    }
+
+    /**
+     * The full predicate for one list request. Every argument except {@code tenantId} is optional —
+     * a null (or blank) value contributes no predicate at all, so the unfiltered call returns
+     * exactly what {@code findAllByTenantIdAndDeletedAtIsNull} used to.
+     *
+     * @param visibleUserIds row-level scope: {@code null} means unrestricted (see
+     *                       {@code LeadScopeResolver}); a non-null collection restricts to those
+     *                       assignees. An EMPTY collection is never passed here — the caller
+     *                       short-circuits to an empty page, because {@code IN ()} is not valid SQL.
+     * @param activeOnly     {@code TRUE} restricts to open leads — everything that is not
+     *                       {@link LeadStageGroups#TERMINAL_STAGES}. Derived as the complement so a
+     *                       stage added to the enum later counts as active here without a change,
+     *                       exactly as {@code LeadStageGroups} defines it and as
+     *                       {@code getStatsSummary} computes the Active card. Null/false = no
+     *                       restriction; it is deliberately NOT combined with {@code stage}, so
+     *                       sending both is an intersection, not a conflict.
+     * @param followUpDueBy  when non-null, keeps only leads carrying a {@code followUpDate} on or
+     *                       before this date — the "Follow-ups" work queue (overdue + due today).
+     *                       Leads with no follow-up date are excluded, which is the point: a lead
+     *                       nobody promised to call back is not owed a call today.
+     */
+    public static Specification<Lead> filter(Long tenantId,
+                                             Collection<Long> visibleUserIds,
+                                             String search,
+                                             LeadStage stage,
+                                             LeadType leadType,
+                                             LocalDate fromDate,
+                                             LocalDate toDate,
+                                             Boolean activeOnly,
+                                             LocalDate followUpDueBy) {
         return (root, query, cb) -> {
             // Replaces the @EntityGraph the old derived finders carried: the mapper builds a UserDto
             // from assignedUser for every row, so without this the page costs one extra query per
@@ -68,6 +97,18 @@ public final class LeadSpecification {
             }
             if (leadType != null) {
                 predicates.add(cb.equal(root.get("leadType"), leadType));
+            }
+
+            // The two work-queue filters. Both exist because the leads list has tabs the dashboard
+            // cards click into ("Active", "Follow-ups") that are NOT stages — before this they were
+            // sent as stage=Active, which LeadStage.fromValue throws on, i.e. a 400.
+            if (Boolean.TRUE.equals(activeOnly)) {
+                predicates.add(cb.not(root.get("leadStage").in(LeadStageGroups.TERMINAL_STAGES)));
+            }
+            if (followUpDueBy != null) {
+                predicates.add(cb.and(
+                        cb.isNotNull(root.get("followUpDate")),
+                        cb.lessThanOrEqualTo(root.get("followUpDate"), followUpDueBy)));
             }
 
             // The date filter is the list's "Added" column, i.e. createdAt. Inclusive at both ends:
