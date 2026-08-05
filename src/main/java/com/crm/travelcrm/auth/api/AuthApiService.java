@@ -58,6 +58,18 @@ public class AuthApiService implements CurrentUserProvider, UserDirectory {
 
     @Override
     @Transactional(readOnly = true)
+    public Optional<String> phoneById(Long userId) {
+        // Same tenant-scoping rule as emailById above, and for the same reason: the WhatsApp
+        // channel can be driven from a scheduler thread that carries no TenantContext.
+        Long tenantId = TenantContext.getTenantId();
+        Optional<User> user = (tenantId != null)
+                ? userRepository.findByIdAndTenantIdAndDeletedAtIsNull(userId, tenantId)
+                : userRepository.findById(userId);
+        return user.map(User::getPhoneNumber).filter(p -> !p.isBlank());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public List<Long> activeAdminIds(Long tenantId) {
         if (tenantId == null) {
             return List.of();

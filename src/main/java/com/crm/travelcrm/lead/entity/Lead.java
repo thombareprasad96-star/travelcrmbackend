@@ -129,6 +129,63 @@ public class Lead extends BaseTenantEntity {
     )
     private User assignedUser;
 
+    // ── Claim window / contacted lock ─────────────────────────────────────────
+    // A new lead is auto-assigned an owner, but stays CLAIMABLE by any eligible user until someone
+    // marks it contacted. The three columns below are that window's entire state.
+
+    /**
+     * Compare-and-swap counter guarding the ownership transition. Bumped by every successful claim,
+     * reassign and contact-stamp; a claim submits the value it saw and loses (0 rows updated) if
+     * anyone moved first. See {@code LeadRepository.claimLead}.
+     *
+     * <p><b>Deliberately NOT a JPA {@code @Version}.</b> Optimistic locking fires when any two
+     * writers touch the row, so a manager editing notes would 409 against a concurrent claim — and
+     * every existing lead write path (edit, stage drag, convert-to-booking, ingest append) would
+     * inherit that. A dedicated counter guards exactly the ownership transition and leaves every
+     * other write path's semantics untouched. Same reasoning {@code FleetSettlementService} records
+     * for choosing its lock.
+     *
+     * <p>{@code Integer}, not {@code int}: {@code ddl-auto=update} adds the column NULL on every
+     * existing row and Hibernate cannot read a SQL NULL into a primitive. Readers coalesce — the
+     * CAS query compares {@code COALESCE(claim_version, 0)} so a legacy row is claimable before the
+     * backfill in {@code db/indexes.sql} has run, not after.
+     */
+    @Column(name = "claim_version")
+    private Integer claimVersion;
+
+    /**
+     * When someone first engaged this lead — the moment the claim window CLOSES and the owner
+     * becomes fixed. Null means still claimable.
+     *
+     * <p>This, not {@code leadStage}, is the lock: stage moves on past Contacted (Follow Up,
+     * Qualified…) and a stage-based test would silently reopen the window every time it did.
+     * Stamped exactly once, by the CAS in {@code LeadRepository.markContacted} — so two concurrent
+     * "Mark Contacted" clicks cannot produce two different first-response times.
+     */
+    @Column(name = "first_contacted_at")
+    private LocalDateTime firstContactedAt;
+
+    /** Logical FK to {@code users.id} — who actually made first contact (may differ from the owner). */
+    @Column(name = "first_contacted_by_user_id")
+    private Long firstContactedByUserId;
+
+    /**
+     * {@code createdAt} → {@link #firstContactedAt} in seconds, denormalised at stamp time so SLA
+     * reports never recompute it. Frozen: reopening the claim window (a manager undoing a mis-click)
+     * deliberately does NOT clear this, or reopening would become a way to erase a missed SLA.
+     */
+    @Column(name = "first_response_seconds")
+    private Long firstResponseSeconds;
+
+    /**
+     * The first-response target in force WHEN THIS LEAD WAS CREATED, in seconds. Snapshotted rather
+     * than read live for the same reason a booking pins its cancellation policy: raising the target
+     * next month must not silently un-breach last month's leads. Null on rows predating the column —
+     * {@code LeadSlaPolicy} falls back to the configured default for those.
+     */
+    @Column(name = "sla_target_seconds")
+    private Integer slaTargetSeconds;
+
     @Column(name = "birth_date")
     private LocalDate birthDate;
 

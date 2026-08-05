@@ -129,4 +129,22 @@ public interface PlatformHotelBookingRepository extends JpaRepository<PlatformHo
            ORDER BY b.id ASC
            """)
     List<PlatformHotelBooking> findExpiredRevisions(@Param("now") LocalDateTime now, Pageable pageable);
+
+    /**
+     * Cancellation quotes the tenant never answered.
+     *
+     * <p>Same hazard as a stale revision, pointing the other way: a charge the hotel agreed to weeks
+     * ago is not one they will still honour, and a quote left readable is one that can still be
+     * accepted.</p>
+     */
+    @Query("""
+           SELECT b FROM PlatformHotelBooking b
+           WHERE b.deletedAt IS NULL
+             AND b.status = com.crm.travelcrm.hotelmarketplace.booking.enums.MarketplaceBookingStatus.CANCELLATION_QUOTED
+             AND b.cancellationQuoteExpiresAt IS NOT NULL
+             AND b.cancellationQuoteExpiresAt < :now
+           ORDER BY b.id ASC
+           """)
+    List<PlatformHotelBooking> findExpiredCancellationQuotes(@Param("now") LocalDateTime now,
+                                                             Pageable pageable);
 }

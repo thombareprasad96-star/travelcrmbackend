@@ -44,4 +44,15 @@ public class MealPlan extends BaseEntity {
     @Column(nullable = false)
     @Builder.Default
     private boolean active = true;
+
+    /**
+     * True when the catalog owns this row's DESCRIPTIVE fields — name, description, active.
+     * Deliberately NOT price: {@code HotelMasterProjectionService.syncMealPlans} never writes it,
+     * because the catalog has no price and this number is the tenant's own selling price (§6.4).
+     * So a platform-owned meal plan still accepts a price edit; see
+     * {@code HotelServiceImpl.assertMealPlanEditIsPriceOnly}.
+     */
+    public boolean isPlatformOwned() {
+        return platformSourcePublicId != null;
+    }
 }

@@ -42,6 +42,23 @@ public class TaskResponse {
     private UUID leadPublicId;
     private String leadName;
 
+    // ── All Tasks grid columns (snapshots — see Task entity) ────────────────────────────────
+
+    /** "For (Trip#)" — deep-link target. Null when the task has no booking link. */
+    private UUID bookingPublicId;
+
+    /** "For (Trip#)" — the human-facing booking code, e.g. {@code TRP79799}. */
+    private String bookingCode;
+
+    /** "Guest" — the booking's customer name snapshot. */
+    private String customerName;
+
+    /** "Trip Source" — {@code LeadSource.getDisplayName()} of the originating lead, e.g. "WhatsApp". */
+    private String tripSource;
+
+    /** "Created By" — display name of the creator ({@code ownerUserId}). */
+    private String createdByName;
+
     private List<String> logs;
 
     /** Derived: still open and past its calendar anchor. */

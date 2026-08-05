@@ -4,6 +4,7 @@ import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.hotelmarketplace.booking.dto.ApproveMarketplaceBookingRequest;
 import com.crm.travelcrm.hotelmarketplace.booking.dto.CancelMarketplaceBookingRequest;
+import com.crm.travelcrm.hotelmarketplace.booking.dto.QuoteCancellationRequest;
 import com.crm.travelcrm.hotelmarketplace.booking.dto.ReviseMarketplaceBookingRequest;
 import com.crm.travelcrm.hotelmarketplace.booking.entity.PlatformHotelBooking;
 import com.crm.travelcrm.hotelmarketplace.booking.enums.CrmSyncState;
@@ -202,7 +203,7 @@ public class MarketplacePlatformWriter {
         if (row.getStatus() == MarketplaceBookingStatus.TENANT_ACCEPTED) {
             return row;   // idempotent: a double-click is not a second acceptance
         }
-        if (!row.getStatus().awaitsTenant()) {
+        if (!row.getStatus().awaitsRevisionDecision()) {
             throw new BusinessException(
                     "There is no open price revision on this request.", HttpStatus.CONFLICT);
         }
@@ -247,7 +248,7 @@ public class MarketplacePlatformWriter {
         if (row.getStatus() == MarketplaceBookingStatus.REJECTED) {
             return row;
         }
-        if (!row.getStatus().awaitsTenant()) {
+        if (!row.getStatus().awaitsRevisionDecision()) {
             throw new BusinessException(
                     "There is no open price revision on this request.", HttpStatus.CONFLICT);
         }
@@ -273,7 +274,7 @@ public class MarketplacePlatformWriter {
     public PlatformHotelBooking expireRevision(UUID publicId) {
         PlatformHotelBooking row = lock(publicId);
 
-        if (!row.getStatus().awaitsTenant()) {
+        if (!row.getStatus().awaitsRevisionDecision()) {
             return row;   // somebody got there first
         }
 
@@ -351,6 +352,127 @@ public class MarketplacePlatformWriter {
     }
 
     /**
+     * Put the cancellation charge to the tenant (design §9 clauses 1-3).
+     *
+     * <p>The normal path. The tenant asked to cancel; this says what it costs and waits. Writing the
+     * figures into {@code cancellationCharge} directly would make every screen read "this is what you
+     * were charged" for a cancellation that has not happened and may never — the same mistake the
+     * revision fields are shaped to avoid.</p>
+     */
+    @Transactional
+    public PlatformHotelBooking quoteCancellation(UUID publicId, QuoteCancellationRequest cmd,
+                                                  Long superAdminId, int defaultValidHours) {
+        PlatformHotelBooking row = lock(publicId);
+
+        if (!row.getStatus().isQuotableForCancellation()) {
+            throw new BusinessException(
+                    "This booking is " + row.getStatus() + "; there is no cancellation to quote for.",
+                    HttpStatus.CONFLICT);
+        }
+
+        BigDecimal charge = scale(cmd.getCancellationCharge());
+        BigDecimal retained = scale(cmd.getRetainedPlatformEarning());
+        assertCancellationMoneySane(row, charge, retained);
+
+        int validHours = cmd.getValidForHours() == null ? defaultValidHours : cmd.getValidForHours();
+
+        row.setQuotedCancellationCharge(charge);
+        row.setQuotedRetainedEarning(retained);
+        row.setCancellationQuoteNote(cmd.getNote());
+        row.setCancellationQuotedAt(LocalDateTime.now());
+        row.setCancellationQuoteExpiresAt(LocalDateTime.now().plusHours(validHours));
+        if (cmd.getInternalNotes() != null) {
+            row.setInternalNotes(cmd.getInternalNotes());
+        }
+        row.setStatus(MarketplaceBookingStatus.CANCELLATION_QUOTED);
+
+        return repository.save(row);
+    }
+
+    /**
+     * The tenant accepts the charge, and that acceptance IS the cancellation.
+     *
+     * <p>Settled here from the stored quote rather than from anything the caller sends — there is no
+     * second SuperAdmin step in which the number could change after consent was given. That is the
+     * whole point: the figure the tenant agreed to is the figure that binds.</p>
+     */
+    @Transactional
+    public PlatformHotelBooking acceptCancellationQuote(UUID publicId, Long tenantId) {
+        PlatformHotelBooking row = lockOwned(publicId, tenantId);
+
+        if (row.getStatus() == MarketplaceBookingStatus.CANCELLED) {
+            return row;   // idempotent
+        }
+        if (!row.getStatus().awaitsCancellationDecision()) {
+            throw new BusinessException(
+                    "There is no cancellation quote open on this booking.", HttpStatus.CONFLICT);
+        }
+        if (row.getCancellationQuoteExpiresAt() != null
+                && row.getCancellationQuoteExpiresAt().isBefore(LocalDateTime.now())) {
+            throw new BusinessException(
+                    "This cancellation quote expired on " + row.getCancellationQuoteExpiresAt()
+                            + ". Ask the platform to re-check with the hotel.", HttpStatus.CONFLICT);
+        }
+
+        BigDecimal charge = scale(row.getQuotedCancellationCharge());
+        row.setCancellationCharge(charge);
+        row.setTenantRefundAmount(scale(row.getTenantPayable()).subtract(charge));
+        row.setCancellationReason("Tenant accepted the cancellation quote. "
+                + (row.getCancellationQuoteNote() == null ? "" : row.getCancellationQuoteNote()));
+        row.setCancelledAt(LocalDateTime.now());
+        row.setCancellationQuoteExpiresAt(null);
+        row.setStatus(MarketplaceBookingStatus.CANCELLED);
+
+        return repository.save(row);
+    }
+
+    /**
+     * The tenant looks at the charge and decides to keep the booking.
+     *
+     * <p>Back to {@code CONFIRMED}: the room was never released, and a tenant declining to pay a
+     * cancellation fee is a tenant who is still going. The quote is cleared so a stale figure cannot
+     * be accepted later.</p>
+     */
+    @Transactional
+    public PlatformHotelBooking declineCancellationQuote(UUID publicId, Long tenantId, String reason) {
+        PlatformHotelBooking row = lockOwned(publicId, tenantId);
+
+        if (row.getStatus() == MarketplaceBookingStatus.CONFIRMED) {
+            return row;   // idempotent
+        }
+        if (!row.getStatus().awaitsCancellationDecision()) {
+            throw new BusinessException(
+                    "There is no cancellation quote open on this booking.", HttpStatus.CONFLICT);
+        }
+
+        clearCancellationQuote(row);
+        row.setCancelRequestedAt(null);
+        row.setCancelRequestReason("Cancellation withdrawn by the tenant"
+                + (reason == null || reason.isBlank() ? "." : ": " + reason.trim()));
+        row.setStatus(MarketplaceBookingStatus.CONFIRMED);
+
+        return repository.save(row);
+    }
+
+    /**
+     * Nobody answered the quote. Back to {@code CANCEL_REQUESTED} so it returns to the platform queue.
+     *
+     * <p>Not to {@code CANCELLED} — cancelling because a tenant was slow to reply would charge them
+     * for a decision they never made. Not to {@code CONFIRMED} either: they did ask to cancel, and
+     * that request is still outstanding. The stale figure is what has to go.</p>
+     */
+    @Transactional
+    public PlatformHotelBooking expireCancellationQuote(UUID publicId) {
+        PlatformHotelBooking row = lock(publicId);
+        if (!row.getStatus().awaitsCancellationDecision()) {
+            return row;
+        }
+        clearCancellationQuote(row);
+        row.setStatus(MarketplaceBookingStatus.CANCEL_REQUESTED);
+        return repository.save(row);
+    }
+
+    /**
      * A SuperAdmin settles the cancellation: what the supplier kept, and what goes back.
      *
      * <p>The refund is <b>derived, never accepted from the client</b>, and the two validations are
@@ -374,19 +496,8 @@ public class MarketplacePlatformWriter {
 
         BigDecimal payable = scale(row.getTenantPayable());
         BigDecimal charge = scale(cmd.getCancellationCharge());
-        if (charge.compareTo(payable) > 0) {
-            throw new BusinessException(
-                    "The cancellation charge (" + charge + ") exceeds what the tenant owes ("
-                            + payable + ").", HttpStatus.BAD_REQUEST);
-        }
-
         BigDecimal retained = scale(cmd.getRetainedPlatformEarning());
-        if (retained.compareTo(charge) > 0) {
-            throw new BusinessException(
-                    "Retained platform earning (" + retained + ") exceeds the cancellation charge ("
-                            + charge + "). The platform cannot keep commission out of the tenant's refund.",
-                    HttpStatus.BAD_REQUEST);
-        }
+        assertCancellationMoneySane(row, charge, retained);
 
         row.setCancellationCharge(charge);
         row.setTenantRefundAmount(payable.subtract(charge));
@@ -396,9 +507,40 @@ public class MarketplacePlatformWriter {
         if (cmd.getInternalNotes() != null) {
             row.setInternalNotes(cmd.getInternalNotes());
         }
+        clearCancellationQuote(row);
         row.setStatus(MarketplaceBookingStatus.CANCELLED);
 
         return repository.save(row);
+    }
+
+    /**
+     * The two rules that keep a cancellation from moving money somewhere it should not go.
+     *
+     * <p>Shared by the quote and the override precisely so an operator cannot get a figure past the
+     * quote step that the settle step would have refused — the validation has to be identical or the
+     * consent flow becomes the weaker door.</p>
+     */
+    private static void assertCancellationMoneySane(PlatformHotelBooking row,
+                                                    BigDecimal charge, BigDecimal retained) {
+        BigDecimal payable = scale(row.getTenantPayable());
+        if (charge.compareTo(payable) > 0) {
+            throw new BusinessException(
+                    "The cancellation charge (" + charge + ") exceeds what the tenant owes ("
+                            + payable + ").", HttpStatus.BAD_REQUEST);
+        }
+        if (retained.compareTo(charge) > 0) {
+            throw new BusinessException(
+                    "Retained platform earning (" + retained + ") exceeds the cancellation charge ("
+                            + charge + "). The platform cannot keep commission out of the tenant's refund.",
+                    HttpStatus.BAD_REQUEST);
+        }
+    }
+
+    /** Drop an open quote so a figure nobody accepted can never be acted on later. */
+    private static void clearCancellationQuote(PlatformHotelBooking row) {
+        row.setQuotedCancellationCharge(null);
+        row.setQuotedRetainedEarning(null);
+        row.setCancellationQuoteExpiresAt(null);
     }
 
     /**

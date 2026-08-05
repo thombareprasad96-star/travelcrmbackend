@@ -39,8 +39,38 @@ public final class LeadStageGroups {
     public static final Set<LeadStage> ACTIVE_STAGES = Collections.unmodifiableSet(
             EnumSet.complementOf(EnumSet.of(LeadStage.CONVERTED, LeadStage.LOST)));
 
+    /**
+     * Stages that mean a human has actually engaged the customer — reaching any of them CLOSES the
+     * claim window and starts the SLA measurement, whether it was reached by the "Mark Contacted"
+     * button or by dragging the card on the Kanban board. Both doors must lead to the same place or
+     * the drag silently bypasses the lock.
+     *
+     * <p>Deliberately hard-listed rather than derived as "not NEW_LEAD", because the two exclusions
+     * are meaningful and a derived set would get them wrong:
+     * <ul>
+     *   <li>{@code LOST} is NOT engagement — a junk enquiry gets binned without anyone calling
+     *       anybody, and counting that as a first response would flatter every SLA report.</li>
+     *   <li>{@code REOPENED} is NOT engagement — it is the booking lifecycle handing a cancelled
+     *       conversion back to the pipeline, not a conversation.</li>
+     *   <li>{@code CONVERTED} is unreachable through the stage endpoints anyway (owned by the
+     *       booking lifecycle) but is listed for completeness: a lead cannot become a booking
+     *       without someone having spoken to the customer.</li>
+     * </ul>
+     */
+    public static final Set<LeadStage> ENGAGED_STAGES = Collections.unmodifiableSet(EnumSet.of(
+            LeadStage.CONTACTED,
+            LeadStage.FOLLOW_UP,
+            LeadStage.QUALIFIED,
+            LeadStage.PROPOSAL_SENT,
+            LeadStage.CONVERTED));
+
     /** True when the stage is an open/active lead (anything that is not terminal). */
     public static boolean isActive(LeadStage stage) {
         return stage != null && !TERMINAL_STAGES.contains(stage);
+    }
+
+    /** True when reaching this stage means first contact was made. See {@link #ENGAGED_STAGES}. */
+    public static boolean isEngaged(LeadStage stage) {
+        return stage != null && ENGAGED_STAGES.contains(stage);
     }
 }

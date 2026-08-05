@@ -2,6 +2,7 @@ package com.crm.travelcrm.task.repository;
 
 import com.crm.travelcrm.task.entity.Task;
 import com.crm.travelcrm.task.enums.TaskStatus;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
@@ -24,6 +25,33 @@ public interface TaskRepository
 
     // ── Workload source: all live tasks except the given status (CANCELLED). logs are LAZY. ──
     List<Task> findByTenantIdAndStatusNotAndDeletedAtIsNull(Long tenantId, TaskStatus status);
+
+    /**
+     * The overdue sweeper's poll — every open task whose calendar anchor has passed and which has
+     * not yet been alerted, ACROSS ALL TENANTS.
+     *
+     * <p>Deliberately not tenant-scoped: the scheduler runs on a thread with no {@code TenantContext}
+     * (there is no request and therefore no tenant), and re-applies isolation per row before it
+     * publishes — the same shape {@code ReminderScheduler} uses. That is also why this is an explicit
+     * {@code @Query} rather than a derived method: a derived finder here would look tenant-scoped to
+     * a future reader and is not.
+     *
+     * <p>{@code overdueNotifiedAt IS NULL} is the idempotence guard. Without it a fixedRate poll
+     * would re-alert every open overdue task on every tick, forever. Backed by the partial index
+     * {@code idx_task_overdue_sweep}, which matches these three predicates exactly.
+     */
+    @Query("""
+            SELECT t FROM Task t
+            WHERE t.deletedAt IS NULL
+              AND t.overdueNotifiedAt IS NULL
+              AND t.status IN :openStatuses
+              AND t.assignToUserId IS NOT NULL
+              AND COALESCE(t.startAt, t.dueDate) < :now
+            ORDER BY COALESCE(t.startAt, t.dueDate) ASC
+            """)
+    List<Task> findOverdueAwaitingAlert(@Param("openStatuses") Collection<TaskStatus> openStatuses,
+                                        @Param("now") Instant now,
+                                        Pageable pageable);
 
     // ── Stats counters ───────────────────────────────────────────────────────────────────────
     long countByTenantIdAndDeletedAtIsNull(Long tenantId);

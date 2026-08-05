@@ -10,6 +10,7 @@ import com.crm.travelcrm.lead.dto.LeadLogResponseDto;
 import com.crm.travelcrm.lead.dto.LeadLogStatsDto;
 import com.crm.travelcrm.lead.dto.LeadLogSummaryResponseDto;
 import com.crm.travelcrm.lead.dto.LeadResponseDto;
+import com.crm.travelcrm.lead.dto.LeadStatsSummaryDto;
 import com.crm.travelcrm.lead.dto.UpdateLeadStageRequestDto;
 import com.crm.travelcrm.lead.dto.UserLeadStageCountDto;
 import com.crm.travelcrm.lead.dto.UserWorkloadDto;
@@ -19,11 +20,13 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -75,15 +78,41 @@ public class LeadController {
         return ResponseEntity.ok(ApiResponse.success("Lead fetched successfully", response));
     }
 
+    /**
+     * The leads list. Every filter is optional and applied IN THE DATABASE — previously this method
+     * declared only the four paging params, so the {@code search}/{@code stage}/{@code leadType}/
+     * date arguments AllLeads.jsx has always sent were silently dropped by Spring and the UI showed
+     * an unfiltered page while looking filtered.
+     *
+     * <p>{@code stage} and {@code leadType} are Strings, not enums, on purpose: the wire format is
+     * the enum's {@code displayName} ("New Lead"), and Spring's default enum binding matches the
+     * CONSTANT name ({@code NEW_LEAD}) and would 400 on every real request. The service resolves
+     * them through {@code fromValue}, which accepts either spelling.
+     *
+     * <p>{@code activeOnly} and {@code followUpDueBy} are the two WORK-QUEUE filters and are not
+     * stages — "Active" is the complement of the terminal stages, "Follow-ups" is a date predicate.
+     * They exist so the list can express exactly what the Active and Follow-ups dashboard cards
+     * count; the client used to send {@code stage=Active}, which {@code LeadStage.fromValue}
+     * rejects. {@code size} is clamped and {@code sortBy} whitelisted in the service
+     * ({@code PageSupport}), so neither can reach Hibernate unvalidated.
+     */
     @GetMapping
     public ResponseEntity<PagedApiResponse<LeadResponseDto>> getAllLeads(
             @RequestParam(defaultValue = "0")         int page,
             @RequestParam(defaultValue = "10")        int size,
             @RequestParam(defaultValue = "createdAt") String sortBy,
-            @RequestParam(defaultValue = "desc")      String sortDir) {
+            @RequestParam(defaultValue = "desc")      String sortDir,
+            @RequestParam(required = false)           String search,
+            @RequestParam(required = false)           String stage,
+            @RequestParam(required = false)           String leadType,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fromDate,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate,
+            @RequestParam(required = false)           Boolean activeOnly,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate followUpDueBy) {
 
-        Page<LeadResponseDto> leadPage =
-                leadService.getAllLeads(page, size, sortBy, sortDir);
+        Page<LeadResponseDto> leadPage = leadService.getAllLeads(
+                page, size, sortBy, sortDir, search, stage, leadType, fromDate, toDate,
+                activeOnly, followUpDueBy);
 
         return ResponseEntity.ok(
                 PagedApiResponse.of(
@@ -216,5 +245,31 @@ public class LeadController {
         return ResponseEntity.ok(
                 ApiResponse.success("Stage breakdown fetched",
                         leadService.getLeadStageBreakdownPerUser()));
+    }
+
+    /**
+     * Roll-up behind the All-Leads dashboard cards — pipeline shape, money in play, today's
+     * follow-ups and the period conversion cohort, all aggregated in the database over the caller's
+     * own LEAD_READ scope.
+     *
+     * <p>It exists because the cards used to be computed client-side from
+     * {@code GET /leads?page=0&size=100}: past a hundred leads every figure described the newest
+     * page while reading like a tenant total. Anything whose scope is wider than the page the table
+     * is holding belongs here, not in the browser.
+     *
+     * <p>{@code from}/{@code to} are inclusive ISO dates; omitting both gives the tenant's current
+     * calendar month in the TENANT's timezone. Class-level {@code LEAD_READ} governs — the row
+     * scope inside decides how much of the tenant each caller actually sees.
+     */
+    @GetMapping("/stats/summary")
+    public ResponseEntity<ApiResponse<LeadStatsSummaryDto>> getStatsSummary(
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+
+        return ResponseEntity.ok(
+                ApiResponse.success("Lead stats summary fetched",
+                        leadService.getStatsSummary(from, to)));
     }
 }

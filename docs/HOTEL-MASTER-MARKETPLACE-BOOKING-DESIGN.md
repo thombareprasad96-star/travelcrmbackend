@@ -1645,3 +1645,39 @@ Also outstanding, and genuinely optional: the add-on subscription lifecycle of �
 (`module_addon_products` / `tenant_module_subscriptions`). `HOTEL_MARKETPLACE` works today as a plan
 module through the existing entitlement system; the separate product/renewal records matter only
 when the add-on is sold on its own billing cycle.
+
+### 21.1 Audit against this document — 2026-08-03
+
+Every concrete checklist in this doc was walked against the code. Results:
+
+**§8 blocking defects 1-7 — all seven fixed and verified.**
+1. duplicate-lead guard runs in `createForMarketplace` (`CrmBookingLinkAdapter:118`);
+2. resolved structurally by decision 3 — the payable lives inside `Booking.vendorCost`, so
+   `CancellationCalculator` needed no change;
+3. a downward restatement holds the floor at `paidAmount` and records the overpayment instead of
+   throwing (`:264-272`), plus the attempt cap → `ABANDONED`;
+4. `MarketplaceCrmCancellationListener`;
+5. the upsert finders see soft-deleted rows and `restore()` them (`:209`, `:249`);
+6. every tenant-facing read is ownership-scoped, and `lockOwned` covers the transitions;
+7. `MARKETPLACE_PAYABLE_READ` enforced at BOTH sites — `BookingExpenseController:46` and
+   `BookingTimelineServiceImpl:133`.
+
+**One real gap the audit found, now fixed.** §6.1 trigger 2, §8 Step 6A item 6 and the §17 acceptance
+criterion all require a *booking* — not just an explicit import — to create or reuse the tenant's
+Hotel Master projection. It did not. A tenant who booked a catalog hotel without importing it first
+got a confirmed stay and no Hotel Master row, leaving the hotel absent from the quotation builder,
+the hotel dropdown and the itinerary — the whole purpose of Layer C.
+`MarketplaceApprovalOrchestrator.projectHotelMaster` closes it: best-effort and last, because
+`importOrSync` legitimately refuses a first import whose geography it cannot resolve (§6.5 forbids
+guessing a city) and a convenience projection must never undo a confirmation.
+
+**Deliberate divergences from this document — code is right, the text above is stale.**
+
+| This doc says | Code does | Why |
+|---|---|---|
+| `/api/platform/hotel-catalog/**`, `/api/platform/hotel-bookings` | `/api/super-admin/hotel-catalog`, `/api/super-admin/marketplace/bookings`, `/api/super-admin/marketplace/commissions` | `/api/super-admin` is the established console realm and is already in `ModuleAccessFilter`'s `ALWAYS_ALLOWED`; a second platform prefix would need its own coverage entry for no gain |
+| `GET /api/hotel-marketplace/search` | `GET /api/hotel-marketplace/hotels` | consistent with the detail route beneath it |
+| `POST /hotels/{id}/sync-to-master` | `POST /hotels/{id}/import` | same operation, and `import` is what the FE and the service already call it |
+| permission `HOTEL_MARKETPLACE_VIEW_FINANCIALS` | `MARKETPLACE_PAYABLE_READ` | superseded by §8 decision 4, which scopes it to marketplace expense rows only |
+| `POST /bookings/{id}/cancellation-quote` | absent | needs a machine-readable cancellation policy; this release snapshots terms as free text, so a "quote" would be invented. The SuperAdmin enters the charge they actually agreed with the hotel |
+| `POST /offers/recheck`, `POST /price-holds` | absent | Phase 2 — see the deferred list above |

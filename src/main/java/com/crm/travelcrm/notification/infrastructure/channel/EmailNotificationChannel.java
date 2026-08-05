@@ -8,8 +8,8 @@ import com.crm.travelcrm.notification.domain.entity.Notification;
 import com.crm.travelcrm.notification.domain.enums.DeliveryChannel;
 import com.crm.travelcrm.settings.service.TenantMailSenderFactory;
 import jakarta.mail.internet.MimeMessage;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
@@ -24,7 +24,6 @@ import java.util.Map;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class EmailNotificationChannel implements NotificationChannel {
 
     private static final int MAX_ATTEMPTS = 3;
@@ -33,6 +32,22 @@ public class EmailNotificationChannel implements NotificationChannel {
     private final UserDirectory userDirectory;
     private final TemplateRenderer templateRenderer;
 
+    /**
+     * This bean as Spring sees it, so {@link #send} can cross the proxy boundary and actually get
+     * the {@code @Async} behaviour. {@code @Lazy} breaks the self-referential construction cycle.
+     */
+    private final EmailNotificationChannel self;
+
+    public EmailNotificationChannel(TenantMailSenderFactory mailSenderFactory,
+                                    UserDirectory userDirectory,
+                                    TemplateRenderer templateRenderer,
+                                    @Lazy EmailNotificationChannel self) {
+        this.mailSenderFactory = mailSenderFactory;
+        this.userDirectory = userDirectory;
+        this.templateRenderer = templateRenderer;
+        this.self = self;
+    }
+
     @Override
     public DeliveryChannel channelType() {
         return DeliveryChannel.EMAIL;
@@ -40,7 +55,15 @@ public class EmailNotificationChannel implements NotificationChannel {
 
     @Override
     public void send(NotifyEvent event, Notification notification) {
-        sendAsync(event);
+        // Hand off through the injected SELF proxy, not `this`.
+        //
+        // This previously called sendAsync(event) directly. A plain self-call never leaves the
+        // object, so Spring's @Async proxy was not involved and the "async" send ran SYNCHRONOUSLY
+        // on the publisher's thread — with up to 3 attempts and 1s+2s of Thread.sleep backoff. For a
+        // request thread that is a 3-second stall; for the overdue-task sweeper, which fans out to
+        // every assignee in every tenant, it is 3 seconds per unreachable mailbox, serially.
+        // It went unnoticed because no publisher had ever requested the EMAIL channel.
+        self.sendAsync(event);
     }
 
     @Async("notificationExecutor")

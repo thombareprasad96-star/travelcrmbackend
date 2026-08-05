@@ -14,6 +14,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.UUID;
 
@@ -70,9 +71,29 @@ public class MarketplaceVoucherAdminController {
     public ResponseEntity<byte[]> download(@PathVariable UUID publicId) {
         PlatformHotelBooking row = voucherService.requireForPlatform(publicId);
         log.info("SuperAdmin voucher download for marketplace booking {}", row.getBookingCode());
+
+        MarketplaceVoucherService.VoucherDocument doc = voucherService.download(row);
         return ResponseEntity.ok()
-                .header("Content-Disposition", "inline; filename=hotel-voucher-" + publicId + ".pdf")
-                .contentType(MediaType.APPLICATION_PDF)
-                .body(voucherService.renderPdf(row));
+                .header("Content-Disposition", "inline; filename=\"" + doc.fileName() + "\"")
+                .contentType(MediaType.parseMediaType(doc.contentType()))
+                .body(doc.content());
+    }
+
+    /**
+     * Attach the voucher the HOTEL sent (design §7 — the first of the two sources).
+     *
+     * <p>Uploading issues it: for an ON_REQUEST booking the hotel's own document, with the hotel's own
+     * reference on it, is the one the guest presents at the desk. The rendered PDF is the fallback for
+     * when no such document arrives.</p>
+     */
+    @PostMapping(value = "/{publicId}/voucher/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<ApiResponse<MarketplaceBookingAdminDto>> upload(
+            @PathVariable UUID publicId,
+            @RequestParam("file") MultipartFile file,
+            @AuthenticationPrincipal SuperAdmin superAdmin) {
+        PlatformHotelBooking row = voucherService.upload(
+                publicId, file, superAdmin == null ? null : superAdmin.getId());
+        notifier.voucherIssued(row);
+        return ResponseEntity.ok(ApiResponse.success("Voucher uploaded and issued", mapper.toAdminDto(row)));
     }
 }

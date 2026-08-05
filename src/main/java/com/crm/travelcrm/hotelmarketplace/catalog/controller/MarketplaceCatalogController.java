@@ -67,8 +67,13 @@ public class MarketplaceCatalogController {
     /**
      * Import into this tenant's Hotel Master, or refresh the projection they already hold.
      * Idempotent — a second call returns the same row, freshly synced.
+     *
+     * <p>Two paths, one handler. {@code /import} is what the frontend calls; {@code /sync-to-master}
+     * is the name design doc §10.2 gives it, and is the more honest of the two — the operation is a
+     * create-or-refresh, and "import" reads as something you do once. Both are kept rather than
+     * renaming, because breaking a working client for a naming preference is not an improvement.</p>
      */
-    @PostMapping("/hotels/{publicId}/import")
+    @PostMapping({"/hotels/{publicId}/import", "/hotels/{publicId}/sync-to-master"})
     @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN','CRM_FULL','MASTER_MANAGE','HOTEL_MARKETPLACE_SYNC_MASTER')")
     public ResponseEntity<ApiResponse<HotelImportResultDto>> importToMaster(@PathVariable UUID publicId) {
         HotelImportResultDto result = marketplaceService.importToMaster(publicId);

@@ -46,6 +46,18 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class PlanCatalogueInitializer implements ApplicationRunner {
 
+    /**
+     * The lead cap Basic shipped with, and the cap it should have had. Basic's lead limit is a
+     * LIFETIME total, not a monthly allowance — {@code LeadServiceImpl.enforceLeadCap} compares
+     * against {@code countByTenantIdAndDeletedAtIsNull}, i.e. every lead the tenant has ever kept.
+     * At 500 an agency doing Basic's own 50 bookings a month walls itself shut in three or four
+     * months and cannot create another lead, however long it keeps paying. That is churn, not an
+     * upsell. 5000 keeps the plan usable for years; Pro still differentiates on users, bookings,
+     * storage and the Reports/Accounting/Marketing modules.
+     */
+    private static final int LEGACY_STARTER_LEAD_CAP = 500;
+    private static final int STARTER_LEAD_CAP = 5000;
+
     private final PlanRepository planRepository;
 
     @Override
@@ -91,12 +103,15 @@ public class PlanCatalogueInitializer implements ApplicationRunner {
 
     private void seedPlans() {
         if (planRepository.count() > 0) return;
+        // VENDORS and WHATSAPP are on Basic on purpose — see backfillStarterEntitlements(). Keep the
+        // two module lists identical or a fresh database and an upgraded one sell different products.
         planRepository.save(Plan.builder()
                 .code(TenantPlan.STARTER).displayName("Basic")
                 .monthlyPrice(new BigDecimal("2999")).currency("INR")
-                .maxUsers(5).maxLeads(500)
+                .maxUsers(5).maxLeads(STARTER_LEAD_CAP)
                 .maxBookingsPerMonth(50).maxStorageMb(512).maxSubAgents(0)
-                .modules(new HashSet<>(Set.of("LEADS", "BOOKINGS", "QUOTATIONS", "CUSTOMERS", "MASTERS")))
+                .modules(new HashSet<>(Set.of("LEADS", "BOOKINGS", "QUOTATIONS", "CUSTOMERS", "MASTERS",
+                        "VENDORS", "WHATSAPP")))
                 .active(true).build());
         planRepository.save(Plan.builder()
                 .code(TenantPlan.PRO).displayName("Pro")
@@ -129,6 +144,55 @@ public class PlanCatalogueInitializer implements ApplicationRunner {
         ensureSubAgentEntitlement(TenantPlan.PRO, 5);
         ensureSubAgentEntitlement(TenantPlan.ENTERPRISE, 50);
         backfillUngatedModuleKeys();
+        backfillStarterEntitlements();
+    }
+
+    /**
+     * Repairs two things Basic shipped wrong. Neither is generosity — both are defects in the split.
+     *
+     * <p><b>VENDORS.</b> Basic grants BOOKINGS, and the booking module is built ON vendors:
+     * {@code BookingExpense.vendorId}, {@code BookingServiceItem}, {@code AssignVendorRequest} and
+     * {@code BookingProfitService} all key off one. With {@code /api/vendors} 403'd and no vendor
+     * entry in the always-allowed {@code /api/masters/dropdown} family, a Basic tenant sees the
+     * expense ledger and the service-item vendor assignment but cannot populate either — the feature
+     * is present and non-functional, which reads as a broken product rather than a locked one.
+     *
+     * <p><b>WHATSAPP.</b> {@link #backfillCommunicationKey()} put the omnichannel inbox on every
+     * plan, but {@code ModuleAccessFilter} gates {@code /api/settings/whatsapp} on WHATSAPP, which
+     * was Pro-only. So Basic received a WhatsApp inbox it had no way to connect. The two keys have
+     * to sit on the same side of the paywall; putting them both on Basic is the side that keeps the
+     * inbox working.
+     *
+     * <p>The Pro upsell is unchanged and intact: REPORTS, ACCOUNTING, MARKETING, FLEET, SUBAGENT
+     * (and PORTAL / DISHA_AI / HOTEL_MARKETPLACE above it) all stay out of Basic.
+     *
+     * <p>As everywhere else in this class, the plan-level grant does NOT reach an existing tenant —
+     * {@code TenantEntitlementService.computeEffectiveModules} returns the tenant's own
+     * {@code tenant_modules} snapshot whenever it is non-empty and never consults the plan. V2 PART
+     * 19 carries the matching tenant-level backfill for both the modules and the lead cap.
+     */
+    private void backfillStarterEntitlements() {
+        ensureModules(TenantPlan.STARTER, "VENDORS", "WHATSAPP");
+        raiseStarterLeadCap();
+    }
+
+    /**
+     * Raise Basic's lifetime lead cap {@value #LEGACY_STARTER_LEAD_CAP} → {@value #STARTER_LEAD_CAP}.
+     *
+     * <p>Fires <b>only</b> when the stored cap is still exactly the old seeded default. A SuperAdmin
+     * who has deliberately tuned this plan (to 1000, or down to 200 for a trial cohort) keeps their
+     * number — same principle as the {@code null}-guard in {@link #ensureSubAgentEntitlement}, and
+     * the reason this cannot simply be an unconditional {@code setMaxLeads}. Naturally idempotent:
+     * after the first run the value is no longer 500, so the guard never passes again.
+     */
+    private void raiseStarterLeadCap() {
+        planRepository.findByCode(TenantPlan.STARTER).ifPresent(plan -> {
+            if (!Integer.valueOf(LEGACY_STARTER_LEAD_CAP).equals(plan.getMaxLeads())) return;
+            plan.setMaxLeads(STARTER_LEAD_CAP);
+            planRepository.save(plan);
+            log.info("[PlanCatalogue] raised the Basic lead cap {} -> {}",
+                    LEGACY_STARTER_LEAD_CAP, STARTER_LEAD_CAP);
+        });
     }
 
     /**
@@ -154,6 +218,28 @@ public class PlanCatalogueInitializer implements ApplicationRunner {
         ensureModules(TenantPlan.PRO, "TASKS", "REMINDERS", "DASHBOARD", "ACCOUNTING", "MARKETING");
         ensureModules(TenantPlan.ENTERPRISE, "TASKS", "REMINDERS", "DASHBOARD", "ACCOUNTING", "MARKETING");
         backfillHotelMarketplaceKey();
+        backfillCommunicationKey();
+    }
+
+    /**
+     * Grants {@code COMMUNICATION} — the omnichannel Communication Center — to every plan.
+     *
+     * <p>On every plan including Starter, deliberately: the module is the inbox for WhatsApp, email
+     * and calls the agency already uses, not a premium add-on, and a tenant that loses it loses the
+     * channel its customers actually contact it on. Same reasoning as TASKS/REMINDERS/DASHBOARD
+     * above, and the opposite of {@link #backfillHotelMarketplaceKey()}.
+     *
+     * <p><b>This is only half the story.</b> Granting a key to the PLANS does not reach an existing
+     * TENANT: {@code TenantEntitlementService.computeEffectiveModules} returns the tenant's own
+     * {@code tenant_modules} snapshot whenever it is non-empty and never falls back to the plan, and
+     * {@code TenantServiceImpl} snapshots modules at tenant creation. V2 PART 17 carries the
+     * matching {@code INSERT INTO tenant_modules} backfill. Without it, every existing tenant is
+     * 403 MODULE_NOT_ENABLED the moment the ModuleAccessFilter rule lands.
+     */
+    private void backfillCommunicationKey() {
+        ensureModules(TenantPlan.STARTER, "COMMUNICATION");
+        ensureModules(TenantPlan.PRO, "COMMUNICATION");
+        ensureModules(TenantPlan.ENTERPRISE, "COMMUNICATION");
     }
 
     /**

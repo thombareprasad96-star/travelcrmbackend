@@ -4,6 +4,7 @@ import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.lead.entity.Lead;
+import com.crm.travelcrm.lead.enums.LeadStageGroups;
 import com.crm.travelcrm.lead.repository.LeadRepository;
 import com.crm.travelcrm.permission.service.ScopeResolver;
 import lombok.RequiredArgsConstructor;
@@ -47,6 +48,53 @@ public class LeadAccessGuard {
                 .orElseThrow(() -> new ResourceNotFoundException("Lead not found: " + publicId));
         assertVisible(lead, permissionKey);
         return lead;
+    }
+
+    /**
+     * Resolve a lead that the caller may see EITHER through their row-scope OR because the lead is
+     * still open to claim.
+     *
+     * <p><b>This is a deliberate, owner-approved widening of row-scope — not a bug and not a hole to
+     * be "fixed" back to {@link #requireVisible}.</b> The product rule is that a brand-new lead is
+     * broadcast to the whole tenant so anyone can take it; an OWN-scoped agent who cannot see the
+     * lead cannot claim it, and claim-and-override stops meaning anything. The widening is bounded
+     * on three sides:
+     *
+     * <ul>
+     *   <li><b>In time</b> — it lasts only while {@code firstContactedAt IS NULL}. The instant
+     *       someone makes contact the lead locks and ordinary row-scope resumes, so a lead being
+     *       actively worked is never visible outside its owner's team.</li>
+     *   <li><b>In stage</b> — a lead that reached CONVERTED or LOST is not open, whatever its
+     *       contact stamp says. Without this a lead binned as LOST before anyone called would stay
+     *       tenant-visible forever.</li>
+     *   <li><b>By tenant</b> — the fetch is still tenant-scoped. This never crosses tenants, and the
+     *       caller still needs the permission the endpoint gates on.</li>
+     * </ul>
+     *
+     * <p>Use this ONLY on the claim-window endpoints (claim, the open-alert feed). Every other read
+     * must keep using {@link #requireVisible}, or the widening leaks into places the decision never
+     * covered.
+     *
+     * @param permissionKey the permission whose row-scope applies once the lead is LOCKED
+     */
+    public Lead requireVisibleOrClaimable(UUID publicId, String permissionKey) {
+        Lead lead = leadRepository
+                .findByPublicIdAndTenantIdAndDeletedAtIsNull(publicId, requireTenantId())
+                .orElseThrow(() -> new ResourceNotFoundException("Lead not found: " + publicId));
+        if (isOpenToClaim(lead)) {
+            return lead;
+        }
+        assertVisible(lead, permissionKey);
+        return lead;
+    }
+
+    /**
+     * True while the lead's claim window is open: nobody has made first contact AND it has not
+     * reached a terminal stage. The single definition of "open", so the guard, the service and the
+     * SQL predicates cannot drift.
+     */
+    public static boolean isOpenToClaim(Lead lead) {
+        return lead.getFirstContactedAt() == null && LeadStageGroups.isActive(lead.getLeadStage());
     }
 
     /**

@@ -26,6 +26,8 @@ public final class MarketplaceNotificationType {
     public static final String HOTEL_BOOKING_REVISION_EXPIRED  = "HOTEL_BOOKING_REVISION_EXPIRED";
 
     // ── After confirmation ───────────────────────────────────────────────────────────────────
+    /** A cancellation charge is on the table and the tenant has to accept it before it binds. */
+    public static final String HOTEL_BOOKING_CANCELLATION_QUOTED = "HOTEL_BOOKING_CANCELLATION_QUOTED";
     public static final String HOTEL_BOOKING_CANCELLED         = "HOTEL_BOOKING_CANCELLED";
     public static final String HOTEL_BOOKING_VOUCHER_ISSUED    = "HOTEL_BOOKING_VOUCHER_ISSUED";
 

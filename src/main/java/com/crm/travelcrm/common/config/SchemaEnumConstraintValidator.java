@@ -88,7 +88,40 @@ public class SchemaEnumConstraintValidator implements ApplicationRunner {
             new GuardedColumn("quotations", "template_style", "quotations_template_style_check",
                     com.crm.travelcrm.quotation.enums.TemplateStyle.class),
             new GuardedColumn("lead_ingest_events", "status", "lead_ingest_events_status_check",
-                    LeadIngestStatus.class));
+                    LeadIngestStatus.class),
+
+            // ── Lead claim window (V2 PART 18) ────────────────────────────────────────────────
+            // Guarded from day one rather than retrofitted, on the same reasoning as the comm block
+            // below: this column is written on every claim and every contact-stamp, so a CHECK that
+            // has fallen behind the Java enum surfaces as a failed claim mid-scramble for a fresh
+            // lead — the one moment the feature exists for. At boot it is one legible line instead.
+            new GuardedColumn("lead_assignment_events", "event_type",
+                    "lead_assignment_events_event_type_check",
+                    com.crm.travelcrm.lead.assignment.history.LeadAssignmentEventType.class),
+
+            // ── Communication Center (V2 PART 17) ──────────────────────────────────────────────
+            // Guarded from day one rather than retrofitted. comm_messages is the highest-write table
+            // in the application and its status/direction values are written by webhook threads, so
+            // a CHECK constraint that has fallen behind the Java enum surfaces as an INSERT failure
+            // on a provider callback at 2am — a delivery that is then retried and fails again. At
+            // boot it is one legible line instead.
+            new GuardedColumn("comm_conversations", "channel", "comm_conversations_channel_check",
+                    com.crm.travelcrm.communication.enums.CommChannel.class),
+            new GuardedColumn("comm_conversations", "status", "comm_conversations_status_check",
+                    com.crm.travelcrm.communication.enums.ConversationStatus.class),
+            new GuardedColumn("comm_messages", "channel", "comm_messages_channel_check",
+                    com.crm.travelcrm.communication.enums.CommChannel.class),
+            new GuardedColumn("comm_messages", "direction", "comm_messages_direction_check",
+                    com.crm.travelcrm.communication.enums.MessageDirection.class),
+            new GuardedColumn("comm_messages", "status", "comm_messages_status_check",
+                    com.crm.travelcrm.communication.enums.MessageStatus.class),
+            new GuardedColumn("comm_messages", "visibility", "comm_messages_visibility_check",
+                    com.crm.travelcrm.communication.enums.MessageVisibility.class),
+            new GuardedColumn("comm_calls", "direction", "comm_calls_direction_check",
+                    com.crm.travelcrm.communication.enums.CallDirection.class),
+            new GuardedColumn("comm_contact_identities", "identity_type",
+                    "comm_contact_identities_type_check",
+                    com.crm.travelcrm.communication.enums.ContactIdentityType.class));
 
     private final DataSource dataSource;
 

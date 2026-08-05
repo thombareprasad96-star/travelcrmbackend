@@ -18,4 +18,11 @@ public class MealPlanDto {
     String name;
     String description;
     BigDecimal price;
+
+    /**
+     * True when the marketplace catalog owns this row's name and description. {@code price} stays
+     * editable regardless — it is the tenant's selling price and no sync ever overwrites it. So the
+     * master screen should lock the two text fields on a platform-owned plan, not the whole row.
+     */
+    boolean platformOwned;
 }

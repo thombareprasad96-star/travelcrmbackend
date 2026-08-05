@@ -19,6 +19,10 @@ import org.mapstruct.*;
 )
 public interface TaskMapper {
 
+    // The grid columns are stored under storage-oriented names and exposed under display-oriented
+    // ones, so these two need an explicit source. Everything else matches by name.
+    @Mapping(target = "customerName",  source = "customerNameSnapshot")
+    @Mapping(target = "createdByName", source = "ownerName")
     TaskResponse toDto(Task task);
 
     /**
@@ -26,6 +30,8 @@ public interface TaskMapper {
      * {@code task_logs} @ElementCollection is never initialized for every row (the activity log is
      * only needed on the detail fetch, {@link #toDto}).
      */
+    @Mapping(target = "customerName",  source = "customerNameSnapshot")
+    @Mapping(target = "createdByName", source = "ownerName")
     @Mapping(target = "logs", ignore = true)
     TaskResponse toListDto(Task task);
 
@@ -39,6 +45,16 @@ public interface TaskMapper {
     @Mapping(target = "completedAt",      ignore = true)
     @Mapping(target = "allDay",           ignore = true)
     @Mapping(target = "logs",             ignore = true)
+    // Booking link + its display snapshots: bookingPublicId matches the request field by name and
+    // type, so without this it would be copied straight from the body — bypassing the tenant check
+    // in applyReferences and letting a caller stamp any UUID onto the row.
+    @Mapping(target = "bookingRefId",           ignore = true)
+    @Mapping(target = "bookingPublicId",        ignore = true)
+    @Mapping(target = "bookingCode",            ignore = true)
+    @Mapping(target = "customerNameSnapshot",   ignore = true)
+    @Mapping(target = "tripSource",             ignore = true)
+    @Mapping(target = "ownerName",              ignore = true)
+    @Mapping(target = "overdueNotifiedAt",      ignore = true)
     Task toEntity(CreateTaskRequest request);
 
     /** Applies only the non-null fields of {@code request} onto {@code task} (partial patch). */
@@ -52,5 +68,12 @@ public interface TaskMapper {
     @Mapping(target = "completedAt",      ignore = true)
     @Mapping(target = "allDay",           ignore = true)
     @Mapping(target = "logs",             ignore = true)
+    @Mapping(target = "bookingRefId",           ignore = true)
+    @Mapping(target = "bookingPublicId",        ignore = true)
+    @Mapping(target = "bookingCode",            ignore = true)
+    @Mapping(target = "customerNameSnapshot",   ignore = true)
+    @Mapping(target = "tripSource",             ignore = true)
+    @Mapping(target = "ownerName",              ignore = true)
+    @Mapping(target = "overdueNotifiedAt",      ignore = true)
     void updateEntity(UpdateTaskRequest request, @MappingTarget Task task);
 }

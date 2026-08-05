@@ -1,5 +1,6 @@
 package com.crm.travelcrm.auth.security;
 
+import com.crm.travelcrm.auth.dev.DevSuperAdminLoginMode;
 import com.crm.travelcrm.auth.repository.SuperAdminRepository;
 import com.crm.travelcrm.common.entity.SuperAdmin;
 import com.crm.travelcrm.common.exception.ApiErrorWriter;
@@ -24,9 +25,17 @@ public class SuperAdminSetupCompletionFilter extends OncePerRequestFilter {
 
     private final SuperAdminRepository superAdminRepository;
     private final ApiErrorWriter errorWriter;
+    private final DevSuperAdminLoginMode devLoginMode;
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
+        // Local dev bypass: setup completion means "MFA enrolled and password changed", and that
+        // can never become true on a login path that skips MFA — so leaving this gate armed would
+        // lock the console out of everything except the setup endpoints. Non-prod only; see
+        // DevSuperAdminLoginMode.
+        if (devLoginMode.isEnabled()) {
+            return true;
+        }
         return !request.getRequestURI().startsWith(SUPER_ADMIN_API_PREFIX);
     }
 

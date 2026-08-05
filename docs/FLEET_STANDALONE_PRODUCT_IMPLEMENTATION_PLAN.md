@@ -1,4 +1,4 @@
-# Standalone Fleet Diary Product — Current State and Implementation Plan
+[LEADS-LIST-UI-REDESIGN.md](LEADS-LIST-UI-REDESIGN.md)# Standalone Fleet Diary Product — Current State and Implementation Plan
 
 **Audit date:** 31 July 2026  
 **Repository audited:** `travelcrmbackend`  

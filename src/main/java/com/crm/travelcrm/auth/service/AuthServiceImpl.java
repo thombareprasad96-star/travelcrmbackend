@@ -3,6 +3,7 @@ package com.crm.travelcrm.auth.service;
 import com.crm.travelcrm.auth.dto.LoginRequestDTO;
 import com.crm.travelcrm.auth.dto.LoginResponseDTO;
 import com.crm.travelcrm.auth.dto.SuperAdminMfaVerifyRequest;
+import com.crm.travelcrm.auth.dev.DevSuperAdminLoginMode;
 import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.auth.mfa.SuperAdminMfaChallenge;
 import com.crm.travelcrm.auth.mfa.SuperAdminMfaChallengeStore;
@@ -53,6 +54,7 @@ public class AuthServiceImpl implements AuthService {
     private final SuperAdminMfaService mfaService;
     private final SuperAdminPasswordPolicy superAdminPasswordPolicy;
     private final SuperAdminLoginNotificationService superAdminLoginNotificationService;
+    private final DevSuperAdminLoginMode devLoginMode;
 
     @Value("${app.super-admin.lockout.max-failed-attempts:5}")
     private int superAdminLockoutMaxAttempts;
@@ -118,7 +120,44 @@ public class AuthServiceImpl implements AuthService {
 
         resetSuperAdminPasswordFailures(superAdmin);
 
+        // Local development only: with app.super-admin.dev-login.enabled the correct password is
+        // the whole login — no authenticator enrolment, no 6-digit code. The flag is vetoed on the
+        // prod profile and ProductionConfigValidator refuses to boot prod with it on, so this
+        // branch is unreachable in production. See DevSuperAdminLoginMode.
+        if (devLoginMode.isEnabled()) {
+            return issueDevSuperAdminSession(superAdmin, clientIp, userAgent);
+        }
+
         return issueSuperAdminMfaChallenge(superAdmin, clientIp, userAgent);
+    }
+
+    /** Password-verified but MFA-skipped session. Mutates nothing on the account. */
+    private LoginResponseDTO issueDevSuperAdminSession(
+            SuperAdmin superAdmin, String clientIp, String userAgent) {
+
+        String token = jwtUtil.generateToken(superAdmin);
+        logger.warn("DEV SuperAdmin login — MFA bypassed: {}", superAdmin.getEmail());
+
+        platformAuditRecorder.safeRecord(
+                PlatformAuditAction.LOGIN, true,
+                superAdmin.getId(), superAdmin.getEmail(),
+                null, null, "SUPER_ADMIN", superAdmin.getPublicId(),
+                "DEV login — MFA bypassed (app.super-admin.dev-login.enabled)", clientIp, userAgent);
+
+        LoginResponseDTO response = new LoginResponseDTO(
+                superAdmin.getName(),
+                "Login successful (MFA bypassed for local development)",
+                token,
+                "Bearer",
+                superAdmin.getPublicId(),
+                superAdmin.getEmail(),
+                "SUPER_ADMIN");
+        // Setup can never complete while MFA is skipped (isSetupComplete() requires mfaEnabled), so
+        // sending the console to /console/setup would strand it. SuperAdminSetupCompletionFilter
+        // stands down for the same flag.
+        response.setMustChangePassword(false);
+        response.setSetupRequired(false);
+        return response;
     }
 
     @Override

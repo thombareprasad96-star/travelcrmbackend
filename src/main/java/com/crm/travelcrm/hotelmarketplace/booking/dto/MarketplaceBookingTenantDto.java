@@ -89,6 +89,14 @@ public class MarketplaceBookingTenantDto {
     LocalDateTime cancelledAt;
     String cancellationReason;
 
+    // ── An open cancellation quote (design §9) ─────────────────────────────
+    // quotedRetainedEarning is absent by construction: how the platform splits the charge with
+    // itself is not part of what the tenant is being asked to accept.
+    BigDecimal quotedCancellationCharge;
+    String cancellationQuoteNote;
+    LocalDateTime cancellationQuotedAt;
+    LocalDateTime cancellationQuoteExpiresAt;
+
     /** What the supplier retained; still owed. */
     BigDecimal cancellationCharge;
 

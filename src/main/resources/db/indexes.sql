@@ -225,29 +225,116 @@ ALTER TABLE billing_records DROP CONSTRAINT IF EXISTS billing_records_status_che
 ALTER TABLE billing_records ADD CONSTRAINT billing_records_status_check
         CHECK (status IN ('UNPAID','PAID','VOID','CREDIT'));
 
-ALTER TABLE platform_audit_logs DROP CONSTRAINT IF EXISTS platform_audit_logs_action_check;
-ALTER TABLE platform_audit_logs ADD CONSTRAINT platform_audit_logs_action_check
-        CHECK (action IN ('LOGIN','LOGIN_FAILED','LOGOUT',
-                'MFA_SETUP','MFA_CHALLENGE','MFA_VERIFY','MFA_VERIFY_FAILED',
-                'MFA_ENABLE_FAILED','MFA_ENABLED','MFA_DISABLE_FAILED','MFA_DISABLED',
+-- WAS AN UNGUARDED DROP + ADD OF A HAND-MAINTAINED LIST, AND IT HAD ROTTED TO 63 OF THE 83
+-- PlatformAuditAction CONSTANTS — every MARKETPLACE_* value was missing. Because this file runs
+-- AFTER Flyway (spring.jpa.defer-datasource-initialization=true), the old block did not merely fail
+-- to widen the constraint: it DROPPED the correct 83-value one that V2 PART 16.3 had just written
+-- and replaced it with the stale one. SchemaEnumConstraintValidator then refused the boot. So on any
+-- environment running with sql.init.mode=always, this block was the regression, not the repair.
+--
+-- Now guarded exactly like its twin at V2 PART 16.3 — it rebuilds only when the live constraint is
+-- absent or predates the cancellation-consent actions, and is otherwise a no-op. KEEP THE VALUE LIST
+-- IDENTICAL TO V2 PART 16.3; adding a PlatformAuditAction constant means editing both, and the guard
+-- needle (MARKETPLACE_CANCELLATION_QUOTED) must then be moved to the newly added constant or the
+-- refresh will not fire.
+DO $do$
+DECLARE
+    existing text;
+BEGIN
+    SELECT pg_get_constraintdef(oid) INTO existing
+    FROM pg_constraint WHERE conname = 'platform_audit_logs_action_check';
+
+    IF existing IS NULL OR existing NOT LIKE '%MARKETPLACE_CANCELLATION_QUOTED%' THEN
+        ALTER TABLE platform_audit_logs DROP CONSTRAINT IF EXISTS platform_audit_logs_action_check;
+        ALTER TABLE platform_audit_logs ADD CONSTRAINT platform_audit_logs_action_check
+            CHECK (action IN (
+                'ANNOUNCEMENT_SEND',
+                'BILLING_ISSUE',
+                'BILLING_MARK_PAID',
+                'BILLING_MARK_UNPAID',
+                'BILLING_VOID',
+                'CONFIG_CHANGE',
+                'DATA_EXPORT',
+                'FEATURE_FLAG_CHANGE',
+                'IMPERSONATION_END',
+                'IMPERSONATION_START',
+                'LOGIN',
+                'LOGIN_FAILED',
+                'LOGIN_NOTIFICATION',
+                'LOGIN_NOTIFICATION_FAILED',
+                'LOGOUT',
+                'MAINTENANCE_TOGGLE',
+                'MARKETPLACE_BOOKING_APPROVE',
+                'MARKETPLACE_BOOKING_CANCEL',
+                'MARKETPLACE_BOOKING_CANCEL_REQUESTED',
+                'MARKETPLACE_BOOKING_CRM_SYNC_FAILED',
+                'MARKETPLACE_BOOKING_REJECT',
+                'MARKETPLACE_BOOKING_REQUEST',
+                'MARKETPLACE_BOOKING_REVIEW',
+                'MARKETPLACE_BOOKING_REVISION_ACCEPTED',
+                'MARKETPLACE_BOOKING_REVISION_DECLINED',
+                'MARKETPLACE_BOOKING_REVISION_EXPIRED',
+                'MARKETPLACE_BOOKING_REVISION_REQUESTED',
+                'MARKETPLACE_CANCELLATION_QUOTED',
+                'MARKETPLACE_CANCELLATION_QUOTE_ACCEPTED',
+                'MARKETPLACE_CANCELLATION_QUOTE_DECLINED',
+                'MARKETPLACE_CANCELLATION_QUOTE_EXPIRED',
+                'MARKETPLACE_COMMISSION_ACCRUED',
+                'MARKETPLACE_COMMISSION_ADJUSTED',
+                'MARKETPLACE_COMMISSION_REVERSED',
+                'MARKETPLACE_COMMISSION_SETTLED',
+                'MARKETPLACE_VOUCHER_ISSUED',
+                'MARKETPLACE_VOUCHER_REVOKED',
+                'MFA_CHALLENGE',
+                'MFA_DISABLED',
+                'MFA_DISABLE_FAILED',
+                'MFA_ENABLED',
+                'MFA_ENABLE_FAILED',
+                'MFA_SETUP',
+                'MFA_VERIFY',
+                'MFA_VERIFY_FAILED',
+                'PAYMENT_CAPTURED',
+                'PAYMENT_FAILED',
+                'PAYMENT_ORDER_CREATED',
+                'PLAN_ASSIGN',
+                'PLAN_CHANGE',
+                'PLAN_UPDATE',
+                'PLATFORM_HOTEL_CREATE',
+                'PLATFORM_HOTEL_DELETE',
+                'PLATFORM_HOTEL_PUBLISH',
+                'PLATFORM_HOTEL_UNPUBLISH',
+                'PLATFORM_HOTEL_UPDATE',
+                'QUOTA_OVERRIDE',
+                'SUBAGENT_LICENSE_APPROVE',
+                'SUBAGENT_LICENSE_CANCEL',
+                'SUBAGENT_LICENSE_CREATE',
+                'SUBAGENT_LICENSE_REJECT',
+                'SUBSCRIPTION_ACTIVATED',
+                'SUBSCRIPTION_CANCELLED',
+                'SUBSCRIPTION_EXPIRED',
+                'SUPER_ADMIN_INVITE_ACCEPT',
+                'SUPER_ADMIN_INVITE_CREATE',
                 'SUPER_ADMIN_MFA_RESET',
                 'SUPER_ADMIN_PASSWORD_CHANGE',
-                'SUPER_ADMIN_INVITE_CREATE','SUPER_ADMIN_INVITE_ACCEPT',
-                'LOGIN_NOTIFICATION','LOGIN_NOTIFICATION_FAILED',
-                'TENANT_CREATE','TENANT_UPDATE','TENANT_SUSPEND','TENANT_REACTIVATE',
-                'TENANT_SOFT_DELETE','TENANT_RESTORE','TENANT_HARD_DELETE',
-                'PLAN_ASSIGN','PLAN_CHANGE','PLAN_UPDATE','SUBSCRIPTION_EXPIRED',
-                'BILLING_ISSUE','BILLING_MARK_PAID','BILLING_MARK_UNPAID',
-                'BILLING_VOID',
-                'PAYMENT_ORDER_CREATED','PAYMENT_CAPTURED','PAYMENT_FAILED',
-                'SUBSCRIPTION_ACTIVATED','SUBSCRIPTION_CANCELLED','TENANT_PAST_DUE',
-                'UPGRADE_REQUEST_CREATE','UPGRADE_REQUEST_APPROVE','UPGRADE_REQUEST_REJECT','UPGRADE_REQUEST_CANCEL',
-                'SUBAGENT_LICENSE_CREATE','SUBAGENT_LICENSE_APPROVE','SUBAGENT_LICENSE_REJECT','SUBAGENT_LICENSE_CANCEL',
-                'IMPERSONATION_START','IMPERSONATION_END','USER_FORCE_RESET','USER_LOCK','USER_UNLOCK',
-                'FEATURE_FLAG_CHANGE','CONFIG_CHANGE','QUOTA_OVERRIDE','USAGE_LIMIT_EXCEEDED',
-                'ANNOUNCEMENT_SEND','MAINTENANCE_TOGGLE','DATA_EXPORT',
-                'PLATFORM_HOTEL_CREATE','PLATFORM_HOTEL_UPDATE','PLATFORM_HOTEL_PUBLISH',
-                'PLATFORM_HOTEL_UNPUBLISH','PLATFORM_HOTEL_DELETE'));
+                'TENANT_CREATE',
+                'TENANT_HARD_DELETE',
+                'TENANT_PAST_DUE',
+                'TENANT_REACTIVATE',
+                'TENANT_RESTORE',
+                'TENANT_SOFT_DELETE',
+                'TENANT_SUSPEND',
+                'TENANT_UPDATE',
+                'UPGRADE_REQUEST_APPROVE',
+                'UPGRADE_REQUEST_CANCEL',
+                'UPGRADE_REQUEST_CREATE',
+                'UPGRADE_REQUEST_REJECT',
+                'USAGE_LIMIT_EXCEEDED',
+                'USER_FORCE_RESET',
+                'USER_LOCK',
+                'USER_UNLOCK'
+            ));
+    END IF;
+END $do$;
 
 -- ── UpgradeRequest enum CHECK constraint refresh ────────────────────────────
 -- upgrade_requests is a NEW table, so Hibernate creates its *_check constraints with the current enum
@@ -665,10 +752,16 @@ CREATE INDEX IF NOT EXISTS idx_lie_dedup_key
 -- itself with the current enum values the first time it creates the table; this block is
 -- belt-and-braces for any FUTURE value (ddl-auto=update never alters an existing constraint).
 -- SchemaEnumConstraintValidator guards it at boot.
+--
+-- QUARANTINED_DUPLICATE / QUARANTINED_TRASHED are exactly that future value: any deployment whose
+-- lead_ingest_events table already exists carries the 8-value constraint Hibernate wrote when it
+-- first created the table, and ddl-auto=update will never widen it. Without this refresh the new
+-- statuses fail at INSERT on a webhook thread — which is the very silent-loss this change removes.
 ALTER TABLE lead_ingest_events DROP CONSTRAINT IF EXISTS lead_ingest_events_status_check;
 ALTER TABLE lead_ingest_events ADD CONSTRAINT lead_ingest_events_status_check
         CHECK (status IN ('RECEIVED','PROCESSED','APPENDED','DUPLICATE','IGNORED','DEFERRED',
-                          'QUARANTINED_QUOTA','FAILED'));
+                          'QUARANTINED_QUOTA','QUARANTINED_DUPLICATE','QUARANTINED_TRASHED',
+                          'FAILED'));
 
 -- ── lead_logs: FK gains ON DELETE CASCADE ───────────────────────────────────
 -- A PRE-EXISTING hole, widened by this framework and fixed here.
@@ -741,3 +834,131 @@ CREATE INDEX IF NOT EXISTS idx_customers_email_lower
 
 CREATE INDEX IF NOT EXISTS idx_leads_customer_id ON leads (customer_id)
         WHERE customer_id IS NOT NULL;
+
+-- ── Claim window: CAS counter backfill + the open-lead feed's index ─────────
+--
+-- claim_version is the compare-and-swap counter guarding lead ownership. ddl-auto=update adds it
+-- NULL on every pre-existing row, and `NULL = 0` is NULL rather than false in SQL, so an
+-- un-backfilled row would reject every claim whatever version the client submitted.
+--
+-- This IS a data backfill, which DEPLOYMENT.md says belongs in a versioned migration rather than
+-- here — and it is also in V2 PART 18 for exactly that reason. It is duplicated here on the same
+-- narrow grounds as the vendors.row_version backfill above, which it mirrors: an optimistic-lock
+-- counter initialisation is schema plumbing, not business data, and FLYWAY_ENABLED defaults to
+-- false, so on a dev or pilot database this file is the ONLY thing that runs. Idempotent, so the
+-- two never fight. (The CAS queries also COALESCE, so correctness does not actually depend on this
+-- having run — this makes the column honest, it does not make the feature work.)
+UPDATE leads SET claim_version = 0 WHERE claim_version IS NULL;
+
+-- The incoming-leads feed: "every lead in this tenant still open to claim, newest first". Partial
+-- on exactly the predicate the feed and LeadAccessGuard.isOpenToClaim use, so it stays small — an
+-- agency with 50,000 leads has maybe a dozen open at once, and a full index on (tenant_id,
+-- created_at) would make Postgres scan the closed ones to find them.
+CREATE INDEX IF NOT EXISTS idx_leads_open_to_claim
+        ON leads (tenant_id, created_at DESC)
+        WHERE deleted_at IS NULL
+          AND first_contacted_at IS NULL
+          AND lead_stage NOT IN ('CONVERTED', 'LOST');
+
+-- SLA reporting: answered-late leads are found by first_response_seconds, unanswered ones by
+-- created_at among the still-open rows (covered by the partial index above).
+CREATE INDEX IF NOT EXISTS idx_leads_first_response
+        ON leads (tenant_id, first_response_seconds)
+        WHERE first_response_seconds IS NOT NULL;
+
+-- ── lead_assignment_events: the ownership timeline ──────────────────────────
+-- Hibernate creates the table and its event_type CHECK constraint on first boot. The refresh block
+-- below exists for the NEXT constant added to LeadAssignmentEventType: ddl-auto=update never alters
+-- an existing constraint, so without it a new value is rejected at INSERT with nothing in the log.
+-- SchemaEnumConstraintValidator guards this column, so a drift fails the boot rather than the write.
+DO $do$
+DECLARE
+    existing text;
+BEGIN
+    IF to_regclass('public.lead_assignment_events') IS NULL THEN
+        RETURN;   -- first boot: Hibernate has not created the table yet
+    END IF;
+
+    SELECT pg_get_constraintdef(oid) INTO existing
+    FROM pg_constraint WHERE conname = 'lead_assignment_events_event_type_check';
+
+    IF existing IS NULL OR existing NOT LIKE '%REOPENED%' THEN
+        ALTER TABLE lead_assignment_events
+            DROP CONSTRAINT IF EXISTS lead_assignment_events_event_type_check;
+        ALTER TABLE lead_assignment_events
+            ADD CONSTRAINT lead_assignment_events_event_type_check
+            CHECK (event_type IN (
+                'AUTO_ASSIGNED',
+                'CLAIMED',
+                'REASSIGNED',
+                'CONTACTED',
+                'REOPENED'
+            ));
+    END IF;
+END $do$;
+
+
+-- ── All Tasks grid: booking/guest link, creator snapshot, overdue alert mark ─
+-- Mirrors V2 PART 18 for pilot/dev boxes still booting with SQL_INIT_MODE=always (where Flyway is
+-- off and this file is the only thing that runs). Idempotent, so the two never fight.
+DO $do$
+BEGIN
+    IF to_regclass('public.tasks') IS NULL THEN
+        RETURN;   -- first boot: Hibernate has not created the table yet
+    END IF;
+
+    ALTER TABLE tasks
+        ADD COLUMN IF NOT EXISTS booking_id_ref          bigint,
+        ADD COLUMN IF NOT EXISTS booking_public_id       uuid,
+        ADD COLUMN IF NOT EXISTS booking_code            varchar(20),
+        ADD COLUMN IF NOT EXISTS customer_name_snapshot  varchar(255),
+        ADD COLUMN IF NOT EXISTS trip_source             varchar(50),
+        ADD COLUMN IF NOT EXISTS owner_name              varchar(150),
+        ADD COLUMN IF NOT EXISTS overdue_notified_at     timestamp(6) with time zone;
+END $do$;
+
+CREATE INDEX IF NOT EXISTS idx_task_booking
+    ON tasks (booking_id_ref) WHERE deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_task_tenant_assignee_due
+    ON tasks (tenant_id, assign_to_user_id, due_date) WHERE deleted_at IS NULL;
+
+-- The overdue sweeper polls across all tenants every minute; without this it full-scans `tasks`.
+CREATE INDEX IF NOT EXISTS idx_task_overdue_sweep
+    ON tasks (due_date)
+    WHERE deleted_at IS NULL AND overdue_notified_at IS NULL;
+
+-- ── notifications.reference_type: admit TASK ────────────────────────────────
+-- Task notifications have always persisted reference_type = NULL because this CHECK never listed
+-- TASK — which is why an existing TASK_ASSIGNED bell item cannot be deep-linked.
+DO $do$
+DECLARE
+    existing text;
+BEGIN
+    IF to_regclass('public.notifications') IS NULL THEN
+        RETURN;
+    END IF;
+
+    SELECT pg_get_constraintdef(oid) INTO existing
+    FROM pg_constraint WHERE conname = 'notifications_reference_type_check';
+
+    IF existing IS NULL OR existing NOT LIKE '%TASK%' THEN
+        ALTER TABLE notifications DROP CONSTRAINT IF EXISTS notifications_reference_type_check;
+        ALTER TABLE notifications ADD CONSTRAINT notifications_reference_type_check
+            CHECK (reference_type IN ('LEAD','BOOKING','REMINDER','CUSTOMER','VENDOR','TASK'));
+    END IF;
+END $do$;
+
+-- ── tenant_settings: per-tenant opt-in for the noisy overdue channels ───────
+-- IN_APP is always on; WhatsApp and email are off until an agency switches them on. There is no
+-- per-USER notification opt-out anywhere in this product yet, so this is the only off-ramp.
+DO $do$
+BEGIN
+    IF to_regclass('public.tenant_settings') IS NULL THEN
+        RETURN;
+    END IF;
+
+    ALTER TABLE tenant_settings
+        ADD COLUMN IF NOT EXISTS task_overdue_alert_whatsapp boolean NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS task_overdue_alert_email    boolean NOT NULL DEFAULT false;
+END $do$;

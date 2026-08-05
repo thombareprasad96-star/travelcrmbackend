@@ -11,6 +11,7 @@ import org.hibernate.envers.Audited;
 import org.hibernate.envers.NotAudited;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -258,9 +259,35 @@ public class Booking extends BaseTenantEntity implements Ownable {
 
     // ───────────────── Derived Fields ─────────────────
 
+    /** Money is quoted to the paise everywhere; a bare {@code BigDecimal.ZERO} would read as "0". */
+    private static final BigDecimal ZERO_MONEY = BigDecimal.ZERO.setScale(2);
+
+    /**
+     * The LIVE receivable on this booking — what the customer still has to pay.
+     *
+     * <p><b>Zero once the booking is CANCELLED or REFUNDED, and that is the point.</b>
+     * {@code totalPayable} and {@code paidAmount} are both frozen at their pre-cancellation values
+     * (deliberately — they are the historical record of what was sold and what was received), so
+     * {@code totalPayable − paidAmount} on a cancelled booking is the unpaid balance of a trip that
+     * will never happen. Nobody owes it. Every reader of this getter — the response DTOs, the CSV
+     * export, the invoice/voucher model, the traveler portal, the calendar, the AI booking tool —
+     * would otherwise each have to know to special-case cancellation, and they did not agree:
+     * {@code PortalPaymentService} guarded it explicitly while the CSV export and the AI tool
+     * printed the fiction.
+     *
+     * <p>What a cancelled booking actually settles at is a different figure entirely, and it lives
+     * on the immutable {@code BookingCancellation} record ({@code totalRetained} / {@code refundDue}
+     * / {@code customerBalanceOwed}), served by the cancellation summary endpoint. It is
+     * document-backed (credit/debit note) and frozen; this denormalised getter has no access to it
+     * and must not guess at it.
+     *
+     * <p>Floored at zero and scaled to the paise, matching {@code previewFinancials} — an invoice
+     * must never print a negative "balance due".
+     */
     @Transient
     public BigDecimal getPendingAmount() {
-        if (totalPayable == null || paidAmount == null) return BigDecimal.ZERO;
-        return totalPayable.subtract(paidAmount);
+        if (status == BookingStatus.CANCELLED || status == BookingStatus.REFUNDED) return ZERO_MONEY;
+        if (totalPayable == null || paidAmount == null) return ZERO_MONEY;
+        return totalPayable.subtract(paidAmount).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
     }
 }

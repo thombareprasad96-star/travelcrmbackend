@@ -548,6 +548,7 @@ Recommended first-release commercial statuses:
 
 ```text
 DRAFT
+
   → SUBMITTED
   → UNDER_REVIEW
   → BUYER_ACTION_REQUIRED

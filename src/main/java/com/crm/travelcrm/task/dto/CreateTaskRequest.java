@@ -50,4 +50,11 @@ public class CreateTaskRequest {
 
     /** Optionally link the task to a lead (its publicId), validated via the lead access guard. */
     private UUID leadPublicId;
+
+    /**
+     * Optionally link the task to a booking / trip (its publicId), resolved and validated within the
+     * tenant by the service. Populates the grid's "For (Trip#)" and "Guest" columns, and — when the
+     * booking traces back to a lead — "Trip Source".
+     */
+    private UUID bookingPublicId;
 }

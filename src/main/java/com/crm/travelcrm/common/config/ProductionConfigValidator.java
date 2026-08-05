@@ -86,6 +86,8 @@ public class ProductionConfigValidator implements BeanFactoryPostProcessor {
         boolean allowFlywayBaselineOnMigrate = env.getProperty(
                 "app.flyway.allow-baseline-on-migrate", Boolean.class, false);
         boolean seedEnabled = env.getProperty("app.seed.enabled", Boolean.class, false);
+        boolean devLoginEnabled = env.getProperty(
+                "app.super-admin.dev-login.enabled", Boolean.class, false);
 
         List<String> problems = new ArrayList<>();
 
@@ -141,6 +143,17 @@ public class ProductionConfigValidator implements BeanFactoryPostProcessor {
         if (seedEnabled) {
             problems.add("app.seed.enabled is TRUE in prod — DevDataSeeder would create a SuperAdmin with a "
                     + "hard-coded password and demo data. It must be false.");
+        }
+
+        // The local-development bypass: it mints a platform token with no password and no MFA for
+        // any caller on loopback, and stands the mandatory-MFA step down on the normal SuperAdmin
+        // login. application-prod.properties pins it to a literal false; this catches an override
+        // reaching the environment some other way. DevSuperAdminLoginMode also vetoes it on this
+        // profile, so the bypass would not actually engage — but a prod boot that even *asks* for
+        // it is a misconfiguration worth stopping on rather than logging.
+        if (devLoginEnabled) {
+            problems.add("app.super-admin.dev-login.enabled is TRUE in prod — that endpoint signs in "
+                    + "as a SuperAdmin with no password and no MFA. It must be false.");
         }
 
         // Quotation share links and the Razorpay webhook URL are built from this. Left as localhost,

@@ -12,6 +12,7 @@ import com.crm.travelcrm.booking.enums.ServiceItemStatus;
 import com.crm.travelcrm.booking.repository.BookingExpenseRepository;
 import com.crm.travelcrm.booking.repository.BookingRepository;
 import com.crm.travelcrm.booking.repository.BookingServiceItemRepository;
+import com.crm.travelcrm.booking.service.BookingProfitService;
 import com.crm.travelcrm.booking.service.BookingService;
 import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
@@ -58,6 +59,7 @@ public class CrmBookingLinkAdapter implements CrmBookingLinkPort {
     private final BookingServiceItemRepository serviceItemRepository;
     private final BookingExpenseRepository expenseRepository;
     private final BookingService bookingService;
+    private final BookingProfitService profitService;
     private final SubAgentScope subAgentScope;
     private final Validator validator;
 
@@ -167,6 +169,11 @@ public class CrmBookingLinkAdapter implements CrmBookingLinkPort {
                         "Booking vanished immediately after create: " + created.getPublicId()));
         booking.setVendorCost(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
         bookingRepository.save(booking);
+        // …and netProfit with it. create() stamped the margin from the seed's placeholder vendorCost
+        // (MarketplaceBookingWriter hands over tenantPayableAmount = the selling amount), so without
+        // this a marketplace-minted booking was persisted at netProfit 0.00 on a full-value sale and
+        // stayed there until some unrelated expense edit happened to recompute it.
+        profitService.apply(booking);
 
         log.info("Marketplace order {} minted booking {} for tenant {}",
                 seed.marketplaceBookingPublicId(), booking.getBookingCode(), seed.tenantId());
@@ -305,6 +312,16 @@ public class CrmBookingLinkAdapter implements CrmBookingLinkPort {
         }
         booking.setVendorCost(next);
         bookingRepository.save(booking);
+
+        // netProfit = customerAmount − vendorCost − totalInternalCosts, and the cost term just moved.
+        // Without this the method delivered only half of what the javadoc above promises: it kept the
+        // payable out of totalInternalCosts (no double-count) but left the DENORMALISED margin at its
+        // pre-projection figure, so approving a ₹40,000 hotel order overstated netProfit by ₹40,000 on
+        // the dashboard hero card, the revenue report row + totals and the per-user leaderboard — until
+        // some unrelated expense edit happened to call BookingProfitService and quietly corrected it.
+        // The save above stays: apply() only writes when a figure moved, so on the (rare) edit where
+        // customerAmount absorbs the change it would persist nothing and the new vendorCost would be lost.
+        profitService.apply(booking);
     }
 
     // ── WITHDRAW ────────────────────────────────────────────────────────────

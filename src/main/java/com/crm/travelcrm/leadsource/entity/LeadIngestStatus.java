@@ -41,6 +41,29 @@ public enum LeadIngestStatus {
      */
     QUARANTINED_QUOTA,
 
+    /**
+     * An OPEN lead already exists for this contact, but the append rule did not fire.
+     *
+     * <p>Reached when {@code validateNoDuplicates} blocks the create after
+     * {@code findOpenLeadByPhone} found nothing — the two use different keys. The append probe
+     * matches on the CANONICAL phone only; the duplicate check also rejects on EMAIL. So an enquiry
+     * carrying a known email under a new phone number falls between them: not appended, not created.
+     *
+     * <p>Distinct from {@link #QUARANTINED_QUOTA} because the remedy is different — nothing to
+     * upgrade, someone has to open the existing lead and log the enquiry against it.
+     */
+    QUARANTINED_DUPLICATE,
+
+    /**
+     * The only matching lead is in Trash, so creating this one would resurrect a deleted contact
+     * behind the tenant's back.
+     *
+     * <p>The human path answers this with a "restore available" 409 the UI turns into a Restore
+     * button. A provider has no such UI, so the delivery is quarantined and the desk is told which
+     * record to restore.
+     */
+    QUARANTINED_TRASHED,
+
     /** Verification or parsing failed, or creation threw. The raw payload is retained for debugging. */
     FAILED
 }

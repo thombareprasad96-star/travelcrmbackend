@@ -9,6 +9,7 @@ import com.crm.travelcrm.lead.entity.Lead;
 import com.crm.travelcrm.lead.entity.LeadItinerary;
 import com.crm.travelcrm.lead.enums.DepartureMode;
 import com.crm.travelcrm.lead.ingest.LeadActor;
+import com.crm.travelcrm.lead.service.LeadAccessGuard;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -207,6 +208,17 @@ public class LeadMapper {
                 .customerId(lead.getCustomerPublicId())
                 .convertedAt(lead.getConvertedAt())
                 .convertedBookingPublicId(lead.getConvertedBookingPublicId())
+                // ── Claim window ─────────────────────────────────────────────
+                // claimVersion is on the LIST response, not just the detail one, on purpose: the
+                // Claim button submits the version it saw, and a list that omitted it would force a
+                // detail fetch per row before anyone could claim anything.
+                // COALESCE in Java too — legacy rows carry NULL until the backfill runs, and a null
+                // here would serialise as `null` and make the FE submit `null` as the expected version.
+                .claimVersion(lead.getClaimVersion() == null ? 0 : lead.getClaimVersion())
+                .openToClaim(LeadAccessGuard.isOpenToClaim(lead))
+                .firstContactedAt(lead.getFirstContactedAt())
+                .firstResponseSeconds(lead.getFirstResponseSeconds())
+                .slaTargetSeconds(lead.getSlaTargetSeconds())
                 .build();
     }
 

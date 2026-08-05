@@ -104,6 +104,29 @@ public class MarketplaceBookingController {
                 result));
     }
 
+    // ── Answering a cancellation quote (design §9 clauses 1-3) ─────────────
+    // Gated on CANCEL rather than BOOK: this answers a cancellation, which is what that permission
+    // is for. Accepting ends the booking and bills the charge, so it is the same act as asking to
+    // cancel, completed.
+
+    @PostMapping("/{publicId}/accept-cancellation")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN','CRM_FULL','HOTEL_MARKETPLACE_CANCEL')")
+    public ResponseEntity<ApiResponse<MarketplaceBookingTenantDto>> acceptCancellationQuote(
+            @PathVariable UUID publicId) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Cancellation confirmed.", requestService.acceptCancellationQuote(publicId)));
+    }
+
+    @PostMapping("/{publicId}/decline-cancellation")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN','CRM_FULL','HOTEL_MARKETPLACE_CANCEL')")
+    public ResponseEntity<ApiResponse<MarketplaceBookingTenantDto>> declineCancellationQuote(
+            @PathVariable UUID publicId,
+            @RequestParam(required = false) String reason) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Cancellation withdrawn. Your booking stands.",
+                requestService.declineCancellationQuote(publicId, reason)));
+    }
+
     /** Unknown or blank means "all". Lenient, mirroring the SuperAdmin queue. */
     private static MarketplaceBookingStatus parseStatus(String raw) {
         if (raw == null || raw.isBlank()) return null;
