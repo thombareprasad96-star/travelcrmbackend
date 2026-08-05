@@ -44,7 +44,8 @@ public class CancellationCalculator {
      * @param policy            the governing policy version, or {@code null} → a NO_POLICY quote (charge 0)
      * @param cancelDate        the effective cancellation date (defaults to travel-relative "today" if null)
      * @param overrideChargeBase optional manual retained base (a waiver = 0); clamped to [0, base]
-     * @param vendorRecoverable  amount of vendorCost the agency expects to recover (default 0 = fully sunk)
+     * @param vendorRecoverable  amount of the TOTAL supplier cost (typed vendorCost + itemised VENDOR
+     *                           expense lines) the agency expects to recover (default 0 = fully sunk)
      */
     public CancellationQuote calculate(Booking booking,
                                        CancellationPolicy policy,
@@ -61,7 +62,12 @@ public class CancellationCalculator {
 
         BigDecimal base = nz(booking.getCustomerAmount());
         BigDecimal paid = nz(booking.getPaidAmount());
-        BigDecimal recoverable = clampToRange(nz(vendorRecoverable), BigDecimal.ZERO, nz(booking.getVendorCost()));
+        // Clamped to the TOTAL supplier cost — the typed vendorCost plus the VENDOR lines itemised in
+        // the expense ledger — not to the typed field alone. The field is optional and most agencies
+        // itemise instead, so clamping to it capped recoverable at 0 on exactly those bookings and
+        // made the whole supplier spend look unrecoverable.
+        BigDecimal supplierCost = nz(booking.getTotalSupplierCost());
+        BigDecimal recoverable = clampToRange(nz(vendorRecoverable), BigDecimal.ZERO, supplierCost);
 
         int rawDays = (int) ChronoUnit.DAYS.between(onDate, booking.getTravelDate());
         int effectiveDays = Math.max(0, rawDays);
@@ -119,7 +125,12 @@ public class CancellationCalculator {
         BigDecimal customerBalanceOwed = refundDue.signum() < 0 ? refundDue.negate() : BigDecimal.ZERO.setScale(2);
 
         // ── Agency P&L ─────────────────────────────────────────────────────────
-        BigDecimal sunkVendorCost = scale(nz(booking.getVendorCost()).subtract(recoverable));
+        // Total supplier cost, not the typed vendorCost: whatever the agency itemised through the
+        // expense ledger is just as sunk as what it typed on the booking. Reading the raw field here
+        // understated the sunk cost by the itemised amount and overstated revisedNetProfit by the
+        // same — and because the cancellation record FREEZES this figure, that error would have been
+        // permanent in the credit note.
+        BigDecimal sunkVendorCost = scale(supplierCost.subtract(recoverable));
 
         // The agency's own costs are sunk in FULL on a cancellation — there is no "recoverable"
         // counterpart. Staff commission was earned, the gateway fee was charged, the courier went

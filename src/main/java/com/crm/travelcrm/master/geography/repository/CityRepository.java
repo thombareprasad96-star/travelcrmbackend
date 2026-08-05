@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -62,6 +63,30 @@ public interface CityRepository extends JpaRepository<City, Long> {
             Long tenantId, Long countryId, String name);
 
     List<City> findByTenantIdAndDestination_NameIgnoreCase(Long tenantId, String destinationName);
+
+    /**
+     * Batch geography lookup — "which destination and country do these city ids belong to?" — as a
+     * constructor projection, in one query.
+     *
+     * <p>Used by package-template matching to grade near-misses (a different town in the same
+     * destination is worth partial credit). Hydrating {@code City} entities and walking
+     * {@code getDestination().getId()} per row would either initialise a proxy per city or add a
+     * select per city; this is one select for the whole ranking pass regardless of how many
+     * templates are in play.
+     *
+     * <p>{@code LEFT JOIN} on destination because that parent is optional; the country join is inner
+     * because {@code country_id} is NOT NULL.
+     */
+    @Query("""
+            SELECT new com.crm.travelcrm.master.geography.repository.CityGeoRef(
+                       c.id, c.name, d.id, co.id)
+            FROM City c
+            LEFT JOIN c.destination d
+            JOIN c.country co
+            WHERE c.tenantId = :tenantId AND c.id IN :ids
+            """)
+    List<CityGeoRef> findGeoRefsByTenantIdAndIdIn(@Param("tenantId") Long tenantId,
+                                                  @Param("ids") Collection<Long> ids);
 
     /** Dropdown: all cities under a specific destination for this tenant, ordered by name. */
     List<City> findByTenantIdAndDestinationIdOrderByNameAsc(Long tenantId, Long destinationId);

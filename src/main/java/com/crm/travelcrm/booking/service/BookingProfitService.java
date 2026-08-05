@@ -18,9 +18,23 @@ import java.math.RoundingMode;
  * The single owner of a booking's profit.
  *
  * <pre>
+ *   totalVendorCosts   = SUM(active VENDOR expense rows, excluding marketplace payables)
  *   totalInternalCosts = SUM(active INTERNAL expense rows)
- *   netProfit          = customerAmount − vendorCost − totalInternalCosts
+ *   netProfit          = customerAmount − vendorCost − totalVendorCosts − totalInternalCosts
  * </pre>
+ *
+ * <p><b>Why the ledger's VENDOR rows are subtracted too.</b> They used to feed nothing, on the
+ * grounds that {@code vendorCost} "already represents everything paid to suppliers" and adding both
+ * would double-count. That reasoning only held while the field was actually filled in — it is
+ * OPTIONAL on the booking form, and agencies itemise supplier spend through the expense ledger
+ * instead, where every row defaults to {@code VENDOR}. The result was a ₹1,00,000 booking carrying
+ * ₹75,940 of ledger spend reporting ₹1,00,000 of profit. The two are now treated as ADDITIVE: the
+ * typed field is what the agent declared up front, the ledger is what was itemised afterwards.
+ *
+ * <p>The double-count that reasoning guarded against is real, but it has exactly one source —
+ * a hotel-marketplace payable, which is a VENDOR row AND is folded into {@code vendorCost} under a
+ * floor check. That is excluded in SQL by {@code sumVendorCosts}, so the two terms are disjoint by
+ * construction rather than by abstention.
  *
  * <p><b>Why a service and not a report query.</b> {@code netProfit} is read from six different
  * places (booking stats, page summary, the revenue report row + totals, the dashboard hero card and
@@ -74,11 +88,18 @@ public class BookingProfitService {
     @Transactional
     public boolean apply(Booking booking) {
         BigDecimal internalCosts = scale(expenseRepository.sumInternalCosts(booking.getId()));
+        BigDecimal vendorCosts   = scale(expenseRepository.sumVendorCosts(booking.getId()));
+
+        // The supplier total the formula actually uses: what the agent typed (which already carries
+        // any marketplace payable) plus what was itemised in the ledger. Computed here from the FRESH
+        // ledger sum rather than through booking.getTotalSupplierCost(), because the entity still
+        // holds the stale column at this point — the change guard below needs both values.
+        BigDecimal supplierCost = scale(nz(booking.getVendorCost()).add(vendorCosts));
 
         // A CANCELLED booking's profit is not the active formula. Nothing was delivered, so there is
         // no customerAmount to earn — what the agency actually made is the charge it retained under
         // the cancellation policy, less the costs it could not recover. Applying
-        // customerAmount − vendorCost − internalCosts to a cancelled row would report the margin of
+        // customerAmount − supplierCost − internalCosts to a cancelled row would report the margin of
         // a trip that never happened, and would do so the moment anyone edited an expense on it.
         //
         // The POLICY side stays frozen (finalChargeBase and sunkVendorCost are read from the record,
@@ -93,18 +114,20 @@ public class BookingProfitService {
                         .subtract(nz(cancellation.getSunkVendorCost()))
                         .subtract(internalCosts))
                 : scale(nz(booking.getCustomerAmount())
-                        .subtract(nz(booking.getVendorCost()))
+                        .subtract(supplierCost)
                         .subtract(internalCosts));
 
         // compareTo, not equals: BigDecimal.equals() is scale-sensitive, so 0 and 0.00 would read as
         // a change and dirty the row on every single call.
         boolean changed = internalCosts.compareTo(nz(booking.getTotalInternalCosts())) != 0
+                || vendorCosts.compareTo(nz(booking.getTotalVendorCosts())) != 0
                 || netProfit.compareTo(nz(booking.getNetProfit())) != 0;
         if (!changed) {
             return false;
         }
 
         booking.setTotalInternalCosts(internalCosts);
+        booking.setTotalVendorCosts(vendorCosts);
         booking.setNetProfit(netProfit);
         bookingRepository.save(booking);
 
@@ -116,8 +139,8 @@ public class BookingProfitService {
             cancellationRepository.save(cancellation);
         }
 
-        log.info("Profit recalculated for booking {} -> internalCosts {}, netProfit {}",
-                booking.getBookingCode(), internalCosts, netProfit);
+        log.info("Profit recalculated for booking {} -> vendorCosts {}, internalCosts {}, netProfit {}",
+                booking.getBookingCode(), vendorCosts, internalCosts, netProfit);
         return true;
     }
 
@@ -125,18 +148,41 @@ public class BookingProfitService {
      * Recompute the figures onto the entity WITHOUT saving — for callers that are mid-build on a
      * booking they are about to persist themselves (create and lead→booking conversion), where an
      * extra save would be a redundant round trip and, on create, would run before the row exists.
+     *
+     * <p>Both ledger sums are read here rather than passed in. They used to be the caller's job,
+     * which was survivable while there was one term but is a live footgun with two: a caller that
+     * fetched the internal sum and forgot the vendor one would silently zero a booking's itemised
+     * supplier cost and overstate its profit, with nothing in the type system to catch it. An
+     * un-persisted booking has no rows by definition, so it skips both queries.
      */
-    public void applyInMemory(Booking booking, BigDecimal internalCosts) {
-        BigDecimal costs = scale(internalCosts);
-        booking.setTotalInternalCosts(costs);
-        booking.setNetProfit(scale(
-                nz(booking.getCustomerAmount()).subtract(nz(booking.getVendorCost())).subtract(costs)));
+    public void applyInMemory(Booking booking) {
+        boolean persisted = booking.getId() > 0;
+        BigDecimal internalCosts = persisted
+                ? scale(expenseRepository.sumInternalCosts(booking.getId())) : BigDecimal.ZERO;
+        BigDecimal vendorCosts = persisted
+                ? scale(expenseRepository.sumVendorCosts(booking.getId())) : BigDecimal.ZERO;
+
+        booking.setTotalInternalCosts(internalCosts);
+        booking.setTotalVendorCosts(vendorCosts);
+        booking.setNetProfit(scale(nz(booking.getCustomerAmount())
+                .subtract(nz(booking.getVendorCost()))
+                .subtract(vendorCosts)
+                .subtract(internalCosts)));
     }
 
     /** The {@code totalInternalCosts} term on its own — active INTERNAL rows only. */
     @Transactional(readOnly = true)
     public BigDecimal internalCostsOf(Long bookingId) {
         return scale(expenseRepository.sumInternalCosts(bookingId));
+    }
+
+    /**
+     * The {@code totalVendorCosts} term on its own — active, non-marketplace VENDOR rows only.
+     * Sibling of {@link #internalCostsOf}.
+     */
+    @Transactional(readOnly = true)
+    public BigDecimal vendorCostsOf(Long bookingId) {
+        return scale(expenseRepository.sumVendorCosts(bookingId));
     }
 
     private static BigDecimal scale(BigDecimal v) {

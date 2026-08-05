@@ -856,6 +856,11 @@ public class QuotationServiceImpl implements QuotationService {
         c.setDiscountType(src.getDiscountType());
         c.setTax(src.getTax());
         c.setMarkup(src.getMarkup());
+
+        // Provenance travels with the family. Same manual-copy hazard as allowedServices/templateStyle
+        // above: omit it and every duplicate/new-version silently detaches from the package it came
+        // from, which is exactly what would make a per-template conversion rate under-count.
+        c.setSourceTemplatePublicId(src.getSourceTemplatePublicId());
         return c;
     }
 

@@ -48,11 +48,30 @@ public class CreateBookingRequestDTO {
     @Digits(integer = 10, fraction = 2, message = "Invalid amount format")
     private BigDecimal customerAmount;
 
-    @NotNull(message = "Vendor cost is required")
-    @DecimalMin(value = "0.0", inclusive = false,
-            message = "Vendor cost must be greater than 0")
+    /**
+     * What this booking costs in supplier money, as declared up front. OPTIONAL, and inclusive of
+     * zero — it used to be {@code @NotNull} with an exclusive minimum, which forced the agent to
+     * commit to a supplier figure at the moment of sale, before anything had been booked.
+     *
+     * <p>That requirement stopped making sense when the expense ledger began feeding
+     * {@code netProfit}: supplier spend is now itemised per line as the trip is arranged, and
+     * {@code netProfit = customerAmount − vendorCost − totalVendorCosts − totalInternalCosts} is
+     * correct whether the agent declares a lump sum here, itemises later, or does both. Absent means
+     * zero, not "unknown" — the column is {@code NOT NULL} and the ledger carries the detail.
+     *
+     * <p>The form pairs it with {@link #vendorPublicId}: an amount is only asked for once a supplier
+     * has been chosen, so a figure here without a payee no longer happens through the UI.
+     */
+    @DecimalMin(value = "0.0", message = "Vendor cost cannot be negative")
     @Digits(integer = 10, fraction = 2, message = "Invalid amount format")
     private BigDecimal vendorCost;
+
+    /**
+     * The supplier {@link #vendorCost} is owed to, by {@code publicId}. Optional. Resolved and
+     * name-snapshotted server-side against THIS tenant's vendor master; an unknown or cross-tenant
+     * id is a 404 rather than a silently ignored field.
+     */
+    private java.util.UUID vendorPublicId;
 
     /**
      * Whether this is an overseas tour programme package. Drives TCS when the tenant's policy is

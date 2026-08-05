@@ -13,6 +13,8 @@ import com.crm.travelcrm.accounting.settings.repository.AccountingSettingsReposi
 import com.crm.travelcrm.accounting.tds.entity.VendorBill;
 import com.crm.travelcrm.accounting.tds.enums.VendorBillStatus;
 import com.crm.travelcrm.accounting.tds.repository.VendorBillRepository;
+import com.crm.travelcrm.booking.enums.ExpenseCostType;
+import com.crm.travelcrm.booking.repository.BookingExpenseRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,6 +43,7 @@ public class AccountingReportService {
     private final TaxInvoiceLineRepository lineRepository;
     private final VendorBillRepository vendorBillRepository;
     private final AccountingSettingsRepository settingsRepository;
+    private final BookingExpenseRepository bookingExpenseRepository;
 
     // ── P&L ────────────────────────────────────────────────────────────────────
 
@@ -70,9 +73,29 @@ public class AccountingReportService {
             inputGst = inputGst.add(nz(b.getGstInput()));
             tds = tds.add(nz(b.getTdsAmount()));
         }
+        // The per-booking expense ledger — the agency's OWN cash record of what each booking cost,
+        // which until now this report ignored entirely. That left the booking screen and the P&L
+        // quoting two different profits for the same trip: a ₹1,00,000 booking with ₹75,940 of ledger
+        // spend showed ₹24,060 on the booking and a full ₹1,00,000 of margin here.
+        //
+        // Accrued by expenseDate, matching how invoices and bills are accrued by their own document
+        // dates. Kept as its own line rather than folded into vendorCostNet — see PnlReportResponse.
+        List<BookingExpenseRepository.ExpenseLedgerLine> ledger =
+                bookingExpenseRepository.findLedgerLinesForPeriod(tenantId, start, end);
+
+        BigDecimal expVendor = BigDecimal.ZERO, expInternal = BigDecimal.ZERO;
+        for (BookingExpenseRepository.ExpenseLedgerLine l : ledger) {
+            if (l.getCostType() == ExpenseCostType.INTERNAL) {
+                expInternal = expInternal.add(nz(l.getAmount()));
+            } else {
+                expVendor = expVendor.add(nz(l.getAmount()));
+            }
+        }
+        BigDecimal expTotal = expVendor.add(expInternal);
+
         BigDecimal inputCredit = itc ? inputGst : BigDecimal.ZERO;
         BigDecimal vendorNet = vendorGross.subtract(inputCredit);
-        BigDecimal margin = taxableRevenue.subtract(vendorNet);
+        BigDecimal margin = taxableRevenue.subtract(vendorNet).subtract(expTotal);
         BigDecimal marginPct = taxableRevenue.signum() > 0
                 ? margin.multiply(BigDecimal.valueOf(100)).divide(taxableRevenue, 2, RoundingMode.HALF_UP)
                 : BigDecimal.ZERO;
@@ -84,15 +107,21 @@ public class AccountingReportService {
                 .purchaseCount(bills.size())
                 .vendorCostGross(scale(vendorGross)).inputGstCredit(scale(inputCredit))
                 .vendorCostNet(scale(vendorNet)).tdsDeducted(scale(tds))
+                .bookingExpenseCount(ledger.size())
+                .bookingExpenseVendor(scale(expVendor)).bookingExpenseInternal(scale(expInternal))
+                .bookingExpenseTotal(scale(expTotal))
                 .grossMargin(scale(margin)).grossMarginPct(marginPct)
                 .netGstPayable(scale(outputGst.subtract(inputCredit)))
                 .inputTaxCreditEligible(itc)
-                .monthly(monthly(invoices, bills, itc))
+                .monthly(monthly(invoices, bills, ledger, itc))
                 .build();
     }
 
-    private List<PnlReportResponse.MonthlyRow> monthly(List<TaxInvoice> invoices, List<VendorBill> bills, boolean itc) {
-        Map<YearMonth, BigDecimal[]> m = new TreeMap<>();  // [revenue, outputGst, vendorNet]
+    private List<PnlReportResponse.MonthlyRow> monthly(List<TaxInvoice> invoices,
+                                                       List<VendorBill> bills,
+                                                       List<BookingExpenseRepository.ExpenseLedgerLine> ledger,
+                                                       boolean itc) {
+        Map<YearMonth, BigDecimal[]> m = new TreeMap<>();  // [revenue, outputGst, vendorNet, bookingExpenses]
         for (TaxInvoice i : invoices) {
             BigDecimal[] a = m.computeIfAbsent(YearMonth.from(i.getInvoiceDate()), k -> zeros());
             a[0] = a[0].add(nz(i.getTaxableValue()));
@@ -103,13 +132,18 @@ public class AccountingReportService {
             BigDecimal net = nz(b.getGrossAmount()).subtract(itc ? nz(b.getGstInput()) : BigDecimal.ZERO);
             a[2] = a[2].add(net);
         }
+        for (BookingExpenseRepository.ExpenseLedgerLine l : ledger) {
+            BigDecimal[] a = m.computeIfAbsent(YearMonth.from(l.getExpenseDate()), k -> zeros());
+            a[3] = a[3].add(nz(l.getAmount()));
+        }
         List<PnlReportResponse.MonthlyRow> rows = new ArrayList<>();
         for (Map.Entry<YearMonth, BigDecimal[]> e : m.entrySet()) {
             BigDecimal[] a = e.getValue();
             rows.add(PnlReportResponse.MonthlyRow.builder()
                     .month(e.getKey().toString())
                     .taxableRevenue(scale(a[0])).outputGst(scale(a[1]))
-                    .vendorCostNet(scale(a[2])).grossMargin(scale(a[0].subtract(a[2])))
+                    .vendorCostNet(scale(a[2])).bookingExpenses(scale(a[3]))
+                    .grossMargin(scale(a[0].subtract(a[2]).subtract(a[3])))
                     .build());
         }
         return rows;
@@ -187,7 +221,7 @@ public class AccountingReportService {
     }
 
     private static BigDecimal[] zeros() {
-        return new BigDecimal[]{BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO};
+        return new BigDecimal[]{BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO};
     }
 
     private static BigDecimal[] zeros5() {

@@ -137,6 +137,7 @@ public class BookingServiceImpl implements BookingService {
     private final CancellationPolicyResolver policyResolver;
     private final CancellationCalculator cancellationCalculator;
     private final BookingCancellationRepository cancellationRepository;
+    private final com.crm.travelcrm.vendor.repository.VendorRepository vendorRepository;
     private final CancellationDocumentService cancellationDocumentService;
     private final SubAgentScope subAgentScope;
     private final SubAgentCommissionService commissionService;
@@ -215,6 +216,10 @@ public class BookingServiceImpl implements BookingService {
         // Traveller / departure / itinerary detail. Attached before save so the cascade persists it
         // in the same transaction as the booking it belongs to.
         booking.attachTripSnapshot(buildTripSnapshot(request.getTripSnapshot()));
+
+        // Who the vendorCost is owed to. Resolved before the financials so a bad vendor id fails the
+        // request before any money field is written.
+        applyVendorLink(booking, request.getVendorPublicId());
 
         BigDecimal initialPaid = request.getPaidAmount() != null
                 ? request.getPaidAmount() : BigDecimal.ZERO;
@@ -848,6 +853,16 @@ public class BookingServiceImpl implements BookingService {
         // under it. That is also how CrmBookingLinkAdapter.syncVendorCost reads the field back
         // (typedPortion = vendorCost − marketplacePayable), so writer and reader now agree on what the
         // column means.
+        // Patch semantics: only re-point the vendor when the client actually sent one. Treating a
+        // null as "clear it" would silently unlink the supplier on every partial update that does not
+        // carry the field — which is most of them. Unlinking is therefore its own explicit flag, and
+        // it wins over a publicId sent alongside it.
+        if (Boolean.TRUE.equals(request.getClearVendor())) {
+            applyVendorLink(booking, null);
+        } else if (request.getVendorPublicId() != null) {
+            applyVendorLink(booking, request.getVendorPublicId());
+        }
+
         if (request.getVendorCost() != null) {
             BigDecimal marketplacePayable = nz(expenseRepository.sumMarketplacePayable(booking.getId()));
             if (nz(booking.getVendorCost()).compareTo(marketplacePayable) < 0) {
@@ -1713,12 +1728,9 @@ public class BookingServiceImpl implements BookingService {
 
         // Profit is NOT computed here — BookingProfitService is its only writer, so the formula lives
         // in exactly one place and the expense ledger and the booking edit can never disagree about
-        // it. On create/convert the row has no id yet and therefore no expense lines, so the internal
-        // cost term is zero; on an edit it is re-read from the ledger.
-        BigDecimal internalCosts = booking.getId() > 0
-                ? profitService.internalCostsOf(booking.getId())
-                : BigDecimal.ZERO;
-        profitService.applyInMemory(booking, internalCosts);
+        // it. It re-reads both ledger terms itself; on create/convert the row has no id yet and
+        // therefore no expense lines, so both are zero.
+        profitService.applyInMemory(booking);
 
         booking.setPaymentStatus(
                 derivePaymentStatus(booking.getPaidAmount(), totalPayable, booking.getPaymentStatus()));
@@ -1780,6 +1792,33 @@ public class BookingServiceImpl implements BookingService {
                     booking.setCancellationPolicyVersion(p.getVersion());
                 }, () -> log.warn("No cancellation policy resolved for booking {} (tenant {}); "
                         + "it will be resolved and pinned at cancel time", booking.getBookingCode(), tenantId));
+    }
+
+    /**
+     * Resolve the supplier a booking's typed {@code vendorCost} is owed to, and snapshot its name.
+     *
+     * <p>Tenant-scoped by construction — {@code findByPublicIdAndTenantId}, never a bare
+     * {@code findById}, which Hibernate's {@code tenantFilter} does not cover and which would let a
+     * booking point at another agency's vendor. A publicId that resolves to nothing is a 404 rather
+     * than a silently dropped field: the agent chose a supplier, and a booking that quietly forgot it
+     * would send them looking for a payee that is not there.
+     *
+     * <p>Passing {@code null} CLEARS the link. That is the create contract (no vendor chosen) and,
+     * on update, is unreachable by accident — the patch DTO treats null as "leave alone" and only
+     * calls this when the client actually sent a value.
+     */
+    private void applyVendorLink(Booking booking, java.util.UUID vendorPublicId) {
+        if (vendorPublicId == null) {
+            booking.setVendorPublicId(null);
+            booking.setVendorName(null);
+            return;
+        }
+        var vendor = vendorRepository
+                .findByPublicIdAndTenantId(vendorPublicId, requireTenantId())
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Vendor not found: " + vendorPublicId));
+        booking.setVendorPublicId(vendor.getPublicId());
+        booking.setVendorName(vendor.getVendorName());
     }
 
     /** Create/convert path: set the initial paidAmount, then compute totals + status. */

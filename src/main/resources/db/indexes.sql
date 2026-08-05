@@ -962,3 +962,67 @@ BEGIN
         ADD COLUMN IF NOT EXISTS task_overdue_alert_whatsapp boolean NOT NULL DEFAULT false,
         ADD COLUMN IF NOT EXISTS task_overdue_alert_email    boolean NOT NULL DEFAULT false;
 END $do$;
+
+-- ── bookings.total_vendor_costs: the supplier half of the expense ledger ────
+-- Mirrors V3__booking_vendor_expense_profit.sql for the SQL_INIT_MODE=always path. Both must stay in
+-- step: Flyway databases get the column from V3, sql.init databases get it from here — ddl-auto is
+-- `validate` on every profile, so Hibernate creates NOTHING and a box that runs neither simply fails
+-- to boot on the missing column.
+--
+-- netProfit is now customer_amount − vendor_cost − total_vendor_costs − total_internal_costs. The
+-- marketplace_booking_public_id IS NULL predicate is load-bearing, not tidiness: a marketplace
+-- payable is a VENDOR expense row that is ALSO already folded into bookings.vendor_cost, so counting
+-- it here too would subtract the same rupees twice.
+DO $do$
+BEGIN
+    IF to_regclass('public.bookings') IS NULL THEN
+        RETURN;
+    END IF;
+
+    ALTER TABLE bookings ADD COLUMN IF NOT EXISTS total_vendor_costs numeric(12,2) NOT NULL DEFAULT 0;
+
+    -- Which supplier the typed vendor_cost is owed to. publicId + name snapshot, mirroring
+    -- customer_public_id + customer_name_snapshot on this same table. Both nullable: vendor_cost is
+    -- optional now, so a booking with no supplier chosen is the normal case.
+    ALTER TABLE bookings ADD COLUMN IF NOT EXISTS vendor_public_id uuid;
+    ALTER TABLE bookings ADD COLUMN IF NOT EXISTS vendor_name      varchar(200);
+
+    CREATE INDEX IF NOT EXISTS idx_booking_vendor
+        ON bookings (tenant_id, vendor_public_id) WHERE deleted_at IS NULL;
+
+    -- Booking is @Audited: without the columns on the audit twin the SessionFactory refuses to build
+    -- and the app does not boot. Nullable — _aud rows are historical snapshots.
+    IF to_regclass('public.bookings_aud') IS NOT NULL THEN
+        ALTER TABLE bookings_aud ADD COLUMN IF NOT EXISTS total_vendor_costs numeric(12,2);
+        ALTER TABLE bookings_aud ADD COLUMN IF NOT EXISTS vendor_public_id   uuid;
+        ALTER TABLE bookings_aud ADD COLUMN IF NOT EXISTS vendor_name        varchar(200);
+    END IF;
+
+    IF to_regclass('public.booking_expenses') IS NULL THEN
+        RETURN;
+    END IF;
+
+    UPDATE bookings b
+    SET total_vendor_costs = COALESCE((
+            SELECT SUM(e.amount) FROM booking_expenses e
+            WHERE e.booking_id = b.id
+              AND e.cost_type = 'VENDOR'
+              AND e.marketplace_booking_public_id IS NULL
+              AND e.deleted_at IS NULL), 0)
+    WHERE b.total_vendor_costs IS DISTINCT FROM COALESCE((
+            SELECT SUM(e.amount) FROM booking_expenses e
+            WHERE e.booking_id = b.id
+              AND e.cost_type = 'VENDOR'
+              AND e.marketplace_booking_public_id IS NULL
+              AND e.deleted_at IS NULL), 0);
+
+    -- CANCELLED/REFUNDED rows are skipped: their net_profit is the FROZEN cancellation margin, not
+    -- the active formula, and a credit note already quotes it to the customer.
+    UPDATE bookings
+    SET net_profit = ROUND(COALESCE(customer_amount, 0) - COALESCE(vendor_cost, 0)
+                         - COALESCE(total_vendor_costs, 0) - COALESCE(total_internal_costs, 0), 2)
+    WHERE deleted_at IS NULL
+      AND status NOT IN ('CANCELLED', 'REFUNDED')
+      AND net_profit IS DISTINCT FROM ROUND(COALESCE(customer_amount, 0) - COALESCE(vendor_cost, 0)
+                         - COALESCE(total_vendor_costs, 0) - COALESCE(total_internal_costs, 0), 2);
+END $do$;

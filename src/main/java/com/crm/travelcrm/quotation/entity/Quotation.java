@@ -313,6 +313,18 @@ public class Quotation extends BaseTenantEntity implements Ownable {
     @Column(name = "cancellation_policy_public_id")
     private java.util.UUID cancellationPolicyPublicId;
 
+    /**
+     * The {@code QuotationTemplate.publicId} this quotation was cloned from, when it came out of the
+     * Suggested-Packages flow. Logical reference with no DB FK, like {@link #leadId}.
+     *
+     * <p>Read-only signal, never used to price or render anything. It exists so the chain
+     * template → quotation → booking is traversable end to end ({@code Booking.sourceQuotationPublicId}
+     * already closes the second hop), which is what makes a real per-template conversion rate
+     * computable — the strongest tie-breaker the matcher could eventually have.
+     */
+    @Column(name = "source_template_public_id")
+    private java.util.UUID sourceTemplatePublicId;
+
     @ElementCollection(fetch = FetchType.LAZY)
     @CollectionTable(name = "quotation_booking_terms", joinColumns = @JoinColumn(name = "quotation_id"))
     @Column(name = "item", columnDefinition = "TEXT")

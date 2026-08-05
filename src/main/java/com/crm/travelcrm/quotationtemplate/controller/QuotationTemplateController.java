@@ -7,6 +7,8 @@ import com.crm.travelcrm.quotation.dto.QuotationResponseDto;
 import com.crm.travelcrm.quotationtemplate.dto.ApplyTemplateRequest;
 import com.crm.travelcrm.quotationtemplate.dto.QuotationTemplateRequest;
 import com.crm.travelcrm.quotationtemplate.dto.QuotationTemplateResponse;
+import com.crm.travelcrm.quotationtemplate.dto.SaveAsTemplatePreview;
+import com.crm.travelcrm.quotationtemplate.dto.SaveAsTemplateRequest;
 import com.crm.travelcrm.quotationtemplate.dto.TemplateMatchRequest;
 import com.crm.travelcrm.quotationtemplate.dto.TemplateMatchResponse;
 import com.crm.travelcrm.quotationtemplate.service.QuotationTemplateService;
@@ -104,6 +106,36 @@ public class QuotationTemplateController {
         log.info("POST /api/quotation-templates/match | lead: {}", request.getLeadId());
         return ResponseEntity.ok(ApiResponse.success(
                 "Matching templates fetched successfully", matchService.match(request)));
+    }
+
+    // ── Save as Template (quotation → template) ───────────────────────────────
+
+    /**
+     * What capturing this quotation would produce — derived name, nights, tier, price, the resolved
+     * cities, and the sections a template cannot hold. Writes nothing.
+     *
+     * <p>A separate call rather than fields on the save request because the modal must be able to
+     * show the losses <i>before</i> the agent commits. Computing them server-side is what stops the
+     * dialog and the actual behaviour from drifting apart.
+     */
+    @GetMapping("/from-quotation/{quotationPublicId}/preview")
+    public ResponseEntity<ApiResponse<SaveAsTemplatePreview>> previewFromQuotation(
+            @PathVariable UUID quotationPublicId) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Template preview generated successfully",
+                templateService.previewFromQuotation(quotationPublicId)));
+    }
+
+    /** Capture a saved quotation as a package template, or overwrite an existing one. */
+    @PostMapping("/from-quotation")
+    @PreAuthorize("hasAuthority('QUOTATION_CREATE')")
+    public ResponseEntity<ApiResponse<QuotationTemplateResponse>> saveFromQuotation(
+            @Valid @RequestBody SaveAsTemplateRequest request) {
+        log.info("POST /api/quotation-templates/from-quotation | quotation: {} | update: {}",
+                request.getQuotationId(), request.getUpdateTemplateId());
+        QuotationTemplateResponse response = templateService.saveFromQuotation(request);
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiResponse.success("Template saved successfully", response, 201));
     }
 
     // ── Apply (clone → edit) ──────────────────────────────────────────────────

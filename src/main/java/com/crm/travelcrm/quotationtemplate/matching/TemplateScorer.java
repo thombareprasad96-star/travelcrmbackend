@@ -9,13 +9,15 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
- * Rule-based similarity between a lead and a package template, over five weighted dimensions:
- * destination, duration, hotel tier, budget and season.
+ * Rule-based similarity between a lead and a package template, over six weighted dimensions:
+ * destination, duration, hotel tier, budget, season and services.
  *
  * <p><b>Pure by construction.</b> Every method takes records and returns records; the class holds
  * no repository and no entity. Its unit test constructs it with nothing but a {@link MatchWeights},
@@ -27,6 +29,10 @@ import java.util.Map;
  * weight is redistributed across the rest — the percentage is always
  * {@code Σ(wᵢ·sᵢ) / Σ(wᵢ)} over the applicable components. When nothing applies at all, the score is
  * 0 rather than a division by zero.
+ *
+ * <p>That rule is also what makes new dimensions safe to add: a template authored before
+ * {@code services} existed lists none, the dimension goes inapplicable, and its score is bit-for-bit
+ * what it was before.
  *
  * <h2>One deliberate asymmetry</h2>
  * Missing data on the <i>template</i> side also yields "not applicable" — an agent who hasn't set a
@@ -42,6 +48,7 @@ public class TemplateScorer {
     static final String HOTEL_TIER  = "hotelTier";
     static final String BUDGET      = "budget";
     static final String SEASON      = "season";
+    static final String SERVICES    = "services";
 
     /** Coverage ("did it include what they asked for") dominates; Jaccard breaks ties on bloat. */
     private static final double COVERAGE_SHARE = 0.75;
@@ -66,30 +73,63 @@ public class TemplateScorer {
                 scoreDuration(in, template),
                 scoreHotelTier(in, template),
                 scoreBudget(in, template),
-                scoreSeason(in, template));
+                scoreSeason(in, template),
+                scoreServices(in, template));
         return new MatchScore(renormalize(components), components);
     }
 
     /**
-     * Score every template, drop those under {@link MatchWeights#getMinScore()}, and order them so
-     * the same inputs always produce the same list: percentage desc, then the template that could be
-     * scored on more dimensions, then name, then id.
+     * Score every template and order them so the same inputs always produce the same list — but
+     * filter nothing. The caller decides what to do with the ones below
+     * {@link MatchWeights#getMinScore()}: {@link #rank} drops them, the cold-start fallback offers
+     * the best of them when nothing at all cleared the bar.
      */
-    public List<RankedTemplate> rank(MatchInput in, Collection<TemplateProfile> templates) {
+    public List<RankedTemplate> rankAll(MatchInput in, Collection<TemplateProfile> templates) {
         if (templates == null || templates.isEmpty()) return List.of();
-        List<RankedTemplate> ranked = new ArrayList<>();
+        List<RankedTemplate> ranked = new ArrayList<>(templates.size());
         for (TemplateProfile t : templates) {
-            MatchScore s = score(in, t);
-            if (s.percentage() >= weights.getMinScore()) {
-                ranked.add(new RankedTemplate(t, s));
-            }
+            ranked.add(new RankedTemplate(t, score(in, t)));
         }
         ranked.sort(RANKING);
         return List.copyOf(ranked);
     }
 
+    /**
+     * Score every template, drop those under {@link MatchWeights#getMinScore()}, and order them so
+     * the same inputs always produce the same list: percentage desc, then the template that has
+     * actually been used more, then the one that could be scored on more dimensions, then name,
+     * then id.
+     */
+    public List<RankedTemplate> rank(MatchInput in, Collection<TemplateProfile> templates) {
+        int floor = weights.getMinScore();
+        return rankAll(in, templates).stream()
+                .filter(r -> r.score().percentage() >= floor)
+                .toList();
+    }
+
+    /**
+     * The highest percentage a template covering NONE of the requested cities can still reach —
+     * {@code 100·(Σw − w_destination)/Σw} with every other dimension perfect and applicable.
+     *
+     * <p>This is the safety bound for any future SQL pre-filter on geography. Pre-selecting
+     * candidates by city is only sound when {@link MatchWeights#getMinScore()} is <b>above</b> this
+     * number. At the shipped weights (0.35 destination out of 1.10 total) it is <b>68</b>, far above
+     * the threshold of 40 — so a city pre-filter would silently discard templates that were going to
+     * be shown. See the note on {@code TemplateMatchServiceImpl.loadCandidates}.
+     */
+    public int maxScoreWithoutDestination() {
+        double total = weight(weights.getDestination()) + weight(weights.getDuration())
+                + weight(weights.getHotelTier()) + weight(weights.getBudget())
+                + weight(weights.getSeason()) + weight(weights.getServices());
+        if (total <= 0) return 0;
+        return (int) Math.round(100.0 * (total - weight(weights.getDestination())) / total);
+    }
+
     private static final Comparator<RankedTemplate> RANKING =
             Comparator.<RankedTemplate>comparingInt(r -> r.score().percentage()).reversed()
+                    // Popularity breaks EXACT ties only — percentage is compared first, so this can
+                    // never lift a worse match above a better one.
+                    .thenComparing(Comparator.<RankedTemplate>comparingInt(r -> r.template().timesApplied()).reversed())
                     .thenComparing(Comparator.<RankedTemplate>comparingLong(r -> r.score().applicableCount()).reversed())
                     .thenComparing(r -> r.template().name(),
                             Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER))
@@ -102,6 +142,12 @@ public class TemplateScorer {
     /**
      * Coverage of the lead's cities by the template's, blended with Jaccard so that between two
      * templates covering every requested city, the one carrying less unrequested baggage wins.
+     *
+     * <p>Coverage is <b>graded</b>: an exact city is worth 1, a different city in the same
+     * destination {@link MatchWeights#getNearMissDestination()}, a different destination in the same
+     * country {@link MatchWeights#getNearMissCountry()}. A Sikkim package should not read as a near
+     * total miss for a Sikkim trip that happens to name different towns. Jaccard stays on strict
+     * identity, so near-misses raise coverage without also disguising bloat.
      */
     private ComponentScore scoreDestination(MatchInput in, TemplateProfile t) {
         double w = weight(weights.getDestination());
@@ -117,23 +163,37 @@ public class TemplateScorer {
                     "Package lists no cities");
         }
 
-        List<CityRef> hits = wanted.stream().filter(c -> containsMatch(offered, c)).toList();
+        double creditSum = 0.0;
+        int exact = 0;
+        int near = 0;
+        for (CityRef c : wanted) {
+            double credit = bestCredit(c, offered);
+            creditSum += credit;
+            if (credit >= 1.0) exact++;
+            else if (credit > 0.0) near++;
+        }
         long offeredHits = offered.stream().filter(c -> containsMatch(wanted, c)).count();
 
         // Matching is by id OR by name, so it is not necessarily a bijection. The smaller count is
         // the only safe size for the intersection.
-        long intersection = Math.min(hits.size(), offeredHits);
+        long intersection = Math.min(exact, offeredHits);
         long union = wanted.size() + offered.size() - intersection;
 
-        double coverage = (double) hits.size() / wanted.size();
+        double coverage = creditSum / wanted.size();
         double jaccard = union == 0 ? 0.0 : (double) intersection / union;
         double score = COVERAGE_SHARE * coverage + (1 - COVERAGE_SHARE) * jaccard;
 
         int extra = offered.size() - (int) offeredHits;
-        String detail = hits.size() + " of " + wanted.size() + " requested "
-                + (wanted.size() == 1 ? "city" : "cities") + " covered"
-                + (extra > 0 ? ", " + extra + " extra in package" : "");
-        return ComponentScore.of(DESTINATION, "Destination", w, score, detail);
+        StringBuilder detail = new StringBuilder()
+                .append(exact).append(" of ").append(wanted.size()).append(" requested ")
+                .append(wanted.size() == 1 ? "city" : "cities").append(" covered");
+        if (near > 0) {
+            detail.append(", ").append(near).append(" nearby");
+        }
+        if (extra > 0) {
+            detail.append(", ").append(extra).append(" extra in package");
+        }
+        return ComponentScore.of(DESTINATION, "Destination", w, score, detail.toString());
     }
 
     /** Relative to what the customer asked for: a 1-night gap matters more on a 3-night trip. */
@@ -233,6 +293,54 @@ public class TemplateScorer {
         return ComponentScore.of(SEASON, "Season", w, score, detail);
     }
 
+    /**
+     * Does the package cover what the customer actually asked for? Importance-weighted, because a
+     * package missing the flights is far more wrong than one missing the visa assistance, and a
+     * plain set overlap cannot say so.
+     *
+     * <p>Asymmetric like destination: the denominator is what was <i>requested</i>, so extra
+     * services the package throws in are free. Both sides arrive already normalised to the section
+     * vocabulary by the service layer — the scorer only lower-cases and de-duplicates, so it stays
+     * ignorant of the domain and testable with any strings.
+     */
+    private ComponentScore scoreServices(MatchInput in, TemplateProfile t) {
+        double w = weight(weights.getServices());
+        List<String> wanted = distinctServices(in.services());
+        if (wanted.isEmpty()) {
+            return ComponentScore.notApplicable(SERVICES, "Services", w, "Lead listed no services");
+        }
+        Set<String> offered = Set.copyOf(distinctServices(t.services()));
+        if (offered.isEmpty()) {
+            // "Not stated", not "covers nothing" — every template authored before this dimension
+            // existed lists none, and must keep exactly the score it had.
+            return ComponentScore.notApplicable(SERVICES, "Services", w,
+                    "Package does not list its services");
+        }
+
+        int total = 0;
+        int matched = 0;
+        int matchedCount = 0;
+        List<String> missing = new ArrayList<>();
+        for (String s : wanted) {
+            int importance = importanceOf(s);
+            total += importance;
+            if (offered.contains(s)) {
+                matched += importance;
+                matchedCount++;
+            } else {
+                missing.add(s);
+            }
+        }
+
+        double score = total <= 0 ? 0.0 : (double) matched / total;
+        String detail = missing.isEmpty()
+                ? "all " + wanted.size() + " requested "
+                        + (wanted.size() == 1 ? "service" : "services") + " included"
+                : matchedCount + " of " + wanted.size() + " requested services — no "
+                        + String.join(", ", missing);
+        return ComponentScore.of(SERVICES, "Services", w, score, detail);
+    }
+
     // ════════════════════════════════════════════════════════════════════════
     //  Helpers
     // ════════════════════════════════════════════════════════════════════════
@@ -254,6 +362,25 @@ public class TemplateScorer {
         return Math.max(0, Math.min(100, pct));
     }
 
+    /** Best credit any offered city earns against this requested one: exact 1, then the ladder. */
+    private double bestCredit(CityRef wanted, List<CityRef> offered) {
+        double best = 0.0;
+        for (CityRef o : offered) {
+            double credit;
+            if (wanted.matches(o)) {
+                return 1.0;                       // nothing can beat an exact city
+            } else if (wanted.sameDestinationAs(o)) {
+                credit = clampUnit(weights.getNearMissDestination());
+            } else if (wanted.sameCountryAs(o)) {
+                credit = clampUnit(weights.getNearMissCountry());
+            } else {
+                continue;
+            }
+            if (credit > best) best = credit;
+        }
+        return best;
+    }
+
     /** Distinct by canonical key, blanks dropped, order preserved for stable detail strings. */
     private static List<CityRef> distinctCities(List<CityRef> cities) {
         if (cities == null || cities.isEmpty()) return List.of();
@@ -263,6 +390,26 @@ public class TemplateScorer {
             byKey.putIfAbsent(c.canonicalKey(), c);
         }
         return List.copyOf(byKey.values());
+    }
+
+    /** Lower-cased, trimmed, de-duplicated, order preserved. Blanks dropped. */
+    private static List<String> distinctServices(List<String> services) {
+        if (services == null || services.isEmpty()) return List.of();
+        Set<String> seen = new LinkedHashSet<>();
+        for (String s : services) {
+            if (s == null) continue;
+            String key = s.trim().toLowerCase(Locale.ROOT);
+            if (!key.isEmpty()) seen.add(key);
+        }
+        return List.copyOf(seen);
+    }
+
+    /** Configured importance, or the default for a service id nobody has declared. */
+    private int importanceOf(String service) {
+        Map<String, Integer> map = weights.getServiceImportance();
+        Integer configured = map == null ? null : map.get(service);
+        int value = configured != null ? configured : weights.getDefaultServiceImportance();
+        return Math.max(0, value);
     }
 
     private static boolean containsMatch(List<CityRef> haystack, CityRef needle) {
@@ -292,5 +439,11 @@ public class TemplateScorer {
 
     private static double nonNegative(double v) {
         return Double.isNaN(v) || v < 0 ? 0.0 : v;
+    }
+
+    /** A near-miss credit above 1 would outrank an exact city; clamp rather than trust config. */
+    private static double clampUnit(double v) {
+        if (Double.isNaN(v)) return 0.0;
+        return Math.max(0.0, Math.min(1.0, v));
     }
 }

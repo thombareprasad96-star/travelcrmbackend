@@ -4,6 +4,8 @@ import com.crm.travelcrm.quotation.dto.QuotationResponseDto;
 import com.crm.travelcrm.quotationtemplate.dto.ApplyTemplateRequest;
 import com.crm.travelcrm.quotationtemplate.dto.QuotationTemplateRequest;
 import com.crm.travelcrm.quotationtemplate.dto.QuotationTemplateResponse;
+import com.crm.travelcrm.quotationtemplate.dto.SaveAsTemplatePreview;
+import com.crm.travelcrm.quotationtemplate.dto.SaveAsTemplateRequest;
 import org.springframework.data.domain.Page;
 
 import java.util.UUID;
@@ -27,4 +29,13 @@ public interface QuotationTemplateService {
      * agent to open in the builder and edit.
      */
     QuotationResponseDto apply(UUID templatePublicId, ApplyTemplateRequest request);
+
+    /**
+     * What "Save as Template" would capture from this quotation — derived defaults, resolved cities,
+     * what is dropped, and the nearest existing template. Writes nothing.
+     */
+    SaveAsTemplatePreview previewFromQuotation(UUID quotationPublicId);
+
+    /** Capture a quotation as a reusable package, creating a new template or updating an existing one. */
+    QuotationTemplateResponse saveFromQuotation(SaveAsTemplateRequest request);
 }

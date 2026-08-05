@@ -39,7 +39,13 @@ public interface BookingMapper {
     @Mapping(target = "tcs",                    ignore = true)  // calculated by service
     @Mapping(target = "totalPayable",           ignore = true)  // calculated by service
     @Mapping(target = "totalInternalCosts",     ignore = true)  // summed from the expense ledger
+    @Mapping(target = "totalVendorCosts",       ignore = true)  // summed from the expense ledger
     @Mapping(target = "netProfit",              ignore = true)  // calculated by BookingProfitService
+    // The DTO carries a vendor publicId; the entity carries publicId + a name snapshot. Both are set
+    // by the service after a tenant-scoped lookup — a client must never be able to name a vendor the
+    // master does not agree with. Ignored here so MapStruct does not wire the id through unvalidated.
+    @Mapping(target = "vendorPublicId",         ignore = true)  // resolved + validated by service
+    @Mapping(target = "vendorName",             ignore = true)  // snapshotted by service
     @Mapping(target = "paidAmount",             ignore = true)  // starts at 0
     @Mapping(target = "refundedAmount",         ignore = true)  // starts at 0; owned by the refund flow
     @Mapping(target = "status",                 ignore = true)  // starts as PENDING
@@ -92,7 +98,10 @@ public interface BookingMapper {
     @Mapping(target = "paidAmount",             ignore = true)  // updated via payment endpoint only
     @Mapping(target = "refundedAmount",         ignore = true)  // updated via refund flow only
     @Mapping(target = "totalInternalCosts",     ignore = true)  // summed from the expense ledger
+    @Mapping(target = "totalVendorCosts",       ignore = true)  // summed from the expense ledger
     @Mapping(target = "netProfit",              ignore = true)  // recalculated by BookingProfitService
+    @Mapping(target = "vendorPublicId",         ignore = true)  // resolved + validated by service
+    @Mapping(target = "vendorName",             ignore = true)  // snapshotted by service
     @Mapping(target = "status",                 ignore = true)  // via transitionStatus() only
     @Mapping(target = "paymentStatus",          ignore = true)  // derived from paidAmount
     @Mapping(target = "services",               ignore = true)  // handled separately
