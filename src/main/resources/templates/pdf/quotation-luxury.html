@@ -1,0 +1,571 @@
+
+<!DOCTYPE html>
+<!--
+  LUXURY quotation — the navy-and-gold coffee-table design.
+
+  RENDERED BY CHROMIUM ONLY. This file must never be handed to OpenPDF/Flying Saucer: it is built on
+  CSS Grid, flexbox, object-fit and gradient overlays, none of which that engine implements. It would
+  not throw — it would silently ignore them and emit an unstyled stack of blocks that still looks
+  like a finished PDF. QuotationPdfRouter is what keeps the two apart.
+
+  THE MODEL IS ${pdf} AND EVERY FIELD IS ALREADY A FINISHED STRING. There is no arithmetic, no
+  currency formatting, no date formatting and no pagination in this file, by design — see
+  LuxuryQuotationPdfMapper. If a value needs shaping, shape it in Java: Chromium renders under
+  whatever locale the container has, so "₹1,25,000" here and "₹125,000" in production is a real and
+  invisible failure mode.
+
+  PAGES ARE FIXED-HEIGHT A4 SHEETS, not a flowing document. That is what lets every page carry its
+  own footer and page number. It also means content that overflows is CLIPPED, silently — which is
+  why the day/hotel/terms lists arrive pre-chunked by LuxuryPdfPaginator rather than being looped
+  over here in full.
+
+  window.__PDF_READY__ at the bottom is the renderer's print signal. Do not remove it.
+-->
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8"/>
+    <title th:text="'Quotation ' + ${pdf.quotationCode} ?: 'Quotation'">Quotation</title>
+    <style>
+        /* ── Page geometry ────────────────────────────────────────────────────
+           @page with a zero margin and preferCSSPageSize=true in the renderer:
+           the design bleeds artwork to the sheet edge, which is impossible if the
+           browser reserves its own margin. All padding is therefore inside .page. */
+        @page { size: A4; margin: 0; }
+
+        :root {
+            --navy:        #14213d;
+            --navy-deep:   #0b1526;
+            --navy-soft:   #24365c;
+            --gold:        #c9a227;
+            --gold-light:  #e8d194;
+            --ivory:       #faf7f0;
+            --paper:       #ffffff;
+            --ink:         #1c2333;
+            --ink-soft:    #55607a;
+            --rule:        #e3e0d6;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            /* Chromium falls back through this list; the container ships DejaVu, which carries the
+               ₹ glyph (U+20B9). Without a rupee-capable font every price renders as a blank box. */
+            font-family: "Georgia", "Times New Roman", "DejaVu Serif", serif;
+            color: var(--ink);
+            background: var(--paper);
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+        }
+
+        .sans { font-family: "Helvetica Neue", Helvetica, Arial, "DejaVu Sans", sans-serif; }
+
+        /* One sheet. break-after is what stops two pages sharing a sheet; the last-child rule stops
+           a trailing blank page, which is the single most common artefact of this layout style. */
+        .page {
+            width: 210mm;
+            height: 297mm;
+            position: relative;
+            overflow: hidden;
+            background: var(--paper);
+            break-after: page;
+            page-break-after: always;
+        }
+        .page:last-of-type { break-after: auto; page-break-after: auto; }
+
+        .pad { padding: 18mm 16mm 22mm; height: 100%; display: flex; flex-direction: column; }
+
+        /* ── Cover ────────────────────────────────────────────────────────── */
+        .cover { background: var(--navy-deep); color: var(--ivory); }
+        .cover-art { position: absolute; inset: 0; }
+        .cover-art img { width: 100%; height: 100%; object-fit: cover; opacity: .55; }
+        /* The scrim is not decoration: cover photographs vary wildly in brightness and white
+           headline text over a pale sky is unreadable. This guarantees contrast whatever loads. */
+        .cover-scrim {
+            position: absolute; inset: 0;
+            background: linear-gradient(180deg, rgba(11,21,38,.55) 0%, rgba(11,21,38,.75) 45%, rgba(11,21,38,.96) 100%);
+        }
+        .cover-body { position: relative; height: 100%; display: flex; flex-direction: column;
+                      justify-content: space-between; padding: 20mm 16mm; }
+        .cover-logo { max-height: 18mm; max-width: 60mm; object-fit: contain; }
+        .cover-eyebrow { font-size: 9pt; letter-spacing: .34em; text-transform: uppercase;
+                         color: var(--gold-light); margin-bottom: 6mm; }
+        .cover-title { font-size: 34pt; line-height: 1.1; color: #fff; margin-bottom: 4mm; }
+        .cover-sub { font-size: 13pt; color: var(--gold-light); letter-spacing: .06em; }
+        .cover-rule { width: 28mm; height: 2px; background: var(--gold); margin: 7mm 0; }
+        .cover-for { font-size: 10pt; color: rgba(250,247,240,.85); line-height: 1.7; }
+        .cover-meta { display: flex; justify-content: space-between; align-items: flex-end;
+                      font-size: 8.5pt; color: rgba(250,247,240,.7); letter-spacing: .08em; }
+
+        /* ── Shared page furniture ────────────────────────────────────────── */
+        .eyebrow { font-size: 8pt; letter-spacing: .3em; text-transform: uppercase;
+                   color: var(--gold); margin-bottom: 3mm; }
+        .h1 { font-size: 21pt; color: var(--navy); margin-bottom: 2mm; }
+        .h2 { font-size: 13pt; color: var(--navy); margin-bottom: 3mm; }
+        .rule { height: 1px; background: var(--rule); margin: 5mm 0; }
+        .body-text { font-size: 10pt; line-height: 1.75; color: var(--ink-soft); }
+
+        .foot {
+            position: absolute; left: 16mm; right: 16mm; bottom: 10mm;
+            display: flex; justify-content: space-between; align-items: center;
+            font-size: 7.5pt; letter-spacing: .1em; color: var(--ink-soft);
+            border-top: 1px solid var(--rule); padding-top: 3mm;
+        }
+        .foot .brand { color: var(--navy); }
+
+        /* ── Snapshot grid ────────────────────────────────────────────────── */
+        .snapshot-hero { height: 62mm; position: relative; overflow: hidden; border-radius: 2mm; margin-bottom: 7mm; }
+        .snapshot-hero img { width: 100%; height: 100%; object-fit: cover; }
+        .snap-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4mm; }
+        .snap-tile { border: 1px solid var(--rule); border-left: 3px solid var(--gold);
+                     padding: 4mm 5mm; background: var(--ivory); }
+        .snap-label { font-size: 7.5pt; letter-spacing: .18em; text-transform: uppercase; color: var(--ink-soft); }
+        .snap-value { font-size: 11.5pt; color: var(--navy); margin-top: 1.5mm; }
+
+        /* ── Itinerary ────────────────────────────────────────────────────── */
+        .day { display: grid; grid-template-columns: 46mm 1fr; gap: 5mm; margin-bottom: 6mm; }
+        .day-img { width: 100%; height: 30mm; object-fit: cover; border-radius: 1.5mm; background: var(--ivory); }
+        .day-no { font-size: 8pt; letter-spacing: .2em; text-transform: uppercase; color: var(--gold); }
+        .day-title { font-size: 12pt; color: var(--navy); margin: 1mm 0 2mm; }
+        .day-desc { font-size: 9.5pt; line-height: 1.6; color: var(--ink-soft); }
+
+        /* Description bullets. list-style-position:outside with a matching padding so a wrapped
+           second line aligns under the text, not under the marker. */
+        .bullets { list-style: none; padding: 0; margin: 0; }
+        .bullets li {
+            font-size: 9.5pt; line-height: 1.6; color: var(--ink-soft);
+            padding-left: 4.5mm; position: relative; margin-bottom: 1mm;
+        }
+        .bullets li::before {
+            content: "•"; color: var(--gold); position: absolute; left: 0; top: 0;
+        }
+        .notes { margin-top: 5mm; padding: 4mm 5mm; background: var(--ivory);
+                 border-left: 3px solid var(--gold); }
+        .notes-title { font-size: 7.5pt; letter-spacing: .18em; text-transform: uppercase;
+                       color: var(--ink-soft); margin-bottom: 2mm; }
+        .day-meta { font-size: 8pt; color: var(--ink-soft); margin-top: 2mm; }
+        .day-meta span { margin-right: 5mm; }
+
+        /* ── Hotels ───────────────────────────────────────────────────────── */
+        .hotel { display: grid; grid-template-columns: 60mm 1fr; gap: 5mm; margin-bottom: 6mm;
+                 border: 1px solid var(--rule); border-radius: 2mm; overflow: hidden; }
+        .hotel img { width: 100%; height: 44mm; object-fit: cover; background: var(--ivory); }
+        .hotel-body { padding: 4mm 5mm 4mm 0; }
+        .hotel-name { font-size: 12.5pt; color: var(--navy); }
+        .hotel-stars { color: var(--gold); font-size: 10pt; letter-spacing: .1em; }
+        .kv { display: grid; grid-template-columns: 26mm 1fr; gap: 1mm 3mm; font-size: 9pt;
+              color: var(--ink-soft); margin-top: 2.5mm; }
+        .kv dt { letter-spacing: .1em; text-transform: uppercase; font-size: 7.5pt; padding-top: .6mm; }
+        .kv dd { color: var(--ink); }
+
+        /* ── Lists ────────────────────────────────────────────────────────── */
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 4mm 8mm; }
+        .tick { font-size: 9.5pt; line-height: 1.6; padding-left: 6mm; position: relative; margin-bottom: 2mm; }
+        .tick::before { position: absolute; left: 0; top: 0; }
+        .tick.yes::before { content: "✓"; color: #1f7a4d; }
+        .tick.no::before  { content: "✕"; color: #a33; }
+
+        .gallery { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3mm; margin-top: 5mm; }
+        .gallery img { width: 100%; height: 34mm; object-fit: cover; border-radius: 1.5mm; background: var(--ivory); }
+
+        /* ── Money ────────────────────────────────────────────────────────── */
+        table.money { width: 100%; border-collapse: collapse; font-size: 10pt; }
+        table.money th { text-align: left; font-size: 7.5pt; letter-spacing: .18em; text-transform: uppercase;
+                         color: var(--ink-soft); border-bottom: 1px solid var(--rule); padding: 3mm 0; font-weight: normal; }
+        table.money td { padding: 3mm 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+        table.money td.amt { text-align: right; white-space: nowrap; }
+        table.money td.detail { font-size: 8.5pt; color: var(--ink-soft); }
+        .grand { background: var(--navy); color: #fff; display: flex; justify-content: space-between;
+                 align-items: baseline; padding: 6mm 7mm; margin-top: 6mm; border-radius: 2mm; }
+        .grand .label { font-size: 9pt; letter-spacing: .22em; text-transform: uppercase; color: var(--gold-light); }
+        .grand .value { font-size: 20pt; }
+        .per-adult { font-size: 8.5pt; color: var(--ink-soft); margin-top: 2.5mm; text-align: right; }
+
+        .numbered { font-size: 9.5pt; line-height: 1.7; color: var(--ink-soft); padding-left: 5mm; }
+        .numbered li { margin-bottom: 1.5mm; }
+
+        /* ── Closing ──────────────────────────────────────────────────────── */
+        .closing { background: var(--navy-deep); color: var(--ivory); }
+        .closing-art { position: absolute; inset: 0; }
+        .closing-art img { width: 100%; height: 100%; object-fit: cover; opacity: .3; }
+        .agent { display: flex; gap: 5mm; align-items: center; margin-top: 8mm; }
+        .agent img { width: 22mm; height: 22mm; border-radius: 50%; object-fit: cover; border: 2px solid var(--gold); }
+        .agent .name { font-size: 12pt; color: #fff; }
+        .agent .role { font-size: 8.5pt; color: var(--gold-light); letter-spacing: .12em; text-transform: uppercase; }
+        .agent .contact { font-size: 9pt; color: rgba(250,247,240,.8); margin-top: 1.5mm; }
+    </style>
+</head>
+<body>
+
+<!-- ═══ 1. COVER ═══════════════════════════════════════════════════════════ -->
+<section class="page cover">
+    <div class="cover-art">
+        <!-- th:src picks the real image, onerror covers the case th:src cannot: a URL that exists in
+             the database but 404s or times out at render time. Both are needed. -->
+        <img th:if="${pdf.coverImageUrl} != null" th:src="${pdf.coverImageUrl}"
+             th:attr="onerror='this.onerror=null;this.src=\'' + ${pdf.fallbackCoverImageUrl} + '\''" alt=""/>
+        <img th:unless="${pdf.coverImageUrl} != null" th:src="${pdf.fallbackCoverImageUrl}" alt=""/>
+    </div>
+    <div class="cover-scrim"></div>
+
+    <div class="cover-body">
+        <div>
+            <img class="cover-logo" th:if="${pdf.company?.logoUrl} != null" th:src="${pdf.company.logoUrl}"
+                 th:attr="onerror='this.onerror=null;this.src=\'' + ${pdf.fallbackLogoUrl} + '\''" alt=""/>
+            <div class="cover-eyebrow sans" th:if="${pdf.company?.name} != null"
+                 th:unless="${pdf.company?.logoUrl} != null" th:text="${pdf.company.name}">Company</div>
+        </div>
+
+        <div>
+            <div class="cover-eyebrow sans">Travel Proposal</div>
+            <h1 class="cover-title" th:text="${pdf.packageTitle} ?: 'Your Journey'">Package</h1>
+            <div class="cover-sub sans" th:if="${pdf.packageSubtitle} != null"
+                 th:text="${pdf.packageSubtitle}">Destination</div>
+            <div class="cover-rule"></div>
+            <div class="cover-for sans">
+                <div th:if="${pdf.customerName} != null">
+                    Prepared for <strong th:text="${pdf.customerName}">Customer</strong>
+                </div>
+                <div th:if="${pdf.travelDateRange} != null" th:text="${pdf.travelDateRange}">Dates</div>
+                <div th:if="${pdf.duration} != null" th:text="${pdf.duration}">Duration</div>
+                <div th:if="${pdf.travellerSummary} != null" th:text="${pdf.travellerSummary}">Travellers</div>
+            </div>
+        </div>
+
+        <div class="cover-meta sans">
+            <span th:if="${pdf.quotationCode} != null" th:text="${pdf.quotationCode}">QT</span>
+            <span th:if="${pdf.company?.website} != null" th:text="${pdf.company.website}">web</span>
+        </div>
+    </div>
+</section>
+
+<!-- ═══ 2. JOURNEY SNAPSHOT ════════════════════════════════════════════════ -->
+<section class="page" th:if="${!#lists.isEmpty(pdf.snapshotItems)}">
+    <div class="pad">
+        <div class="eyebrow sans">At a Glance</div>
+        <h2 class="h1">Your Journey</h2>
+
+        <div class="snapshot-hero" th:if="${pdf.snapshotImageUrl} != null">
+            <img th:src="${pdf.snapshotImageUrl}"
+                 th:attr="onerror='this.onerror=null;this.src=\'' + ${pdf.fallbackCoverImageUrl} + '\''" alt=""/>
+        </div>
+
+        <p class="body-text" th:if="${pdf.welcomeMessage} != null"
+           th:text="${pdf.welcomeMessage}" style="margin-bottom:6mm;">Welcome</p>
+
+        <div class="snap-grid">
+            <div class="snap-tile" th:each="item : ${pdf.snapshotItems}">
+                <div class="snap-label sans" th:text="${item.label}">Label</div>
+                <div class="snap-value" th:text="${item.value}">Value</div>
+            </div>
+        </div>
+    </div>
+    <div class="foot sans">
+        <span class="brand" th:text="${pdf.company?.name}">Company</span>
+        <span th:text="${pdf.quotationCode}">QT</span>
+    </div>
+</section>
+
+<!-- ═══ 3. ITINERARY (pre-chunked: one <section> per A4 sheet) ═════════════ -->
+<section class="page" th:each="page : ${pdf.itineraryPages}">
+    <div class="pad">
+        <div class="eyebrow sans">Day by Day</div>
+        <h2 class="h1" th:text="${page.pageNumber} == 1 ? 'Your Itinerary' : 'Your Itinerary (continued)'">Itinerary</h2>
+        <div class="rule"></div>
+
+        <div class="day" th:each="day : ${page.days}">
+            <div>
+                <img class="day-img" th:if="${day.imageUrl} != null" th:src="${day.imageUrl}"
+                     th:attr="onerror='this.onerror=null;this.src=\'' + ${pdf.fallbackSightseeingImageUrl} + '\''" alt=""/>
+                <img class="day-img" th:unless="${day.imageUrl} != null"
+                     th:src="${pdf.fallbackSightseeingImageUrl}" alt=""/>
+            </div>
+            <div>
+                <div class="day-no sans">
+                    <span th:text="${day.dayLabel}">Day 1</span>
+                    <span th:if="${day.date} != null" th:text="' · ' + ${day.date}"></span>
+                </div>
+                <div class="day-title" th:if="${day.title} != null" th:text="${day.title}">Title</div>
+                <!-- One <li> per line the agent wrote. Rendered as a list, not a paragraph, because
+                     that is how it was authored — see LuxuryDisplayFormat.bullets(). -->
+                <ul class="bullets" th:if="${!#lists.isEmpty(day.descriptionLines)}">
+                    <li th:each="line : ${day.descriptionLines}" th:text="${line}">Point</li>
+                </ul>
+                <div class="day-meta sans">
+                    <span th:if="${day.meals} != null" th:text="'Meals: ' + ${day.meals}"></span>
+                    <span th:if="${day.transfer} != null" th:text="'Transfer: ' + ${day.transfer}"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="foot sans">
+        <span class="brand" th:text="${pdf.company?.name}">Company</span>
+        <span th:text="${pdf.quotationCode}">QT</span>
+    </div>
+</section>
+
+<!-- ═══ 4. HOTELS (pre-chunked, max 3 per sheet) ══════════════════════════ -->
+<section class="page" th:each="page : ${pdf.hotelPages}">
+    <div class="pad">
+        <div class="eyebrow sans">Where You Stay</div>
+        <h2 class="h1" th:text="${page.pageNumber} == 1 ? 'Accommodation' : 'Accommodation (continued)'">Hotels</h2>
+        <div class="rule"></div>
+
+        <div class="hotel" th:each="hotel : ${page.hotels}">
+            <img th:if="${hotel.imageUrl} != null" th:src="${hotel.imageUrl}"
+                 th:attr="onerror='this.onerror=null;this.src=\'' + ${pdf.fallbackHotelImageUrl} + '\''" alt=""/>
+            <img th:unless="${hotel.imageUrl} != null" th:src="${pdf.fallbackHotelImageUrl}" alt=""/>
+            <div class="hotel-body">
+                <div class="hotel-name" th:text="${hotel.name}">Hotel</div>
+                <div class="hotel-stars" th:if="${hotel.starLabel} != null" th:text="${hotel.starLabel}">★</div>
+                <dl class="kv sans">
+                    <th:block th:if="${hotel.city} != null"><dt>City</dt><dd th:text="${hotel.city}"></dd></th:block>
+                    <th:block th:if="${hotel.checkIn} != null"><dt>Check-in</dt><dd th:text="${hotel.checkIn}"></dd></th:block>
+                    <th:block th:if="${hotel.checkOut} != null"><dt>Check-out</dt><dd th:text="${hotel.checkOut}"></dd></th:block>
+                    <th:block th:if="${hotel.nightsLabel} != null"><dt>Nights</dt><dd th:text="${hotel.nightsLabel}"></dd></th:block>
+                    <th:block th:if="${hotel.roomType} != null"><dt>Room</dt><dd th:text="${hotel.roomType}"></dd></th:block>
+                    <th:block th:if="${hotel.roomsLabel} != null"><dt>Rooms</dt><dd th:text="${hotel.roomsLabel}"></dd></th:block>
+                    <th:block th:if="${hotel.mealPlan} != null"><dt>Meals</dt><dd th:text="${hotel.mealPlan}"></dd></th:block>
+                    <th:block th:if="${hotel.refundableLabel} != null"><dt>Policy</dt><dd th:text="${hotel.refundableLabel}"></dd></th:block>
+                </dl>
+            </div>
+        </div>
+
+        <!-- Accommodation notes, on the first hotel page only (the mapper attaches them there). -->
+        <div class="notes" th:if="${!#lists.isEmpty(page.noteLines)}">
+            <div class="notes-title sans">Accommodation Notes</div>
+            <ul class="bullets">
+                <li th:each="line : ${page.noteLines}" th:text="${line}">Note</li>
+            </ul>
+        </div>
+    </div>
+    <div class="foot sans">
+        <span class="brand" th:text="${pdf.company?.name}">Company</span>
+        <span th:text="${pdf.quotationCode}">QT</span>
+    </div>
+</section>
+
+<!-- ═══ 5. TRANSPORT & SIGHTSEEING ════════════════════════════════════════ -->
+<section class="page" th:if="${pdf.transport != null or !#lists.isEmpty(pdf.sightseeingImages)}">
+    <div class="pad">
+        <div class="eyebrow sans">Getting Around</div>
+        <h2 class="h1">Transport &amp; Experiences</h2>
+        <div class="rule"></div>
+
+        <div th:if="${pdf.transport} != null">
+            <h3 class="h2">Transport</h3>
+            <dl class="kv sans" style="grid-template-columns:44mm 1fr;">
+                <th:block th:each="v : ${pdf.transport.vehicles}">
+                    <dt th:text="${v.label}">Type</dt>
+                    <dd th:text="${v.value} ?: ''"></dd>
+                </th:block>
+            </dl>
+
+            <div class="notes" th:if="${!#lists.isEmpty(pdf.transport.noteLines)}">
+                <div class="notes-title sans">Transport Notes</div>
+                <ul class="bullets">
+                    <li th:each="line : ${pdf.transport.noteLines}" th:text="${line}">Note</li>
+                </ul>
+            </div>
+        </div>
+
+        <div th:if="${!#lists.isEmpty(pdf.sightseeingImages)}" style="margin-top:8mm;">
+            <h3 class="h2">Experiences</h3>
+            <div class="gallery">
+                <img th:each="img : ${pdf.sightseeingImages}" th:src="${img}"
+                     th:attr="onerror='this.onerror=null;this.src=\'' + ${pdf.fallbackSightseeingImageUrl} + '\''" alt=""/>
+            </div>
+        </div>
+    </div>
+    <div class="foot sans">
+        <span class="brand" th:text="${pdf.company?.name}">Company</span>
+        <span th:text="${pdf.quotationCode}">QT</span>
+    </div>
+</section>
+
+<!-- ═══ 6. INCLUSIONS & EXCLUSIONS ════════════════════════════════════════ -->
+<section class="page" th:if="${!#lists.isEmpty(pdf.inclusions) or !#lists.isEmpty(pdf.exclusions)}">
+    <div class="pad">
+        <div class="eyebrow sans">The Fine Print</div>
+        <h2 class="h1">What's Included</h2>
+        <div class="rule"></div>
+
+        <div th:if="${!#lists.isEmpty(pdf.inclusions)}">
+            <h3 class="h2">Inclusions</h3>
+            <div class="two-col">
+                <div class="tick yes" th:each="i : ${pdf.inclusions}" th:text="${i}">Item</div>
+            </div>
+        </div>
+
+        <div th:if="${!#lists.isEmpty(pdf.exclusions)}" style="margin-top:8mm;">
+            <h3 class="h2">Exclusions</h3>
+            <div class="two-col">
+                <div class="tick no" th:each="e : ${pdf.exclusions}" th:text="${e}">Item</div>
+            </div>
+        </div>
+    </div>
+    <div class="foot sans">
+        <span class="brand" th:text="${pdf.company?.name}">Company</span>
+        <span th:text="${pdf.quotationCode}">QT</span>
+    </div>
+</section>
+
+<!-- ═══ 7. PRICING & PAYMENT ══════════════════════════════════════════════ -->
+<section class="page" th:if="${pdf.pricing} != null">
+    <div class="pad">
+        <div class="eyebrow sans">Investment</div>
+        <h2 class="h1">Your Package Price</h2>
+        <div class="rule"></div>
+
+        <table class="money sans">
+            <thead><tr><th>Component</th><th style="text-align:right;">Amount</th></tr></thead>
+            <tbody>
+            <tr th:each="row : ${pdf.pricing.rows}">
+                <td>
+                    <span th:text="${row.label}">Label</span>
+                    <div class="detail" th:if="${row.detail} != null" th:text="${row.detail}"></div>
+                </td>
+                <td class="amt" th:text="${row.amount}">₹0</td>
+            </tr>
+            <!-- Subtotal and every adjustment print UNCONDITIONALLY, including at zero. A ₹0
+                 discount or 0% GST is information the customer needs to reconcile the total; a
+                 th:if on truthiness here is exactly how a zero silently disappears. -->
+            <tr><td>Subtotal</td><td class="amt" th:text="${pdf.pricing.subtotal}">₹0</td></tr>
+            <tr><td th:text="${pdf.pricing.discountLabel}">Discount</td>
+                <td class="amt" th:text="${pdf.pricing.discountAmount}">₹0</td></tr>
+            <tr><td th:text="${pdf.pricing.taxLabel}">GST</td>
+                <td class="amt" th:text="${pdf.pricing.taxAmount}">₹0</td></tr>
+            </tbody>
+        </table>
+
+        <div class="grand">
+            <span class="label sans">Grand Total</span>
+            <span class="value" th:text="${pdf.pricing.grandTotal}">₹0</span>
+        </div>
+        <div class="per-adult sans" th:if="${pdf.pricing.perAdult} != null"
+             th:text="${pdf.pricing.perAdult} + ' per adult'"></div>
+
+        <!-- The payment schedule is NOT here. It moved into the packed policy pages below, with
+             cancellation and terms: this page's height is fixed, and a long schedule appended after
+             a long price table overflowed the sheet and was clipped without a trace. -->
+    </div>
+    <div class="foot sans">
+        <span class="brand" th:text="${pdf.company?.name}">Company</span>
+        <span th:text="${pdf.quotationCode}">QT</span>
+    </div>
+</section>
+
+<!-- ═══ 8. POLICY PAGES ═══════════════════════════════════════════════════
+     Payment schedule, cancellation policy and terms — PACKED in Java onto as few sheets as they
+     fit (LuxuryPdfPaginator.packPolicyPages). One section per block gave each of the three its own
+     fixed-height sheet, so a quotation with three cancellation lines and five terms printed two
+     nearly-empty A4 pages. A long terms list still spills to as many sheets as it needs; a short
+     one now shares a sheet with its neighbours.
+
+     Splitting is still done in Java, not by the browser: these boxes are fixed-height, and CSS
+     overflow here means silently cropped legal text. -->
+<section class="page" th:each="ppage : ${pdf.policyPages}">
+    <div class="pad">
+        <div class="eyebrow sans">Before You Book</div>
+        <div th:each="block, bs : ${ppage.blocks}" th:style="${bs.first} ? '' : 'margin-top:9mm;'">
+            <h2 th:class="${bs.first} ? 'h1' : 'h2'"
+                th:text="${block.continued} ? ${block.title} + ' (continued)' : ${block.title}">Title</h2>
+            <div class="rule" th:if="${bs.first}"></div>
+            <ol class="numbered sans">
+                <li th:each="item : ${block.items}" th:text="${item}">Line</li>
+            </ol>
+        </div>
+    </div>
+    <div class="foot sans">
+        <span class="brand" th:text="${pdf.company?.name}">Company</span>
+        <span th:text="${pdf.quotationCode}">QT</span>
+    </div>
+</section>
+
+<!-- ═══ 10. CLOSING ═══════════════════════════════════════════════════════ -->
+<section class="page closing">
+    <div class="closing-art">
+        <img th:src="${pdf.closingImageUrl} ?: ${pdf.fallbackCoverImageUrl}"
+             th:attr="onerror='this.onerror=null;this.src=\'' + ${pdf.fallbackCoverImageUrl} + '\''" alt=""/>
+    </div>
+    <div class="cover-scrim"></div>
+
+    <div class="cover-body">
+        <div></div>
+        <div>
+            <div class="cover-eyebrow sans">We Look Forward</div>
+            <h2 class="cover-title" style="font-size:26pt;">Let's make it happen.</h2>
+            <p class="cover-for sans" th:if="${pdf.closingMessage} != null" th:text="${pdf.closingMessage}"></p>
+
+            <div class="agent" th:if="${pdf.agent} != null">
+                <img th:src="${pdf.agent.photoUrl} ?: ${pdf.fallbackAgentImageUrl}"
+                     th:attr="onerror='this.onerror=null;this.src=\'' + ${pdf.fallbackAgentImageUrl} + '\''" alt=""/>
+                <div>
+                    <div class="name sans" th:text="${pdf.agent.name}">Agent</div>
+                    <div class="role sans" th:if="${pdf.agent.designation} != null"
+                         th:text="${pdf.agent.designation}">Role</div>
+                    <div class="contact sans">
+                        <span th:if="${pdf.agent.phone} != null" th:text="${pdf.agent.phone}"></span>
+                        <span th:if="${pdf.agent.email} != null" th:text="' · ' + ${pdf.agent.email}"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="cover-for sans" style="font-size:8.5pt;">
+            <div th:if="${pdf.company?.name} != null" th:text="${pdf.company.name}">Company</div>
+            <div th:if="${pdf.company?.address} != null" th:text="${pdf.company.address}"></div>
+            <div>
+                <span th:if="${pdf.company?.phone} != null" th:text="${pdf.company.phone}"></span>
+                <span th:if="${pdf.company?.email} != null" th:text="' · ' + ${pdf.company.email}"></span>
+            </div>
+            <div th:if="${pdf.company?.gstin} != null" th:text="'GSTIN: ' + ${pdf.company.gstin}"></div>
+        </div>
+    </div>
+</section>
+
+<script>
+    /*
+      The renderer's print signal. ChromiumLuxuryPdfRenderer waits for this instead of printing on
+      `load`, because `load` fires when subresources have been REQUESTED — print then and remote
+      photographs come out as grey boxes.
+
+      Every image resolves the same latch on BOTH success and error. An image that 404s must still
+      count as settled, or one dead Cloudinary URL would hang the render until the timeout and the
+      agent would get a 500 instead of a document with one placeholder in it.
+
+      The timeout is the backstop for an image that neither loads nor errors — a URL that accepts the
+      connection and never responds. Printing a document with a missing photo beats printing nothing.
+    */
+    (function () {
+        var READY_TIMEOUT_MS = 15000;
+        var images = Array.prototype.slice.call(document.images);
+        var pending = images.length;
+
+        function done() { window.__PDF_READY__ = true; }
+        function settle() { if (--pending <= 0) finish(); }
+
+        function finish() {
+            // Fonts matter as much as images: printing before they swap in lays the document out in
+            // a fallback face and reflows it, which on fixed-height pages means clipped text.
+            if (document.fonts && document.fonts.ready) {
+                document.fonts.ready.then(done).catch(done);
+            } else {
+                done();
+            }
+        }
+
+        if (pending === 0) {
+            finish();
+        } else {
+            images.forEach(function (img) {
+                if (img.complete) { settle(); return; }
+                img.addEventListener('load', settle, { once: true });
+                img.addEventListener('error', settle, { once: true });
+            });
+        }
+
+        setTimeout(done, READY_TIMEOUT_MS);
+    })();
+</script>
+</body>
+</html>

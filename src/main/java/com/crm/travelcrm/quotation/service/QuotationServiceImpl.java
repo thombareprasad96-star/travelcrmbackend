@@ -57,7 +57,15 @@ public class QuotationServiceImpl implements QuotationService {
 
     private final QuotationRepository quotationRepository;
     private final QuotationMapper quotationMapper;
-    private final QuotationPdfService quotationPdfService;
+    /**
+     * Every PDF path goes through the router, not straight at {@link QuotationPdfService}.
+     *
+     * <p>The router picks the engine from the quotation's design: CLASSIC/MODERN/PREMIUM still land
+     * on the unmodified {@code QuotationPdfService}, LUXURY on headless Chromium. Keeping the choice
+     * in one collaborator is what stops the four call sites below from drifting — an emailed
+     * quotation must be the same document as a downloaded one.
+     */
+    private final com.crm.travelcrm.quotation.pdf.QuotationPdfRouter quotationPdfRouter;
     private final LeadAccessGuard leadAccessGuard;
     private final TenantMailSenderFactory tenantMailSenderFactory;
     private final EmailAuditService emailAudit;
@@ -319,7 +327,7 @@ public class QuotationServiceImpl implements QuotationService {
     public byte[] generatePdf(UUID publicId) {
         log.debug("generatePdf() | publicId={}", publicId);
         QuotationResponseDto dto = quotationMapper.toResponse(loadOwned(publicId));
-        return quotationPdfService.render(dto);
+        return quotationPdfRouter.render(dto);
     }
 
     @Override
@@ -365,7 +373,7 @@ public class QuotationServiceImpl implements QuotationService {
         // `dto` — NOT a fresh toResponse(q). Re-mapping here would rebuild the DTO from the entity and
         // silently discard the style override set above, so every download came out in the saved
         // design however the dialog was answered.
-        return QuotationPdfResource.inline(quotationPdfService.render(dto));
+        return QuotationPdfResource.inline(quotationPdfRouter.render(dto));
     }
 
     @Override
@@ -380,7 +388,7 @@ public class QuotationServiceImpl implements QuotationService {
         // opens from WhatsApp, and a 302 sent their browser to the raw Cloudinary URL, putting a
         // permanent public link to their own PII in their address bar and history.
         log.debug("getPublicPdf({}) -> rendering PDF inline", publicId);
-        return QuotationPdfResource.inline(quotationPdfService.render(quotationMapper.toResponse(q)));
+        return QuotationPdfResource.inline(quotationPdfRouter.render(quotationMapper.toResponse(q)));
     }
 
     @Override
@@ -455,7 +463,7 @@ public class QuotationServiceImpl implements QuotationService {
                 publicId, request.getToEmail(), StringUtils.hasText(request.getSubject()),
                 StringUtils.hasText(request.getMessage()));
         QuotationResponseDto dto = quotationMapper.toResponse(loadOwned(publicId));
-        byte[] pdf = quotationPdfService.render(dto);
+        byte[] pdf = quotationPdfRouter.render(dto);
         log.debug("Rendered quotation {} PDF ({} bytes); dispatching email", publicId, pdf.length);
 
         String subject = StringUtils.hasText(request.getSubject())

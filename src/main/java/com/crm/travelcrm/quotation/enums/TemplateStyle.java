@@ -34,7 +34,26 @@ public enum TemplateStyle {
      * {@code quotations_template_style_check} must name it too, or
      * {@code SchemaEnumConstraintValidator} refuses to boot — by design.
      */
-    PREMIUM;
+    PREMIUM,
+
+    /**
+     * The navy-and-gold coffee-table design — the only style NOT rendered by Flying Saucer/OpenPDF.
+     * Its stylesheet uses CSS Grid, flexbox, {@code object-fit} and gradients, none of which that
+     * engine understands, so it renders through headless Chromium instead
+     * ({@code quotation.pdf.ChromiumLuxuryPdfRenderer}). Everything else — the DTO source, the
+     * pricing, the tenant branding — is the same data the other three styles get.
+     *
+     * <p><b>It can be unavailable at runtime.</b> Chromium may be absent or
+     * {@code pdf.luxury.enabled=false}; the renderer then answers with a clear error instead of
+     * silently downgrading to another design. CLASSIC/MODERN/PREMIUM never touch that code path,
+     * so they keep working regardless — see {@code QuotationPdfRouter}.
+     */
+    LUXURY;
+
+    /** True for the styles the OpenPDF/Flying Saucer engine renders — i.e. everything but Luxury. */
+    public boolean isLegacyEngine() {
+        return this != LUXURY;
+    }
 
     /** The rule "null means CLASSIC" written once, instead of at every call site. */
     public static TemplateStyle orDefault(TemplateStyle style) {

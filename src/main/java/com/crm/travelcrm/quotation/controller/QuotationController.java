@@ -173,9 +173,36 @@ public class QuotationController {
                     .build();
         }
         return ResponseEntity.ok()
-                .header("Content-Disposition", "inline; filename=quotation-" + publicId + ".pdf")
+                .header("Content-Disposition", "inline; filename=" + pdfFilename(publicId, style))
                 .contentType(MediaType.APPLICATION_PDF)
                 .body(pdf.content());
+    }
+
+    /**
+     * A filename a human can recognise in their Downloads folder.
+     *
+     * <p>The old {@code quotation-<uuid>.pdf} was unusable: an agent with four quotations open had
+     * four files distinguishable only by a 36-character hex string. The style suffix matters for the
+     * same reason — comparing designs means downloading the same quotation twice, and identical
+     * names would have the browser silently write {@code (1)}.
+     *
+     * <p>Sanitised rather than trusted: the style string arrives from a query parameter, and a
+     * newline or a quote inside a {@code Content-Disposition} header is a response-splitting bug.
+     * Only the characters below survive.
+     */
+    private static String pdfFilename(UUID publicId, String style) {
+        String suffix = sanitizeFilenamePart(style);
+        return "Quotation-" + publicId + (suffix.isEmpty() ? "" : "-" + suffix) + ".pdf";
+    }
+
+    private static String sanitizeFilenamePart(String raw) {
+        if (raw == null || raw.isBlank()) return "";
+        String cleaned = raw.trim().replaceAll("[^A-Za-z0-9 _-]", "");
+        cleaned = cleaned.replaceAll("\\s+", "-");
+        if (cleaned.length() > 40) cleaned = cleaned.substring(0, 40);
+        // Title case so "luxury" and "LUXURY" produce the same filename.
+        return cleaned.isEmpty() ? "" : Character.toUpperCase(cleaned.charAt(0))
+                + cleaned.substring(1).toLowerCase(java.util.Locale.ROOT);
     }
 
     // ── Template style ────────────────────────────────────────────────────────

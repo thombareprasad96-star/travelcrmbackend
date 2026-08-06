@@ -210,6 +210,13 @@ public class QuotationPdfService {
             case MODERN  -> "pdf/quotation-modern";
             case PREMIUM -> "pdf/quotation-premium";
             case CLASSIC -> "pdf/quotation";   // the exact hardcoded name Classic has always had
+            // LUXURY never reaches this engine — QuotationPdfRouter sends it to Chromium, because
+            // its stylesheet is CSS Grid/flexbox/object-fit that Flying Saucer silently IGNORES
+            // rather than rejects. Rendering it here would therefore produce a plausible-looking
+            // but unstyled document, which is worse than an error. The case exists because the
+            // switch is exhaustive over the enum; arriving here means the router was bypassed.
+            case LUXURY  -> throw new IllegalStateException(
+                    "LUXURY is rendered by ChromiumLuxuryPdfRenderer, not by the OpenPDF engine");
         };
 
         String html = templateEngine.process(templateName, ctx);

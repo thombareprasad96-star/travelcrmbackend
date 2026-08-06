@@ -115,6 +115,24 @@ public class SecurityConfig {
                         // exposed at all — every other actuator endpoint stays off (see
                         // management.endpoints.web.exposure.include) AND unauthenticated here.
                         .requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**").permitAll()
+                        // Luxury PDF rendering: headless Chromium fetches the quotation's HTML from
+                        // this application and has no JWT to present. Permitted here for the same
+                        // reason as the SSE streams above — the credential is IN the URL and checked
+                        // by the handler, not by this chain.
+                        //
+                        // Safe because the path carries no quotation id: the single-use token IS the
+                        // payload's only key (LuxuryPreviewTokenService), it was minted only after an
+                        // authenticated tenant-scoped load, it expires in under a minute, and a
+                        // forged one resolves to nothing. There is nothing here to enumerate.
+                        //
+                        // Reachable only from loopback in practice — the renderer navigates to
+                        // 127.0.0.1 and nginx does not proxy /internal/**.
+                        .requestMatchers(HttpMethod.GET, "/internal/pdf/quotations/*/luxury-preview").permitAll()
+                        // The neutral placeholder artwork that template references when a real image
+                        // 404s. Chromium requests these as ordinary subresources with no token, so
+                        // they must be anonymous or every fallback would render as a broken frame.
+                        // Static, tenant-agnostic, no PII — the same six files for every tenant.
+                        .requestMatchers(HttpMethod.GET, "/images/pdf/fallbacks/**").permitAll()
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(rateLimitFilter, UsernamePasswordAuthenticationFilter.class)

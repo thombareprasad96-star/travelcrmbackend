@@ -515,6 +515,27 @@
 			<groupId>org.flywaydb</groupId>
 			<artifactId>flyway-database-postgresql</artifactId>
 		</dependency>
+
+		<!--
+			Playwright — headless Chromium, used by the LUXURY quotation design ONLY.
+
+			The other three designs render through OpenPDF/Flying Saucer (above) and do not touch
+			this. It is here rather than as a separate Node service because the renderer has to read
+			the same in-process quotation data the other designs do; a sidecar would mean shipping
+			that data over HTTP to render it.
+
+			The JAR does NOT contain a browser. `Playwright.create()` looks for a Chromium bundle
+			installed separately (~170 MB), which is why the Dockerfile installs it at BUILD time —
+			doing it at startup would re-download on every container start and make boot depend on
+			the network. Committing the binary to git is not an option either; it is per-platform.
+
+			Version is pinned rather than managed: spring-boot-starter-parent has no entry for it.
+		-->
+		<dependency>
+			<groupId>com.microsoft.playwright</groupId>
+			<artifactId>playwright</artifactId>
+			<version>1.47.0</version>
+		</dependency>
 	</dependencies>
 
 	<build>

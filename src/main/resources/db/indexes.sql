@@ -492,7 +492,7 @@ ALTER TABLE leads ADD CONSTRAINT leads_origin_check
 UPDATE quotations SET template_style = 'CLASSIC' WHERE template_style IS NULL;
 ALTER TABLE quotations DROP CONSTRAINT IF EXISTS quotations_template_style_check;
 ALTER TABLE quotations ADD CONSTRAINT quotations_template_style_check
-        CHECK (template_style IN ('CLASSIC','MODERN','PREMIUM'));
+        CHECK (template_style IN ('CLASSIC','MODERN','PREMIUM','LUXURY'));
 
 -- ── quotation_allowed_services: join-table FK index ─────────────────────────
 -- @ElementCollection table (the lead's chosen-services snapshot). Hibernate creates the table and its
