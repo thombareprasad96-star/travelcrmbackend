@@ -3,6 +3,7 @@ package com.crm.travelcrm.lead.service;
 import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.auth.repository.UserRepository;
 import com.crm.travelcrm.common.context.TenantContext;
+import com.crm.travelcrm.common.context.TenantTimeZone;
 import com.crm.travelcrm.common.event.LeadSoftDeletedEvent;
 import com.crm.travelcrm.customer.dto.response.CustomerMatchResponse;
 import com.crm.travelcrm.customer.entity.Customer;
@@ -10,12 +11,21 @@ import com.crm.travelcrm.customer.service.CustomerMatcher;
 import com.crm.travelcrm.lead.dto.CreateLeadRequestDto;
 import com.crm.travelcrm.lead.dto.LeadBoardColumnDto;
 import com.crm.travelcrm.lead.dto.LeadResponseDto;
+import com.crm.travelcrm.lead.dto.LeadStatsSummaryDto;
 import com.crm.travelcrm.lead.dto.UserLeadStageCountDto;
 import com.crm.travelcrm.lead.dto.UserWorkloadDto;
+import com.crm.travelcrm.lead.alert.LeadAlertAssembler;
+import com.crm.travelcrm.lead.alert.LeadAlertBroadcaster;
 import com.crm.travelcrm.lead.assignment.audit.LeadAssignmentAudit;
 import com.crm.travelcrm.lead.assignment.audit.LeadAssignmentAuditRecorder;
+import com.crm.travelcrm.lead.assignment.history.LeadAssignmentEvent;
+import com.crm.travelcrm.lead.assignment.history.LeadAssignmentEventRecorder;
+import com.crm.travelcrm.lead.assignment.history.LeadAssignmentEventType;
+import com.crm.travelcrm.lead.assignment.service.AssignableUserResolver;
 import com.crm.travelcrm.lead.assignment.service.AssignmentOutcome;
 import com.crm.travelcrm.lead.assignment.service.LeadAssignmentService;
+import com.crm.travelcrm.lead.claim.service.LeadClaimService;
+import com.crm.travelcrm.lead.sla.LeadSlaPolicy;
 import com.crm.travelcrm.lead.entity.Lead;
 import com.crm.travelcrm.lead.entity.LeadItinerary;
 import com.crm.travelcrm.lead.enums.LeadStage;
@@ -36,6 +46,7 @@ import com.crm.travelcrm.lead.specification.LeadSpecification;
 import com.crm.travelcrm.lead.util.LeadCodeGenerator;
 import com.crm.travelcrm.notification.api.NotifyEvent;
 import com.crm.travelcrm.notification.domain.enums.DeliveryChannel;
+import com.crm.travelcrm.permission.enums.Permission;
 import com.crm.travelcrm.permission.service.ScopeResolver;
 import com.crm.travelcrm.permission.service.SubAgentScope;
 import com.crm.travelcrm.quotation.dto.QuotationRefDto;
@@ -46,7 +57,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.*;
-import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -56,8 +66,11 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -83,7 +96,22 @@ public class LeadServiceImpl implements LeadService {
     private final TenantRepository tenantRepository;
     private final LeadAssignmentService leadAssignmentService;
     private final LeadAssignmentAuditRecorder leadAssignmentAuditRecorder;
+    private final LeadAssignmentEventRecorder leadAssignmentEventRecorder;
+    private final LeadClaimService leadClaimService;
+    private final LeadSlaPolicy slaPolicy;
+    private final LeadAlertAssembler alertAssembler;
+    private final LeadAlertBroadcaster alertBroadcaster;
+    private final AssignableUserResolver assignableUserResolver;
     private final CustomerMatcher customerMatcher;
+    private final TenantTimeZone tenantTimeZone;
+
+    /**
+     * Ceiling on how many PROPOSAL_SENT leads the quoted-value roll-up prices in one call. It is a
+     * bound on an IN-clause and on the shared pricing formula being run per lead, not pagination:
+     * past this the summary reports the figure as a floor ({@code quotedValueComplete = false})
+     * rather than silently understating the pipeline.
+     */
+    private static final int MAX_QUOTED_VALUE_LEADS = 1000;
 
     // Terminal (closed) stages. A lead here no longer blocks a fresh lead for the same
     // contact, and CONVERTED specifically is owned by the booking lifecycle — it may be
@@ -101,8 +129,35 @@ public class LeadServiceImpl implements LeadService {
         return createLead(request, LeadActor.human(currentUser()), IngestPolicy.INTERACTIVE);
     }
 
+    /**
+     * The shared create, used by the human form AND by machine ingest.
+     *
+     * <h2>Why {@code noRollbackFor}</h2>
+     * The three listed exceptions are <b>pre-write declines</b>: quota, active-duplicate and
+     * trashed-match are all evaluated before {@code toEntity}, before the lead-code counter is
+     * touched and before any {@code save}. Nothing needs rolling back — and leaving the default in
+     * place actively breaks the caller.
+     *
+     * <p>{@code LeadIngestService} calls this CROSS-BEAN from inside its own transaction, so this
+     * proxy PARTICIPATES rather than starting a new transaction. On a rollback-worthy exception
+     * Spring's participating branch calls {@code doSetRollbackOnly} on the shared transaction, and
+     * the exception is then caught upstream and turned into a quarantine outcome that returns
+     * normally — at which point the OUTER commit throws {@code UnexpectedRollbackException}. The
+     * quarantine handler ends up never producing its status, and the delivery is recorded FAILED
+     * with no notification: exactly the silent-loss the quarantine model exists to prevent. Catching
+     * an exception cannot undo a rollback-only flag, so the flag must never be set.
+     *
+     * <p>{@link NoEligibleAssigneeException} is deliberately NOT listed. It is raised after
+     * {@code leadCodeGenerator.generate} has consumed a number from the tenant's gapless counter, so
+     * its transaction genuinely must roll back — and the ingest path rethrows it rather than
+     * quarantining, so no caller depends on the transaction surviving.
+     */
     @Override
-    @Transactional
+    @Transactional(noRollbackFor = {
+            LeadQuotaExceededException.class,
+            DuplicateLeadException.class,
+            RestoreAvailableException.class
+    })
     public LeadResponseDto createLead(CreateLeadRequestDto request, LeadActor actor,
                                       IngestPolicy policy) {
         Long tenantId = currentTenantId();
@@ -128,6 +183,15 @@ public class LeadServiceImpl implements LeadService {
         // — this method's @Transactional is that unit. Every creation path (manual, inbound ingest,
         // sub-agent portal) funnels through here, so none of them can mint a code-less lead.
         lead.setLeadCode(leadCodeGenerator.generate(tenantId));
+
+        // ── Claim window opens here ──────────────────────────────────────────
+        // Explicit 0 rather than relying on a column default: the CAS compares against the value the
+        // client last saw, and a row that starts NULL would depend on the backfill in db/indexes.sql
+        // having run before its first claim. New rows must never need a backfill to work.
+        lead.setClaimVersion(0);
+        // The SLA target is PINNED at creation, never read live afterwards — raising the target next
+        // month must not retroactively un-breach this lead. See LeadSlaPolicy.
+        lead.setSlaTargetSeconds(slaPolicy.targetSecondsForNewLead(tenantId));
 
         // Intelligent assignment (Strategy Pattern). Runs inside this transaction so the round-robin
         // cursor's pessimistic lock is held to commit — which is why assignment happens HERE and is
@@ -162,6 +226,15 @@ public class LeadServiceImpl implements LeadService {
         // the audit's REQUIRES_NEW write unfiltered; it survived only on the explicit .tenantId()
         // below. Publish last, and keep it last.
         recordAssignmentAudit(savedLead, outcome, tenantId, actor);
+        recordAssignmentHistory(savedLead, outcome, tenantId, actor);
+
+        // The tenant-wide alert. Assembled NOW, while the session can still resolve the lazy
+        // assignedUser and itinerary; the push itself is deferred to after commit, so a rollback
+        // can never leave every browser in the tenant showing a lead that does not exist.
+        // Registered BEFORE the publish below for the same reason the audit is: publishing clears
+        // TenantContext on this thread, and anything after it runs without a tenant.
+        alertBroadcaster.broadcastNewLead(tenantId, alertAssembler.toAlert(savedLead));
+
         publishLeadCreatedNotification(savedLead, tenantId);
 
         LeadResponseDto response = leadMapper.toResponse(savedLead);
@@ -294,51 +367,95 @@ public class LeadServiceImpl implements LeadService {
         }
     }
 
+    /**
+     * Open the lead's ownership TIMELINE with its first entry. Sibling of
+     * {@link #recordAssignmentAudit} and deliberately a separate row in a separate table: that one
+     * records the DECISION (what the strategy recommended vs what happened), this records the
+     * resulting OWNERSHIP, and every later claim appends here. Folding them together would force
+     * each claim to invent a recommendation it never had.
+     *
+     * <p>Best-effort, same contract as the audit: written by a {@code REQUIRES_NEW} recorder across
+     * a bean boundary and wrapped in try/catch, so a history failure can never roll back the lead.
+     * The claim-time events are the opposite (in-transaction) — see {@code LeadClaimService}.
+     */
+    private void recordAssignmentHistory(Lead lead, AssignmentOutcome outcome, Long tenantId,
+                                         LeadActor actor) {
+        try {
+            leadAssignmentEventRecorder.record(LeadAssignmentEvent.builder()
+                    .tenantId(tenantId)
+                    .leadId(lead.getId())
+                    .leadPublicId(lead.getPublicId())
+                    .eventType(LeadAssignmentEventType.AUTO_ASSIGNED)
+                    // No fromUser — nobody held it before. A self-referential "from X to X" row would
+                    // render in the timeline as a transfer that never happened.
+                    .toUserId(outcome.finalUser().getId())
+                    .toUserName(outcome.finalUser().getName())
+                    // Null for INTEGRATION / SYSTEM: a webhook has no user behind it, and actorName
+                    // carries the connection label instead so the trail still reads "who did this".
+                    .actorUserId(actor.userId())
+                    .actorName(actor.displayName())
+                    .strategyUsed(outcome.strategyUsed())
+                    .build());
+        } catch (Exception ex) {
+            log.warn("Lead assignment history write failed for lead {}: {}",
+                    lead.getPublicId(), ex.getMessage());
+        }
+    }
+
     // ── Read ──────────────────────────────────────────────────────────────────
+
+    @Override
+    @Transactional(readOnly = true)
+    public Page<LeadResponseDto> getAllLeads(int page, int size,
+                                             String sortBy, String sortDir) {
+        return getAllLeads(page, size, sortBy, sortDir, null, null, null, null, null, null, null);
+    }
+
+    /**
+     * Columns a client may sort the leads list by.
+     *
+     * <p>A whitelist, not a convenience: {@code sortBy} arrives as a free-form request string and
+     * used to go straight into {@code Sort.by(...)}, where an unknown property is not rejected at
+     * bind time but blows up inside Hibernate as a {@code PropertyReferenceException} — a 500, not
+     * the 400 it is. Anything outside this set falls back to {@code createdAt}
+     * ({@link PageSupport#buildSort}).
+     */
+    private static final Set<String> LEAD_SORT_WHITELIST = Set.of(
+            "createdAt", "updatedAt", "customerName", "leadCode",
+            "travelDate", "followUpDate", "budget", "leadStage", "leadType");
 
     @Override
     @Transactional(readOnly = true)
     public Page<LeadResponseDto> getAllLeads(int page, int size,
                                              String sortBy, String sortDir,
                                              String search, String stage, String leadType,
-                                             LocalDate fromDate, LocalDate toDate) {
+                                             LocalDate fromDate, LocalDate toDate,
+                                             Boolean activeOnly, LocalDate followUpDueBy) {
         Long tenantId = currentTenantId();
 
-        // Shared sort + size cap — the SAME rule as every other paged list in the app. buildSort
-        // appends a stable `id DESC` tiebreaker so tied createdAt rows can't straddle two pages, and
-        // pageRequest floors page/size and caps size (MAX 200). See common/util/PageSupport.
-        Pageable pageable = PageSupport.pageRequest(page, size, PageSupport.buildSort(sortBy, sortDir));
+        // Whitelisted property, clamped size, and a stable `id DESC` tiebreaker — all three from
+        // PageSupport, the same helper every other paged list uses. The tiebreaker is the one that
+        // matters now that the client actually pages: ordering on a non-unique column alone lets
+        // Postgres arrange tied rows differently per page, so a lead can appear on two pages while
+        // another never appears at all — which reads to the user as a deleted record.
+        Pageable pageable = PageSupport.pageRequest(page, size,
+                PageSupport.buildSort(sortBy, sortDir, LEAD_SORT_WHITELIST));
 
-        // Row-level scope (own / team / all). NONE short-circuits to an empty page before building
-        // any query. null ⇒ ALL (no owner restriction); a non-empty set ⇒ owner IN (ids).
+        // Tenant + soft-delete, then row-level scope (own / team / all) for this user.
         Set<Long> visibleIds = scopeResolver.visibleUserIds(currentUser(), "LEAD_READ");
-        if (visibleIds != null && visibleIds.isEmpty()) {          // NONE — sees nothing
-            return new PageImpl<>(List.of(), pageable, 0);
+        if (visibleIds != null && visibleIds.isEmpty()) {   // NONE — sees nothing
+            return Page.empty(pageable);
         }
 
-        // An unknown stage string is treated as "no stage filter" rather than a 500 — the filter
-        // dropdown is forgiving, and @JsonValue drift on the wire should not crash the list.
-        LeadStage stageEnum = null;
-        if (stage != null && !stage.isBlank()) {
-            try { stageEnum = LeadStage.fromValue(stage); }
-            catch (IllegalArgumentException ignored) { /* leave null ⇒ all stages */ }
-        }
+        // One Specification carries scope AND the caller's filters, so a narrowed list can never
+        // widen what the row-level scope allows — both are AND-ed in the same WHERE clause.
+        Page<Lead> leadPage = leadRepository.findAll(
+                LeadSpecification.filter(tenantId, visibleIds, search,
+                        LeadSpecification.parseStage(stage),
+                        LeadSpecification.parseType(leadType),
+                        fromDate, toDate, activeOnly, followUpDueBy),
+                pageable);
 
-        // Same forgiving parse as stage — an unknown type widens rather than 500s.
-        LeadType typeEnum = null;
-        if (leadType != null && !leadType.isBlank()) {
-            try { typeEnum = LeadType.fromValue(leadType); }
-            catch (IllegalArgumentException ignored) { /* leave null ⇒ all types */ }
-        }
-
-        Specification<Lead> spec = LeadSpecification.base(tenantId)
-                .and(LeadSpecification.search(search))
-                .and(LeadSpecification.hasStage(stageEnum))
-                .and(LeadSpecification.hasLeadType(typeEnum))
-                .and(LeadSpecification.createdBetween(fromDate, toDate))
-                .and(LeadSpecification.ownedByIds(visibleIds));    // null ⇒ no restriction
-
-        Page<Lead> leadPage = leadRepository.findAll(spec, pageable);
         List<Lead> leads = leadPage.getContent();
 
         List<LeadResponseDto> dtos = leads.stream()
@@ -511,7 +628,7 @@ public class LeadServiceImpl implements LeadService {
                 .referencePublicId(updated.getPublicId())
                 .channels(Set.of(DeliveryChannel.IN_APP))
                 .build());
-        return leadMapper.toResponse(updated);
+        return toEnrichedResponse(updated);
     }
 
     // ── Delete (soft) ─────────────────────────────────────────────────────────
@@ -599,8 +716,13 @@ public class LeadServiceImpl implements LeadService {
     }
 
     /**
-     * Batch-populate logCount on lead DTOs using one grouped count query.
-     * Counts are matched through the public id exposed on the DTO.
+     * Batch-populate {@code logCount} AND {@code lastActivityAt} on lead DTOs from one grouped
+     * query. Values are matched through the public id exposed on the DTO.
+     *
+     * <p>Both come from the same {@code GROUP BY}, so the timestamp is free — see
+     * {@code LeadRepository.countLogsByLeadIds}. A lead with no logs gets count 0 and a NULL
+     * timestamp; null is deliberate and must not be coerced to "now" or to createdAt, because the
+     * list renders "no activity yet" and "last touched today" as two different verdicts.
      */
     private void enrichWithLogCounts(List<LeadResponseDto> dtos, List<Lead> leads) {
         if (dtos.isEmpty()) return;
@@ -610,22 +732,53 @@ public class LeadServiceImpl implements LeadService {
                 .filter(Objects::nonNull)
                 .toList();
 
-        Map<Long, Long> countsByLeadId = leadIds.isEmpty()
-                ? Map.of()
-                : leadRepository.countLogsByLeadIds(leadIds).stream()
-                .collect(Collectors.toMap(
-                        row -> ((Number) row[0]).longValue(),
-                        row -> ((Number) row[1]).longValue()));
+        Map<Long, Long> countsByLeadId = new HashMap<>();
+        Map<Long, LocalDateTime> lastActivityByLeadId = new HashMap<>();
+        if (!leadIds.isEmpty()) {
+            for (Object[] row : leadRepository.countLogsByLeadIds(leadIds)) {
+                Long leadId = ((Number) row[0]).longValue();
+                countsByLeadId.put(leadId, ((Number) row[1]).longValue());
+                // row[2] is MAX(createdAt); null only if every log for this lead had a null stamp.
+                if (row[2] != null) {
+                    lastActivityByLeadId.put(leadId, (LocalDateTime) row[2]);
+                }
+            }
+        }
 
-        Map<UUID, Long> countsByPublicId = leads.stream()
-                .filter(lead -> lead.getPublicId() != null)
-                .collect(Collectors.toMap(
-                        Lead::getPublicId,
-                        lead -> countsByLeadId.getOrDefault(lead.getId(), 0L),
-                        (first, second) -> first));
+        Map<UUID, Long> countsByPublicId = new HashMap<>();
+        Map<UUID, LocalDateTime> lastActivityByPublicId = new HashMap<>();
+        for (Lead lead : leads) {
+            UUID publicId = lead.getPublicId();
+            if (publicId == null) continue;
+            // putIfAbsent mirrors the old toMap merge function: first wins on a duplicate id.
+            countsByPublicId.putIfAbsent(publicId, countsByLeadId.getOrDefault(lead.getId(), 0L));
+            LocalDateTime last = lastActivityByLeadId.get(lead.getId());
+            if (last != null) lastActivityByPublicId.putIfAbsent(publicId, last);
+        }
 
-        dtos.forEach(dto -> dto.setLogCount(
-                countsByPublicId.getOrDefault(dto.getId(), 0L)));
+        dtos.forEach(dto -> {
+            dto.setLogCount(countsByPublicId.getOrDefault(dto.getId(), 0L));
+            dto.setLastActivityAt(lastActivityByPublicId.get(dto.getId()));
+        });
+    }
+
+    /**
+     * Map ONE lead to the same shape the list and detail reads return — {@code latestQuotation} and
+     * {@code logCount} included.
+     *
+     * <p>Every mutation used to return a bare {@code leadMapper.toResponse(...)}, which leaves both
+     * fields null because the mapper does not populate them; only the read paths called the two
+     * enrichers. A client that patches its row from the mutation response therefore watched the
+     * Quote Value column and the log-count badge go blank immediately after a successful save, and
+     * had to refetch the whole page to get them back. Both enrichers are batch queries over a
+     * one-element list here, so this costs two queries, not N.
+     */
+    private LeadResponseDto toEnrichedResponse(Lead lead) {
+        LeadResponseDto dto = leadMapper.toResponse(lead);
+        List<LeadResponseDto> one = List.of(dto);
+        enrichWithLatestQuotation(one);
+        enrichWithLogCounts(one, List.of(lead));
+        return dto;
     }
 
     @Override
@@ -639,31 +792,64 @@ public class LeadServiceImpl implements LeadService {
         LeadStage oldStage = lead.getLeadStage();
         if (oldStage == newStage) {
             // No-op move (dropped back into the same column) — skip the write
-            // and the notification entirely.
-            return leadMapper.toResponse(lead);
+            // and the notification entirely. Still enriched: the caller cannot tell a no-op from a
+            // real move, so the two must answer with the same shape.
+            return toEnrichedResponse(lead);
         }
 
         // CONVERTED is owned by the booking lifecycle — reject drag/edit crossings.
         assertConversionStageTransitionAllowed(oldStage, newStage);
+
+        // ── The claim window's SECOND door ───────────────────────────────────
+        // Dragging an open lead into an engaged stage IS first contact, and it must close the claim
+        // window exactly as the "Mark Contacted" button does. Routing it through the same CAS rather
+        // than setting the stage here is the whole point: a direct save would move the lead to
+        // "Qualified" while leaving it advertised in the claim feed with its SLA clock still running,
+        // and two people would keep being able to take it. The CAS also writes the stage, so this
+        // branch must NOT fall through to the save below.
+        if (LeadAccessGuard.isOpenToClaim(lead) && LeadStageGroups.isEngaged(newStage)) {
+            leadClaimService.stampFirstContact(lead, newStage, "Stage moved to "
+                    + newStage.getDisplayName());
+            // Re-read: stampFirstContact runs a bulk UPDATE that clears the persistence context, so
+            // the `lead` reference above is now stale and would report the pre-contact state.
+            Lead contacted = leadRepository
+                    .findByPublicIdAndTenantIdAndDeletedAtIsNull(publicId, tenantId)
+                    .orElseThrow(() -> new ResourceNotFoundException("Lead not found: " + publicId));
+            log.info("Lead stage changed with first-contact stamp | publicId: {} | {} -> {} | tenantId: {}",
+                    publicId, oldStage, newStage, tenantId);
+            publishStageChangedNotification(contacted, oldStage, newStage, tenantId);
+            return toEnrichedResponse(contacted);
+        }
 
         lead.setLeadStage(newStage);
         Lead updated = leadRepository.save(lead);
         log.info("Lead stage changed | publicId: {} | {} -> {} | tenantId: {}",
                 publicId, oldStage, newStage, tenantId);
 
+        publishStageChangedNotification(updated, oldStage, newStage, tenantId);
+
+        return toEnrichedResponse(updated);
+    }
+
+    /**
+     * Extracted so BOTH stage-change paths — the ordinary save and the first-contact CAS above —
+     * raise the identical event. Inlined in one branch only, it silently went missing whenever a
+     * drag happened to close the claim window, which is precisely the move a manager most wants to
+     * see in the feed.
+     */
+    private void publishStageChangedNotification(Lead lead, LeadStage oldStage, LeadStage newStage,
+                                                 Long tenantId) {
         eventPublisher.publishEvent(NotifyEvent.builder()
                 .type("LEAD_STAGE_CHANGED")
                 .tenantId(tenantId)
                 .actorUserId(currentUserId())
-                .title("Lead moved: " + updated.getCustomerName())
-                .message(updated.getCustomerName() + " moved from "
+                .title("Lead moved: " + lead.getCustomerName())
+                .message(lead.getCustomerName() + " moved from "
                         + oldStage.getDisplayName() + " to " + newStage.getDisplayName())
                 .referenceType("LEAD")
-                .referencePublicId(updated.getPublicId())
+                .referencePublicId(lead.getPublicId())
                 .channels(Set.of(DeliveryChannel.IN_APP))
                 .build());
-
-        return leadMapper.toResponse(updated);
     }
 
     /**
@@ -724,6 +910,190 @@ public class LeadServiceImpl implements LeadService {
         if (visibleIds == null)        return leadRepository.countLeadsByStagePerUser(tenantId);
         if (visibleIds.isEmpty())      return List.of();
         return leadRepository.countLeadsByStagePerUserForUsers(tenantId, visibleIds);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public LeadStatsSummaryDto getStatsSummary(LocalDate from, LocalDate to) {
+        Long tenantId = currentTenantId();
+
+        // The TENANT's day, not the server's — same reasoning as LeadAlertService. An agency in
+        // Kathmandu must not have its evening leads counted against tomorrow because the JVM runs
+        // in UTC, and "follow-ups due today" is exactly the figure someone acts on at 6pm.
+        ZoneId zone = tenantTimeZone.forTenant(tenantId);
+        LocalDate today = LocalDate.now(zone);
+
+        // Default window = the tenant's current calendar month. Deliberately a real window rather
+        // than "all time": a conversion rate over all history never moves and nobody watches it.
+        LocalDate periodFrom = from != null ? from : today.withDayOfMonth(1);
+        LocalDate periodTo   = to   != null ? to   : today;
+        if (periodTo.isBefore(periodFrom)) {
+            throw new BusinessException("'to' cannot be earlier than 'from'", HttpStatus.BAD_REQUEST);
+        }
+        LocalDateTime windowStart = periodFrom.atStartOfDay();
+        // periodTo is INCLUSIVE for the caller; the queries are half-open, so add the day here once
+        // instead of in five separate predicates.
+        LocalDateTime windowEnd = periodTo.plusDays(1).atStartOfDay();
+
+        // Exactly the scope getAllLeads uses, so a card can never show more than its list can.
+        Set<Long> visibleIds = scopeResolver.visibleUserIds(currentUser(), "LEAD_READ");
+        if (visibleIds != null && visibleIds.isEmpty()) {
+            // NONE: zeros, not an error — and still fully zero-filled, so the client's card grid
+            // renders the same shape it always does.
+            return emptySummary(today, periodFrom, periodTo);
+        }
+        boolean unrestricted = visibleIds == null;
+
+        // ── Pipeline shape: one GROUP BY, reusing the per-user breakdown already in the repository.
+        List<UserLeadStageCountDto> stageRows = unrestricted
+                ? leadRepository.countLeadsByStagePerUser(tenantId)
+                : leadRepository.countLeadsByStagePerUserForUsers(tenantId, visibleIds);
+
+        Map<LeadStage, Long> stageTotals = new EnumMap<>(LeadStage.class);
+        for (UserLeadStageCountDto row : stageRows) {
+            stageTotals.merge(row.getStage(), row.getLeadCount(), Long::sum);
+        }
+        List<LeadStatsSummaryDto.StageCount> byStage = Arrays.stream(LeadStage.values())
+                .map(stage -> new LeadStatsSummaryDto.StageCount(
+                        stage, stageTotals.getOrDefault(stage, 0L)))
+                .toList();
+
+        long totalLeads   = stageTotals.values().stream().mapToLong(Long::longValue).sum();
+        long converted    = stageTotals.getOrDefault(LeadStage.CONVERTED, 0L);
+        long lost         = stageTotals.getOrDefault(LeadStage.LOST, 0L);
+        long proposalSent = stageTotals.getOrDefault(LeadStage.PROPOSAL_SENT, 0L);
+        // Derived as the complement, exactly like LeadStageGroups.ACTIVE_STAGES defines it, so a
+        // stage added to the enum later counts as active here without touching this line.
+        long activeLeads  = totalLeads - converted - lost;
+
+        // ── Type breakdown (the Fresh tab badge and the Hot card).
+        List<Object[]> typeRows = unrestricted
+                ? leadRepository.countLeadsByType(tenantId)
+                : leadRepository.countLeadsByTypeForUsers(tenantId, visibleIds);
+        Map<LeadType, Long> typeTotals = new EnumMap<>(LeadType.class);
+        for (Object[] row : typeRows) {
+            if (row[0] == null) continue;   // legacy rows written before the column was NOT NULL
+            typeTotals.merge((LeadType) row[0], ((Number) row[1]).longValue(), Long::sum);
+        }
+        List<LeadStatsSummaryDto.TypeCount> byType = Arrays.stream(LeadType.values())
+                .map(type -> new LeadStatsSummaryDto.TypeCount(
+                        type, typeTotals.getOrDefault(type, 0L)))
+                .toList();
+
+        // ── Money in play.
+        List<Object[]> budgetRows = unrestricted
+                ? leadRepository.sumActiveBudget(tenantId, TERMINAL_STAGES)
+                : leadRepository.sumActiveBudgetForUsers(tenantId, visibleIds, TERMINAL_STAGES);
+        BigDecimal activePipelineValue = BigDecimal.ZERO;
+        long activeWithBudget = 0L;
+        if (!budgetRows.isEmpty()) {
+            Object[] row = budgetRows.get(0);
+            activePipelineValue = toBigDecimal(row[0]);
+            activeWithBudget = row[1] == null ? 0L : ((Number) row[1]).longValue();
+        }
+
+        // ── Quoted value: price each PROPOSAL_SENT lead's LATEST quotation through the shared
+        // formula. Quotation stores no grand-total column (it is derived from the per-service
+        // amounts plus discount/tax/markup), so a SQL SUM would be a second copy of that formula.
+        Pageable quotedCap = PageRequest.of(0, MAX_QUOTED_VALUE_LEADS);
+        List<UUID> proposalSentIds = unrestricted
+                ? leadRepository.findPublicIdsByStage(tenantId, LeadStage.PROPOSAL_SENT, quotedCap)
+                : leadRepository.findPublicIdsByStageForUsers(
+                tenantId, visibleIds, LeadStage.PROPOSAL_SENT, quotedCap);
+        boolean quotedValueComplete = proposalSentIds.size() < MAX_QUOTED_VALUE_LEADS;
+        if (!quotedValueComplete) {
+            log.warn("Quoted-value roll-up hit its {}-lead cap for tenant {} — the figure is a floor",
+                    MAX_QUOTED_VALUE_LEADS, tenantId);
+        }
+        BigDecimal quotedValue = quotationService.getLatestRefsByLeads(proposalSentIds)
+                .values().stream()
+                .map(QuotationRefDto::getGrandTotal)
+                .filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        // ── Today's work.
+        long followUpsOverdue = unrestricted
+                ? leadRepository.countFollowUpsBefore(tenantId, TERMINAL_STAGES, today)
+                : leadRepository.countFollowUpsBeforeForUsers(
+                tenantId, visibleIds, TERMINAL_STAGES, today);
+        long followUpsDueToday = unrestricted
+                ? leadRepository.countFollowUpsInRange(
+                tenantId, TERMINAL_STAGES, today, today.plusDays(1))
+                : leadRepository.countFollowUpsInRangeForUsers(
+                tenantId, visibleIds, TERMINAL_STAGES, today, today.plusDays(1));
+
+        // ── Period figures. createdInPeriod and cohortConverted are the SAME population — that
+        // pairing is what makes the rate meaningful; convertedInPeriod is a different one (wins
+        // banked in the window, whenever the lead arrived) and is reported as its own number.
+        long createdInPeriod = unrestricted
+                ? leadRepository.countCreatedBetween(tenantId, windowStart, windowEnd)
+                : leadRepository.countCreatedBetweenForUsers(
+                tenantId, visibleIds, windowStart, windowEnd);
+        long convertedInPeriod = unrestricted
+                ? leadRepository.countConvertedBetween(tenantId, windowStart, windowEnd)
+                : leadRepository.countConvertedBetweenForUsers(
+                tenantId, visibleIds, windowStart, windowEnd);
+        long cohortConverted = unrestricted
+                ? leadRepository.countCreatedBetweenInStage(
+                tenantId, LeadStage.CONVERTED, windowStart, windowEnd)
+                : leadRepository.countCreatedBetweenInStageForUsers(
+                tenantId, visibleIds, LeadStage.CONVERTED, windowStart, windowEnd);
+
+        return LeadStatsSummaryDto.builder()
+                .totalLeads(totalLeads)
+                .activeLeads(activeLeads)
+                .convertedLeads(converted)
+                .lostLeads(lost)
+                .proposalSentLeads(proposalSent)
+                .byStage(byStage)
+                .byType(byType)
+                .activePipelineValue(activePipelineValue)
+                .activeWithBudget(activeWithBudget)
+                .quotedValue(quotedValue)
+                .quotedValueComplete(quotedValueComplete)
+                .followUpsOverdue(followUpsOverdue)
+                .followUpsDueToday(followUpsDueToday)
+                .today(today)
+                .periodFrom(periodFrom)
+                .periodTo(periodTo)
+                .createdInPeriod(createdInPeriod)
+                .convertedInPeriod(convertedInPeriod)
+                .cohortConverted(cohortConverted)
+                // Null when nothing was created in the window: "no leads to convert yet" and
+                // "converted none of them" are opposite facts and must not both render as 0%.
+                .conversionRate(createdInPeriod == 0
+                        ? null
+                        : Math.round(cohortConverted * 1000.0 / createdInPeriod) / 10.0)
+                .build();
+    }
+
+    /** Same shape, all zeros — for a caller whose LEAD_READ scope resolves to NONE. */
+    private LeadStatsSummaryDto emptySummary(LocalDate today, LocalDate periodFrom, LocalDate periodTo) {
+        return LeadStatsSummaryDto.builder()
+                .byStage(Arrays.stream(LeadStage.values())
+                        .map(stage -> new LeadStatsSummaryDto.StageCount(stage, 0L))
+                        .toList())
+                .byType(Arrays.stream(LeadType.values())
+                        .map(type -> new LeadStatsSummaryDto.TypeCount(type, 0L))
+                        .toList())
+                .activePipelineValue(BigDecimal.ZERO)
+                .quotedValue(BigDecimal.ZERO)
+                .quotedValueComplete(true)
+                .today(today)
+                .periodFrom(periodFrom)
+                .periodTo(periodTo)
+                .build();
+    }
+
+    /**
+     * {@code COALESCE(SUM(...), 0)} comes back as a BigDecimal on Postgres, but the literal in the
+     * COALESCE leaves the door open to an Integer on another dialect or an empty table. Normalise
+     * once here rather than casting at the call site and finding out in production.
+     */
+    private static BigDecimal toBigDecimal(Object value) {
+        if (value == null)                 return BigDecimal.ZERO;
+        if (value instanceof BigDecimal b) return b;
+        return new BigDecimal(value.toString());
     }
 
     /** Existence check only — unlike assignment, inactive users are fine here. */
@@ -895,11 +1265,18 @@ public class LeadServiceImpl implements LeadService {
     }
 
     private void publishLeadCreatedNotification(Lead lead, Long tenantId) {
-        // Notify all TENANT_ADMIN + MANAGER of this tenant
-        List<Long> recipientIds = userRepository
-                .findByTenantIdAndRoleInAndIsActiveTrue(
-                        tenantId,
-                        List.of("TENANT_ADMIN", "MANAGER"))
+        // BROADCAST TO EVERYONE WHO COULD OWN THIS LEAD, not just admins and managers.
+        //
+        // This used to target TENANT_ADMIN + MANAGER only, which made sense when a new lead was
+        // purely a supervisory event. It is not any more: the lead is claimable by any eligible
+        // agent, and an alert that reaches only the two people who mostly do not work the pipeline
+        // is an alert nobody acts on.
+        //
+        // The audience is AssignableUserResolver's pool — active, unlocked, holds LEAD_READ, never a
+        // sub-agent — i.e. exactly the set the auto-assignment could have picked from and the set
+        // LeadClaimService will let claim. Deriving it from the same resolver rather than a role
+        // list means "who is told" and "who may act" cannot drift apart.
+        List<Long> recipientIds = assignableUserResolver.resolve(tenantId, Permission.LEAD_READ)
                 .stream()
                 .map(User::getId)
                 .toList();

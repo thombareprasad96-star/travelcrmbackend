@@ -87,6 +87,11 @@ public class MarketplaceBookingAdminDto {
     BigDecimal cancellationCharge;
     BigDecimal tenantRefundAmount;
     Long cancelledBySuperAdminId;
+    BigDecimal quotedCancellationCharge;
+    BigDecimal quotedRetainedEarning;
+    String cancellationQuoteNote;
+    LocalDateTime cancellationQuotedAt;
+    LocalDateTime cancellationQuoteExpiresAt;
 
     // ── Voucher (design §7) ─────────────────────────────────────────────────
     VoucherStatus voucherStatus;

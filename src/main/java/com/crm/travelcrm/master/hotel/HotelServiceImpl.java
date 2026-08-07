@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
@@ -115,6 +116,7 @@ public class HotelServiceImpl implements HotelService {
     public HotelDto update(Long hotelId, UpdateHotelRequest request) {
         Long tenantId = GeographySupport.currentTenantId();
         Hotel hotel = findOrThrow(hotelId);
+        assertNoPlatformOwnedEdits(hotel, request);
 
         if (request.getDestinationId() != null || StringUtils.hasText(request.getCity())) {
             City city = resolveCity(request.getDestinationId(), request.getCity(), tenantId);
@@ -143,6 +145,12 @@ public class HotelServiceImpl implements HotelService {
     @Transactional
     public void delete(Long hotelId) {
         Hotel hotel = findOrThrow(hotelId);
+        // NOT blocked for a PLATFORM_SYNC row, unlike every edit path above and below. This is the
+        // only un-import there is: the marketplace exposes POST /hotels/{id}/import but no unlink,
+        // so refusing here would strand an imported hotel in the master permanently. It is safe
+        // because uq_hotels_platform_link_per_tenant is partial on `deleted_at IS NULL` (V2 PART 13)
+        // — the trashed projection stops matching, and a re-import simply builds a fresh one.
+        //
         // Leaf master — bookings/quotations reference it only by name snapshot (no FK), so it
         // moves to Trash freely and existing records keep resolving. Recoverable until purge.
         hotel.softDelete(GeographySupport.currentUsername());
@@ -153,6 +161,8 @@ public class HotelServiceImpl implements HotelService {
     @Override
     @Transactional
     public HotelDto setDefault(Long hotelId) {
+        // Allowed on a projection: isDefault is an explicitly tenant-local field (§6.4) and the sync
+        // never copies it, so there is nothing here for a catalog refresh to revert.
         Hotel hotel = findOrThrow(hotelId);
         hotel.setDefault(true);
         return hotelMapper.toDto(hotelRepository.save(hotel));
@@ -166,6 +176,9 @@ public class HotelServiceImpl implements HotelService {
     @Override
     @Transactional
     public RoomTypeDto addRoomType(Long hotelId, CreateRoomTypeRequest request) {
+        // Allowed even on a projection. A room the tenant adds carries no platformSourcePublicId, and
+        // deactivateVanished() only touches rows that have one — so their own row survives every
+        // future sync untouched. An agency with a privately negotiated category needs this.
         Hotel hotel = findOrThrow(hotelId);
         RoomType roomType = hotelMapper.toRoomTypeEntity(request);
         roomType.setHotel(hotel);
@@ -179,6 +192,9 @@ public class HotelServiceImpl implements HotelService {
         findOrThrow(hotelId);
         RoomType roomType = roomTypeRepository.findByIdAndHotelId(roomTypeId, hotelId)
                 .orElseThrow(() -> new ResourceNotFoundException("Room type not found: " + roomTypeId));
+        // Every field on UpdateRoomTypeRequest — name, size, occupancy, bedType, description — is one
+        // syncRooms() overwrites, so there is no partial edit worth allowing here.
+        assertRoomTypeIsTenantOwned(roomType, "edited");
         hotelMapper.updateRoomTypeEntity(request, roomType);
         return hotelMapper.toRoomTypeDto(roomTypeRepository.save(roomType));
     }
@@ -189,6 +205,10 @@ public class HotelServiceImpl implements HotelService {
         findOrThrow(hotelId);
         RoomType roomType = roomTypeRepository.findByIdAndHotelId(roomTypeId, hotelId)
                 .orElseThrow(() -> new ResourceNotFoundException("Room type not found: " + roomTypeId));
+        // This is a HARD delete, and the row would come back at the next sync with a NEW publicId —
+        // orphaning every quotation and booking line that named the old one. That is precisely the
+        // failure syncRooms() upserts to avoid; withdrawal is the catalog's job (it deactivates).
+        assertRoomTypeIsTenantOwned(roomType, "deleted");
         roomTypeRepository.delete(roomType);
     }
 
@@ -198,6 +218,10 @@ public class HotelServiceImpl implements HotelService {
         findOrThrow(hotelId);
         RoomType roomType = roomTypeRepository.findByIdAndHotelId(roomTypeId, hotelId)
                 .orElseThrow(() -> new ResourceNotFoundException("Room type not found: " + roomTypeId));
+        // syncRooms() does images.clear() then addAll(catalog images), so an upload here survives only
+        // until the next catalog version — and it would have already been metered against the tenant's
+        // storage quota by then. Refuse before the bytes are spent, not after.
+        assertRoomTypeIsTenantOwned(roomType, "given images");
 
         List<String> urls = Arrays.stream(files)
                 .map(f -> cloudinaryService.uploadImage(f, "hotels/rooms"))
@@ -210,6 +234,8 @@ public class HotelServiceImpl implements HotelService {
     @Override
     @Transactional
     public MealPlanDto addMealPlan(Long hotelId, CreateMealPlanRequest request) {
+        // Allowed on a projection, for the same reason as addRoomType: a tenant-authored plan has no
+        // platformSourcePublicId and survives every sync.
         Hotel hotel = findOrThrow(hotelId);
         MealPlan mealPlan = hotelMapper.toMealPlanEntity(request);
         mealPlan.setHotel(hotel);
@@ -223,6 +249,7 @@ public class HotelServiceImpl implements HotelService {
         findOrThrow(hotelId);
         MealPlan mealPlan = mealPlanRepository.findByIdAndHotelId(mealPlanId, hotelId)
                 .orElseThrow(() -> new ResourceNotFoundException("Meal plan not found: " + mealPlanId));
+        assertMealPlanEditIsPriceOnly(mealPlan, request);
         hotelMapper.updateMealPlanEntity(request, mealPlan);
         return hotelMapper.toMealPlanDto(mealPlanRepository.save(mealPlan));
     }
@@ -233,6 +260,10 @@ public class HotelServiceImpl implements HotelService {
         findOrThrow(hotelId);
         MealPlan mealPlan = mealPlanRepository.findByIdAndHotelId(mealPlanId, hotelId)
                 .orElseThrow(() -> new ResourceNotFoundException("Meal plan not found: " + mealPlanId));
+        // Same hard-delete-then-resurrect-with-a-new-publicId problem as deleteRoomType.
+        if (mealPlan.isPlatformOwned()) {
+            throw platformOwnedChild("meal plan", mealPlan.getName(), "deleted");
+        }
         mealPlanRepository.delete(mealPlan);
     }
 
@@ -240,6 +271,136 @@ public class HotelServiceImpl implements HotelService {
         Long tenantId = GeographySupport.currentTenantId();
         return hotelRepository.findByIdAndTenantId(hotelId, tenantId)
                 .orElseThrow(() -> new ResourceNotFoundException("Hotel not found: " + hotelId));
+    }
+
+    // ── Marketplace projections are read-only (design doc §6.4) ─────────────────────────────────
+    //
+    // A hotel imported from the platform catalog is a CONTROLLED PROJECTION, not a copy. The catalog
+    // owns its descriptive fields and HotelMasterProjectionService.sync() rewrites them on every
+    // version bump. So an edit accepted here is not merely against the rules — it is DATA LOSS ON A
+    // TIMER: it saves, it displays, and it silently vanishes the next time the catalog moves. That
+    // silence is the whole problem, and it is why these throw rather than quietly no-op.
+    //
+    // What stays the tenant's, and is deliberately still writable:
+    //   Hotel      — contactPerson, isDefault  (§6.4; sync() explicitly does not copy either)
+    //   MealPlan   — price                     (their selling price; syncMealPlans() never writes it)
+    //   delete()   — the only un-import path there is (see the note on that method)
+    //   new room types / meal plans they add themselves (no platformSourcePublicId ⇒ sync ignores them)
+    //
+    // 409 CONFLICT, not 403: this is not about who the caller is. No permission and no role can edit
+    // a projection, because the conflict is with the state of the resource itself.
+    //
+    // FRONTEND: HotelDto/RoomTypeDto/MealPlanDto now carry `platformOwned` so the master screen can
+    // render these rows read-only. That is the real UX; this guard is the backstop for a direct API
+    // call. It matters that both exist — the FE error policy treats 409 as call-site-rendered and
+    // shows no automatic toast, so a UI that still offers an enabled Save button would appear to do
+    // nothing at all when it is pressed.
+
+    /**
+     * Reject an update that would change any platform-owned field on a projection.
+     *
+     * <p>Compares against the STORED value rather than merely checking whether a field was sent. The
+     * hotel form posts its whole model back, so a "was this key present?" test would 409 every save —
+     * including one that only touches contactPerson. Only a real change is refused.
+     *
+     * <p>{@code null} and {@code ""} are treated as the same value throughout: a controlled React
+     * input yields {@code ""} for an empty box, and a projection whose {@code website} is null would
+     * otherwise be unsaveable forever.
+     */
+    private void assertNoPlatformOwnedEdits(Hotel hotel, UpdateHotelRequest r) {
+        if (!hotel.isPlatformOwned()) {
+            return;
+        }
+        City current = hotel.getCity();
+        List<String> blocked = new ArrayList<>();
+
+        if (r.getDestinationId() != null && current != null && current.getDestination() != null
+                && !r.getDestinationId().equals(current.getDestination().getId())) {
+            blocked.add("destination");
+        }
+        if (textChanged(r.getCity(), current == null ? null : current.getName())) blocked.add("city");
+        if (textChanged(r.getName(), hotel.getName()))            blocked.add("name");
+        if (textChanged(r.getAddress(), hotel.getAddress()))      blocked.add("address");
+        if (textChanged(r.getPhone(), hotel.getPhone()))          blocked.add("phone");
+        if (textChanged(r.getEmail(), hotel.getEmail()))          blocked.add("email");
+        if (textChanged(r.getWebsite(), hotel.getWebsite()))      blocked.add("website");
+        if (textChanged(r.getMapUrl(), hotel.getMapUrl()))        blocked.add("mapUrl");
+        if (textChanged(r.getOverview(), hotel.getOverview()))    blocked.add("overview");
+        if (textChanged(r.getImagePath(), hotel.getImagePath()))  blocked.add("image");
+        if (valueChanged(r.getStars(), hotel.getStars()))         blocked.add("stars");
+        if (valueChanged(r.getRating(), hotel.getRating()))       blocked.add("rating");
+        if (valueChanged(r.getLatitude(), hotel.getLatitude()))   blocked.add("latitude");
+        if (valueChanged(r.getLongitude(), hotel.getLongitude())) blocked.add("longitude");
+        if (r.getAmenities() != null && !normalize(r.getAmenities()).equals(normalize(hotel.getAmenities()))) {
+            blocked.add("amenities");
+        }
+
+        if (!blocked.isEmpty()) {
+            log.info("Rejected edit to platform-owned fields {} on projection {} (catalog hotel {})",
+                    blocked, hotel.getId(), hotel.getPlatformHotelPublicId());
+            throw new BusinessException(
+                    "'" + hotel.getName() + "' comes from the Hotel Marketplace, so "
+                            + join(blocked) + " " + (blocked.size() == 1 ? "is" : "are")
+                            + " maintained by the platform and cannot be edited here. "
+                            + "You can still set the contact person and mark it as default.",
+                    HttpStatus.CONFLICT);
+        }
+    }
+
+    /** Refuse a write to a room type the catalog owns. {@code verb} completes "cannot be ...". */
+    private void assertRoomTypeIsTenantOwned(RoomType roomType, String verb) {
+        if (roomType.isPlatformOwned()) {
+            throw platformOwnedChild("room type", roomType.getName(), verb);
+        }
+    }
+
+    /**
+     * A catalog meal plan accepts a price change and nothing else — price is the tenant's own selling
+     * price and {@code syncMealPlans()} deliberately never writes it, so it is the one field here that
+     * a catalog refresh will not revert.
+     */
+    private void assertMealPlanEditIsPriceOnly(MealPlan mealPlan, UpdateMealPlanRequest r) {
+        if (!mealPlan.isPlatformOwned()) {
+            return;
+        }
+        List<String> blocked = new ArrayList<>();
+        if (textChanged(r.getName(), mealPlan.getName()))               blocked.add("name");
+        if (textChanged(r.getDescription(), mealPlan.getDescription())) blocked.add("description");
+        if (!blocked.isEmpty()) {
+            throw new BusinessException(
+                    "The meal plan '" + mealPlan.getName() + "' comes from the Hotel Marketplace, so its "
+                            + join(blocked) + " cannot be edited here. Its price is yours to set.",
+                    HttpStatus.CONFLICT);
+        }
+    }
+
+    private BusinessException platformOwnedChild(String kind, String name, String verb) {
+        return new BusinessException(
+                "The " + kind + " '" + name + "' comes from the Hotel Marketplace and cannot be "
+                        + verb + " here — the platform maintains it, and the next catalog sync would "
+                        + "undo the change. Add your own " + kind + " instead.",
+                HttpStatus.CONFLICT);
+    }
+
+    /** True when a non-null requested value actually differs from what is stored (null ≡ ""). */
+    private static boolean textChanged(String requested, String current) {
+        return requested != null && !requested.trim().equals(current == null ? "" : current.trim());
+    }
+
+    /** True when a non-null requested value actually differs from what is stored. */
+    private static boolean valueChanged(Object requested, Object current) {
+        return requested != null && !requested.equals(current);
+    }
+
+    private static List<String> normalize(List<String> values) {
+        return values == null ? List.of()
+                : values.stream().filter(StringUtils::hasText).map(String::trim).sorted().toList();
+    }
+
+    private static String join(List<String> fields) {
+        if (fields.size() == 1) return fields.get(0);
+        return String.join(", ", fields.subList(0, fields.size() - 1))
+                + " and " + fields.get(fields.size() - 1);
     }
 
     /**

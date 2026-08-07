@@ -30,10 +30,20 @@ public class QuotationTemplateResponse {
     /** Distinct city names in itinerary order — the chips on the template card. */
     private List<String> cities;
 
+    /** Section keys this package covers. Empty ⇒ not stated, which the matcher skips rather than fails. */
+    private List<String> services;
+
     private List<ItineraryDay> itinerary;
     private List<HotelItem> hotels;
     private List<String> inclusions;
     private List<String> exclusions;
+
+    /** Set when this template was captured from a quotation rather than authored by hand. */
+    private UUID sourceQuotationPublicId;
+
+    /** How many quotations have been cloned from this template. */
+    private Integer timesApplied;
+    private LocalDateTime lastAppliedAt;
 
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

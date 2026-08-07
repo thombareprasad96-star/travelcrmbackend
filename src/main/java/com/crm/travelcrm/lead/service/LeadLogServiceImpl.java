@@ -36,6 +36,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -82,6 +83,19 @@ public class LeadLogServiceImpl implements LeadLogService {
         // tenantId is auto-stamped by TenantEntityListener on @PrePersist.
         LeadLog saved = leadLogRepository.save(logEntry);
         log.info("Lead log added | lead: {} | logId: {}", lead.getPublicId(), saved.getPublicId());
+
+        // Mirror the promise onto the lead itself. The log is the history of what was said; the
+        // lead's followUpDate is the single answer to "when do we next owe this customer a call",
+        // and it is the only one the leads list and any follow-up query can read without joining
+        // every log. Before this, a follow-up agreed on a call lived on the log alone and nothing
+        // outside the log modal ever knew about it.
+        //
+        // Newest promise wins, and a log WITHOUT a date leaves the field alone — a plain note must
+        // never silently cancel a follow-up somebody committed to. Dirty checking flushes it; the
+        // lead came from requireVisible() inside this @Transactional method, so it is managed.
+        if (request.getFollowUpDate() != null) {
+            lead.setFollowUpDate(request.getFollowUpDate());
+        }
 
         // Optional follow-up reminder — delegated to the reminder module so all its rules apply.
         if (request.isCreateReminder() && request.getFollowUpDate() != null) {
@@ -155,6 +169,23 @@ public class LeadLogServiceImpl implements LeadLogService {
         logEntry.softDelete(currentUserEmail());
         leadLogRepository.save(logEntry);
         log.info("Lead log deleted | lead: {} | logId: {}", lead.getPublicId(), logPublicId);
+
+        // The mirror addLog() maintains has to survive a delete. If the log just removed is the one
+        // the lead's followUpDate came from, re-point it at the newest surviving log that carries a
+        // date — or clear it when none is left. Skipping this would leave the lead advertising a
+        // follow-up nobody promised any more, and the leads list would show it as overdue forever.
+        // The derived query below forces a flush first, so the row just soft-deleted is excluded.
+        if (logEntry.getFollowUpDate() != null
+                && logEntry.getFollowUpDate().equals(lead.getFollowUpDate())) {
+            LocalDate surviving = leadLogRepository
+                    .findByLead_IdAndDeletedAtIsNullOrderByCreatedAtDesc(lead.getId())
+                    .stream()
+                    .map(LeadLog::getFollowUpDate)
+                    .filter(Objects::nonNull)
+                    .findFirst()
+                    .orElse(null);
+            lead.setFollowUpDate(surviving);
+        }
     }
 
     @Override

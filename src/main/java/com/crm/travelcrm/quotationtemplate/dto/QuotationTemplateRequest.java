@@ -41,6 +41,16 @@ public class QuotationTemplateRequest {
     /** Months the package is sold in. Leave empty for a year-round package. */
     private Set<@Min(1) @Max(12) Integer> seasonMonths;
 
+    /**
+     * Which services this package covers, as {@code QuotationSection} keys
+     * ({@code flight|hotel|sightseeing|cruise|vehicle|addons}). Anything outside that vocabulary is
+     * dropped server-side, because a package has no way to express it.
+     *
+     * <p>Leave empty for "not stated" — the matcher then skips the services dimension entirely
+     * rather than scoring the package zero on it.
+     */
+    private List<String> services;
+
     @Valid
     private List<ItineraryDay> itinerary;
 

@@ -37,7 +37,12 @@ import java.util.UUID;
         @Index(name = "idx_task_due_date", columnList = "due_date"),
         @Index(name = "idx_task_start_at", columnList = "start_at"),
         @Index(name = "idx_task_assignee", columnList = "assign_to_user_id"),
-        @Index(name = "idx_task_owner",    columnList = "owner_user_id")
+        @Index(name = "idx_task_owner",    columnList = "owner_user_id"),
+        @Index(name = "idx_task_booking",  columnList = "booking_id_ref"),
+        // The All Tasks grid always filters (tenant, assignee, due window) together —
+        // idx_task_assignee alone is not selective enough for the Today/Overdue tabs.
+        @Index(name = "idx_task_tenant_assignee_due",
+               columnList = "tenant_id, assign_to_user_id, due_date")
 })
 @Getter
 @Setter
@@ -122,6 +127,59 @@ public class Task extends BaseTenantEntity implements Ownable {
 
     @Column(name = "lead_name", length = 200)
     private String leadName;
+
+    // ── Optional booking ("trip") link — backs the All Tasks grid ────────────────────────────
+    // Same logical-FK pattern as the lead link above: no DB constraint, resolved and validated in
+    // TaskServiceImpl against the current tenant, with display values snapshotted so a 50-row grid
+    // costs one query rather than fifty.
+
+    /** Logical FK to {@code bookings.id}. No DB-level FK — validated at the application layer. */
+    @Column(name = "booking_id_ref")
+    private Long bookingRefId;
+
+    /** Denormalized snapshot of the booking's publicId — lets the FE deep-link and pre-select on edit. */
+    @Column(name = "booking_public_id")
+    private UUID bookingPublicId;
+
+    /**
+     * Denormalized snapshot of {@code bookings.booking_code} — the human-facing "Trip#" column.
+     * Snapshotted rather than joined so the grid stays readable after a booking is soft-deleted.
+     */
+    @Column(name = "booking_code", length = 20)
+    private String bookingCode;
+
+    /**
+     * Denormalized guest name, taken from {@code Booking.customerNameSnapshot} (itself already a
+     * snapshot). Backs the "Guest" column. Null for tasks with no booking link.
+     */
+    @Column(name = "customer_name_snapshot", length = 255)
+    private String customerNameSnapshot;
+
+    /**
+     * Denormalized {@code LeadSource.getDisplayName()} of the originating lead — the "Trip Source"
+     * column. A STRING, not the enum: this is a point-in-time record of where the work came from,
+     * and it must survive both the lead being deleted and a future rename of the enum constant.
+     * Resolved from the linked booking's lead when present, else from a directly linked lead.
+     */
+    @Column(name = "trip_source", length = 50)
+    private String tripSource;
+
+    /**
+     * Denormalized display name of {@code ownerUserId} (the creator) — the "Created By" column.
+     * Mirrors the {@code assignToName} idiom; {@code BaseEntity.createdBy} is only a login-username
+     * String and is not joinable to a user.
+     */
+    @Column(name = "owner_name", length = 150)
+    private String ownerName;
+
+    /**
+     * When the overdue alert for this task was last dispatched ({@code TaskOverdueScanner}).
+     * Null ⇒ never alerted. A TIMESTAMP rather than a boolean so a future escalation policy
+     * ("still overdue 24h later") can be added without another migration; the scanner clears it
+     * whenever the task leaves the overdue state, so a re-opened or re-scheduled task alerts again.
+     */
+    @Column(name = "overdue_notified_at")
+    private Instant overdueNotifiedAt;
 
     /** Free-form activity log, appended via {@code POST /api/tasks/{id}/logs}. */
     @ElementCollection

@@ -154,6 +154,7 @@ public class BookingExpenseServiceImpl implements BookingExpenseService {
                                                 UpdateBookingExpenseRequest request) {
         Booking booking = findActiveBooking(bookingPublicId);
         BookingExpense expense = findExpense(booking, expensePublicId);
+        assertNotMarketplaceOwned(expense, "edited");
 
         if (request.getCategory() != null)        expense.setCategory(request.getCategory());
         if (request.getCostType() != null)        expense.setCostType(request.getCostType());
@@ -195,6 +196,7 @@ public class BookingExpenseServiceImpl implements BookingExpenseService {
     public void deleteExpense(UUID bookingPublicId, UUID expensePublicId) {
         Booking booking = findActiveBooking(bookingPublicId);
         BookingExpense expense = findExpense(booking, expensePublicId);
+        assertNotMarketplaceOwned(expense, "deleted");
 
         expense.softDelete(currentUserEmail());
         expenseRepository.save(expense);
@@ -219,6 +221,7 @@ public class BookingExpenseServiceImpl implements BookingExpenseService {
         if (!expense.isDeleted()) {
             throw new BusinessException("This expense is not deleted.", HttpStatus.CONFLICT);
         }
+        assertNotMarketplaceOwned(expense, "restored");
 
         expense.restore();
         BookingExpense saved = expenseRepository.save(expense);
@@ -227,6 +230,37 @@ public class BookingExpenseServiceImpl implements BookingExpenseService {
 
         log.info("Expense {} restored on booking {}", expensePublicId, booking.getBookingCode());
         return toResponse(saved, LocalDate.now());
+    }
+
+    /**
+     * A marketplace payable row belongs to the platform, not the tenant — it is written and revised
+     * only by {@code CrmBookingLinkAdapter}, and {@code Booking.vendorCost} is kept in step with it
+     * there. Letting this ledger mutate the row breaks that pairing in three different directions:
+     *
+     * <ul>
+     *   <li><b>Reclassify to INTERNAL</b> — the same rupees are then inside {@code vendorCost} AND
+     *       {@code totalInternalCosts}, so {@code netProfit} is under-stated by the payable twice
+     *       over. (The {@code costType = VENDOR} predicate on {@code sumMarketplacePayable} now also
+     *       closes this from the query side.)</li>
+     *   <li><b>Delete / restore</b> — {@code syncVendorCost} derives the tenant's own cost as
+     *       {@code vendorCost − marketplaceBefore}. Soft-deleting the row drops it out of that sum
+     *       while {@code vendorCost} still contains it, so the very next platform revision reads a
+     *       {@code typedPortion} inflated by the whole payable and stores it FOREVER: a ₹5,000
+     *       payable deleted here, then revised to ₹6,000, left {@code vendorCost} at ₹11,000 on a
+     *       booking where the tenant typed nothing.</li>
+     *   <li><b>Edit the amount</b> — same mis-split, one revision later.</li>
+     * </ul>
+     *
+     * <p>Corrections belong on the marketplace order, which re-projects here. Refusing is the only
+     * answer that keeps one owner per figure.
+     */
+    private static void assertNotMarketplaceOwned(BookingExpense expense, String verb) {
+        if (expense.getMarketplaceBookingPublicId() != null) {
+            throw new BusinessException(
+                    "This line is a hotel-marketplace payable and cannot be " + verb
+                            + " here — change it on the marketplace order instead.",
+                    HttpStatus.CONFLICT);
+        }
     }
 
     @Override

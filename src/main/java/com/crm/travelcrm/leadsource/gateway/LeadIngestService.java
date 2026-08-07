@@ -2,6 +2,7 @@ package com.crm.travelcrm.leadsource.gateway;
 
 import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.auth.repository.UserRepository;
+import com.crm.travelcrm.common.exception.RestoreAvailableException;
 import com.crm.travelcrm.common.util.PhoneCanonicalizer;
 import com.crm.travelcrm.lead.attribution.entity.LeadAttribution;
 import com.crm.travelcrm.lead.attribution.repository.LeadAttributionRepository;
@@ -12,6 +13,7 @@ import com.crm.travelcrm.lead.entity.LeadLog;
 import com.crm.travelcrm.lead.enums.LeadStage;
 import com.crm.travelcrm.lead.enums.LeadStageGroups;
 import com.crm.travelcrm.lead.enums.LeadType;
+import com.crm.travelcrm.lead.exception.DuplicateLeadException;
 import com.crm.travelcrm.lead.exception.LeadQuotaExceededException;
 import com.crm.travelcrm.lead.exception.NoEligibleAssigneeException;
 import com.crm.travelcrm.lead.ingest.IngestPolicy;
@@ -85,13 +87,50 @@ public class LeadIngestService {
                     normalized, existing.get());
         }
 
+        // EVERY declining exception createLead can raise is answered here.
+        //
+        // The gateway's blanket catch is a backstop for the genuinely unexpected, not a handler: it
+        // records FAILED, notifies NOBODY, and still answers the provider 200 — so an enquiry that
+        // lands there is gone, and the provider will never retry it. Any decline this method can
+        // FORESEE must therefore be turned into a quarantine outcome with a recipient list, right
+        // here. See LeadServiceImpl.createLead's noRollbackFor for why catching them is even possible.
         try {
             return create(tenantId, channel, integrationId, connectionLabel, eventId, normalized);
+
         } catch (LeadQuotaExceededException e) {
             // Decision 9: the enquiry is VISIBLE rather than lost, and the provider still gets a 200.
             log.warn("Inbound lead QUARANTINED (plan cap) | tenant: {} | channel: {} | connection: {}",
                     tenantId, channel.slug(), connectionLabel);
-            return quotaQuarantine(tenantId, channel, connectionLabel);
+            return quarantine(LeadIngestStatus.QUARANTINED_QUOTA, tenantId, channel, connectionLabel,
+                    "Lead blocked: plan limit reached",
+                    "An enquiry arrived from " + sourceName(channel) + " (" + connectionLabel + ") "
+                            + "but your plan's lead limit is full. It was not created. "
+                            + "Upgrade your plan to stop losing enquiries.");
+
+        } catch (DuplicateLeadException e) {
+            // The append probe and the duplicate check do not use the same key — see
+            // QUARANTINED_DUPLICATE. Nothing is auto-appended here: an email can be a shared family
+            // or office address, and silently attaching a stranger's enquiry to someone else's lead
+            // is the exact failure findOpenLeadByPhone refuses to risk on an unparseable phone.
+            log.warn("Inbound lead QUARANTINED (duplicate of an open lead) | tenant: {} | channel: {} "
+                    + "| connection: {}", tenantId, channel.slug(), connectionLabel);
+            return quarantine(LeadIngestStatus.QUARANTINED_DUPLICATE, tenantId, channel, connectionLabel,
+                    "Enquiry not created: contact already has an open lead",
+                    "A new enquiry for " + fallbackName(normalized) + " arrived from "
+                            + sourceName(channel) + " (" + connectionLabel + "), but an open lead "
+                            + "already exists for this contact, so no second lead was created. "
+                            + "Open that lead and log the enquiry against it.");
+
+        } catch (RestoreAvailableException e) {
+            log.warn("Inbound lead QUARANTINED (matching lead is in Trash) | tenant: {} | channel: {} "
+                    + "| connection: {}", tenantId, channel.slug(), connectionLabel);
+            return quarantine(LeadIngestStatus.QUARANTINED_TRASHED, tenantId, channel, connectionLabel,
+                    "Enquiry blocked: matching lead is in Trash",
+                    "An enquiry for " + fallbackName(normalized) + " arrived from "
+                            + sourceName(channel) + " (" + connectionLabel + "), but a lead for this "
+                            + "contact is in Trash, so it was not created. Restore that lead — until "
+                            + "you do, every further enquiry from this contact is blocked too.");
+
         } catch (NoEligibleAssigneeException e) {
             log.error("Inbound lead could not be assigned | tenant: {} | channel: {} | connection: {} "
                     + "— the tenant has no eligible user. The lead is recorded FAILED rather than "
@@ -362,17 +401,31 @@ public class LeadIngestService {
                 .toList();
     }
 
-    private LeadIngestOutcome quotaQuarantine(Long tenantId, LeadSourceChannel channel,
-                                              String connectionLabel) {
+    /**
+     * A delivery that arrived intact but produced no lead, recorded so it is visible and recoverable.
+     *
+     * <p><b>The recipient list is the whole point.</b> A quarantine that writes only a row on the
+     * integration's delivery-history screen is indistinguishable from a silent drop — nobody opens
+     * that screen unless they already suspect something. Admins and managers are told, and the raw
+     * payload is on the event, so the enquiry can be worked by hand.
+     *
+     * <p>No {@code leadId}/{@code leadPublicId}: nothing was created, and pointing the notification's
+     * deep link at the lead that BLOCKED this one would read as "here is your new lead".
+     */
+    private LeadIngestOutcome quarantine(LeadIngestStatus status, Long tenantId,
+                                         LeadSourceChannel channel, String connectionLabel,
+                                         String title, String message) {
         return new LeadIngestOutcome(
-                LeadIngestStatus.QUARANTINED_QUOTA,
+                status,
                 null,
                 null,
                 TYPE_LEAD_CREATED,
                 adminAndManagerIds(tenantId),
-                "Lead blocked: plan limit reached",
-                "An enquiry arrived from " + channel.leadSource().getDisplayName()
-                        + " (" + connectionLabel + ") but your plan's lead limit is full. "
-                        + "It was not created. Upgrade your plan to stop losing enquiries.");
+                title,
+                message);
+    }
+
+    private String sourceName(LeadSourceChannel channel) {
+        return channel.leadSource().getDisplayName();
     }
 }

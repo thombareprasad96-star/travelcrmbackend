@@ -36,6 +36,17 @@ public enum MarketplaceBookingStatus {
     /** The tenant asked to cancel a confirmed booking; the SuperAdmin works it with the supplier. */
     CANCEL_REQUESTED,
 
+    /**
+     * The SuperAdmin has established what the hotel will charge to cancel, and the tenant must accept
+     * it before the booking ends.
+     *
+     * <p>The same principle as {@link #TENANT_APPROVAL_REQUIRED}, applied to the other direction the
+     * money can move. A cancellation charge is as consequential as a price increase — ₹500 and
+     * ₹4,000 are very different answers to "should we cancel" — so the platform proposes it and the
+     * tenant decides, rather than the platform deciding for them (design §9 clauses 1-3).</p>
+     */
+    CANCELLATION_QUOTED,
+
     CANCELLED,
 
     /** Never actioned within its validity. */
@@ -83,9 +94,32 @@ public enum MarketplaceBookingStatus {
         return TERMINAL.contains(this);
     }
 
-    /** Whether the tenant still owes an answer before the SuperAdmin can move. */
+    /**
+     * Whether the tenant owes an answer of ANY kind before the SuperAdmin can move.
+     *
+     * <p>Two different questions can be outstanding — a revised price, or a cancellation charge — so
+     * this is the union, suitable for a queue filter or a badge. <b>It is not a guard.</b> The
+     * transitions use {@link #awaitsRevisionDecision()} and {@link #awaitsCancellationDecision()}
+     * individually, because accepting a cancellation quote as though it were a price revision would
+     * promote a null amount onto the payable.</p>
+     */
     public boolean awaitsTenant() {
+        return awaitsRevisionDecision() || awaitsCancellationDecision();
+    }
+
+    /** A revised PRICE is open and waiting on the tenant. The guard the revision transitions use. */
+    public boolean awaitsRevisionDecision() {
         return this == TENANT_APPROVAL_REQUIRED;
+    }
+
+    /** A cancellation charge has been put to the tenant and is waiting on their answer. */
+    public boolean awaitsCancellationDecision() {
+        return this == CANCELLATION_QUOTED;
+    }
+
+    /** States from which the platform may put a cancellation charge to the tenant. */
+    public boolean isQuotableForCancellation() {
+        return this == CANCEL_REQUESTED || this == CANCELLATION_QUOTED;
     }
 
     public boolean isRevisable() {
@@ -105,9 +139,16 @@ public enum MarketplaceBookingStatus {
         return this == CONFIRMED;
     }
 
-    /** States a SuperAdmin may settle a cancellation from. */
+    /**
+     * States a SuperAdmin may settle a cancellation from, WITHOUT the tenant having accepted a quote.
+     *
+     * <p>This is the override, not the normal path — the normal path is quote, tenant accepts, done.
+     * It stays available because some cancellations are not the tenant's decision to make: the hotel
+     * closes, the supplier cancels on us, a booking has to be unwound for fraud. Removing it would
+     * mean an unwindable booking with no way to unwind it.</p>
+     */
     public boolean isAdminCancellable() {
-        return this == CONFIRMED || this == CANCEL_REQUESTED;
+        return this == CONFIRMED || this == CANCEL_REQUESTED || this == CANCELLATION_QUOTED;
     }
 
     /**
@@ -115,6 +156,6 @@ public enum MarketplaceBookingStatus {
      * and whether a cancellation costs anything.
      */
     public boolean isCommitted() {
-        return this == CONFIRMED || this == CANCEL_REQUESTED;
+        return this == CONFIRMED || this == CANCEL_REQUESTED || this == CANCELLATION_QUOTED;
     }
 }

@@ -21,4 +21,11 @@ public class RoomTypeDto {
     String bedType;
     String description;
     List<String> images;
+
+    /**
+     * True when the marketplace catalog owns this row. Every field above is rewritten on each sync,
+     * so the master screen must render it read-only; the service answers 409 either way.
+     * False for a room type the tenant added themselves, even on an imported hotel.
+     */
+    boolean platformOwned;
 }

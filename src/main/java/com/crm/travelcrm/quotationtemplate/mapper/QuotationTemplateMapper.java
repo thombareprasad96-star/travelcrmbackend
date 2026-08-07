@@ -1,5 +1,6 @@
 package com.crm.travelcrm.quotationtemplate.mapper;
 
+import com.crm.travelcrm.master.geography.repository.CityGeoRef;
 import com.crm.travelcrm.quotationtemplate.dto.QuotationTemplateResponse;
 import com.crm.travelcrm.quotationtemplate.dto.TemplateMatchResponse;
 import com.crm.travelcrm.quotationtemplate.entity.QuotationTemplate;
@@ -8,6 +9,7 @@ import com.crm.travelcrm.quotationtemplate.entity.QuotationTemplateItinerary;
 import com.crm.travelcrm.quotationtemplate.matching.CityRef;
 import com.crm.travelcrm.quotationtemplate.matching.MatchScore;
 import com.crm.travelcrm.quotationtemplate.matching.TemplateProfile;
+import com.crm.travelcrm.quotationtemplate.service.CityResolver;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -15,6 +17,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -43,10 +46,14 @@ public class QuotationTemplateMapper {
                 .basePrice(t.getBasePrice())
                 .seasonMonths(sortedMonths(t.getSeasonMonths()))
                 .cities(cityNames(t))
+                .services(List.copyOf(t.getServices()))
                 .itinerary(t.getItinerary().stream().map(this::toDay).toList())
                 .hotels(t.getHotels().stream().map(this::toHotel).toList())
                 .inclusions(List.copyOf(t.getInclusions()))
                 .exclusions(List.copyOf(t.getExclusions()))
+                .sourceQuotationPublicId(t.getSourceQuotationPublicId())
+                .timesApplied(t.getTimesApplied())
+                .lastAppliedAt(t.getLastAppliedAt())
                 .createdAt(t.getCreatedAt())
                 .updatedAt(t.getUpdatedAt())
                 .build();
@@ -85,7 +92,14 @@ public class QuotationTemplateMapper {
 
     // ── Entity → scoring projection ───────────────────────────────────────────
 
-    /** Flattens the aggregate into the immutable record the scorer consumes. */
+    /**
+     * Flattens the aggregate into the immutable record the scorer consumes.
+     *
+     * <p>The cities come out WITHOUT destination/country: the entity only stores {@code cityId}, and
+     * resolving the hierarchy per template would be a select per city. {@code CityResolver.geoIndex}
+     * fills that in for every template at once, after all the profiles are built — see
+     * {@code TemplateMatchServiceImpl}.
+     */
     public TemplateProfile toProfile(QuotationTemplate t) {
         List<CityRef> cities = t.getItinerary().stream()
                 .map(d -> CityRef.of(d.getCityId(), d.getCityName()))
@@ -100,12 +114,39 @@ public class QuotationTemplateMapper {
                 .hotelTier(t.getHotelTier())
                 .basePrice(t.getBasePrice())
                 .seasonMonths(t.getSeasonMonths())
+                .services(List.copyOf(t.getServices()))
+                .timesApplied(t.getTimesApplied() == null ? 0 : t.getTimesApplied())
+                .build();
+    }
+
+    /** Same profile, with the geography ladder attached so near-misses can be graded. */
+    public TemplateProfile toProfile(QuotationTemplate t, Map<Long, CityGeoRef> geoIndex) {
+        TemplateProfile flat = toProfile(t);
+        return TemplateProfile.builder()
+                .id(flat.id())
+                .publicId(flat.publicId())
+                .name(flat.name())
+                .cities(CityResolver.withGeography(flat.cities(), geoIndex))
+                .nights(flat.nights())
+                .hotelTier(flat.hotelTier())
+                .basePrice(flat.basePrice())
+                .seasonMonths(flat.seasonMonths())
+                .services(flat.services())
+                .timesApplied(flat.timesApplied())
                 .build();
     }
 
     // ── Entity + score → match card ───────────────────────────────────────────
 
     public TemplateMatchResponse toMatchResponse(QuotationTemplate t, MatchScore score) {
+        return toMatchResponse(t, score, false);
+    }
+
+    /**
+     * @param belowThreshold true for cold-start fallback rows — templates offered because nothing
+     *                       cleared the bar, not because they fit
+     */
+    public TemplateMatchResponse toMatchResponse(QuotationTemplate t, MatchScore score, boolean belowThreshold) {
         List<TemplateMatchResponse.Component> components = score.components().stream()
                 .map(c -> TemplateMatchResponse.Component.builder()
                         .key(c.key())
@@ -128,7 +169,10 @@ public class QuotationTemplateMapper {
                 .basePrice(t.getBasePrice())
                 .cities(cityNames(t))
                 .seasonMonths(sortedMonths(t.getSeasonMonths()))
+                .services(List.copyOf(t.getServices()))
+                .timesApplied(t.getTimesApplied())
                 .matchPercentage(score.percentage())
+                .belowThreshold(belowThreshold)
                 .components(components)
                 .build();
     }

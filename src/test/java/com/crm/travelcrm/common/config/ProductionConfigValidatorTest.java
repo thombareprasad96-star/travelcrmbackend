@@ -116,6 +116,32 @@ class ProductionConfigValidatorTest {
     }
 
     @Nested
+    @DisplayName("local dev SuperAdmin sign-in")
+    class DevSuperAdminLogin {
+
+        @Test
+        @DisplayName("the no-password / no-MFA bypass is rejected in prod")
+        void devLoginRejected() {
+            MockEnvironment env = validEnv();
+            env.setProperty("app.super-admin.dev-login.enabled", "true");
+
+            assertThatThrownBy(() -> validator.validate(env))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("app.super-admin.dev-login.enabled")
+                    .hasMessageContaining("no password and no MFA");
+        }
+
+        @Test
+        @DisplayName("explicitly false is fine")
+        void devLoginOffAccepted() {
+            MockEnvironment env = validEnv();
+            env.setProperty("app.super-admin.dev-login.enabled", "false");
+
+            assertThatCode(() -> validator.validate(env)).doesNotThrowAnyException();
+        }
+    }
+
+    @Nested
     @DisplayName("app.encryption.key must be a usable AES key")
     class EncryptionKey {
 

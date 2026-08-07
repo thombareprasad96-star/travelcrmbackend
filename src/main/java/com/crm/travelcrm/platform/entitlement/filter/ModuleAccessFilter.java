@@ -80,6 +80,21 @@ public class ModuleAccessFilter extends OncePerRequestFilter {
         RULES.put("/api/calendar", "TASKS");          // the calendar is an aggregation over tasks
         RULES.put("/api/reminders", "REMINDERS");
         RULES.put("/api/dashboard", "DASHBOARD");
+        // Communication Center — the omnichannel unified inbox. Matching is exact-or-followed-by-
+        // slash (see requiredModule below), so EVERY controller in that module must be mapped under
+        // "/api/communication/" exactly; "/api/communications" or "/api/comm" would be unclassified
+        // and ModuleAccessCoverageTest would fail the build.
+        //
+        // Its inbound webhooks live at /api/webhooks/comm/** and are deliberately NOT registered
+        // here: "/api/webhooks" is already in ALWAYS_ALLOWED, RULES is consulted FIRST at runtime,
+        // and adding the child prefix would silently gate an unauthenticated ingest path that has no
+        // TenantContext to check against.
+        //
+        // PlanCatalogueInitializer grants COMMUNICATION to the plans, and V2 PART 17 backfills
+        // tenant_modules — BOTH must be deployed with or before this line. The plan-level grant
+        // alone does not reach an existing tenant: TenantEntitlementService returns the tenant's own
+        // tenant_modules snapshot whenever it is non-empty and never consults the plan.
+        RULES.put("/api/communication", "COMMUNICATION");
         RULES.put("/api/lead-sources", "LEADS");      // inbound capture feeds the lead pipeline
         RULES.put("/api/cancellation-policies", "BOOKINGS");
         // Optional paid add-on, NOT part of MASTERS. The tenant's own private hotel master at

@@ -65,6 +65,11 @@ public class BookingResponseDTO {
 
     private BigDecimal customerAmount;
     private BigDecimal vendorCost;      // sensitive — not in BookingSummaryDTO
+
+    // The supplier vendorCost is owed to. Name is a snapshot taken at save, so it still renders after
+    // the vendor is renamed or soft-deleted; publicId is what the edit form re-selects with.
+    private java.util.UUID vendorPublicId;   // sensitive — not in BookingSummaryDTO
+    private String vendorName;               // sensitive — not in BookingSummaryDTO
     private BigDecimal gst;
     private BigDecimal tcs;
     private BigDecimal totalPayable;
@@ -72,11 +77,21 @@ public class BookingResponseDTO {
     private BigDecimal pendingAmount;   // computed in service, not stored
 
     // The agency's own costs on this booking (staff commission, marketing, gateway fees, courier) —
-    // the sum of the ACTIVE, INTERNAL-typed expense rows. Supplier cost is NOT in here; that is
-    // vendorCost. Exposed so the UI can show the full margin breakdown
-    // (customerAmount − vendorCost − totalInternalCosts) instead of inferring the gap.
+    // the sum of the ACTIVE, INTERNAL-typed expense rows.
     private BigDecimal totalInternalCosts;  // sensitive — not in BookingSummaryDTO
 
+    // Supplier cost the agency ITEMISED through the expense ledger — the sum of the ACTIVE,
+    // VENDOR-typed rows, excluding hotel-marketplace payables (those are already inside vendorCost).
+    // Additive with vendorCost, never a restatement of it.
+    private BigDecimal totalVendorCosts;    // sensitive — not in BookingSummaryDTO
+
+    // vendorCost + totalVendorCosts. Sent pre-computed rather than left to the client because three
+    // screens previously each re-derived a margin figure and drifted; the backend is the only thing
+    // that gets to decide what a booking cost.
+    private BigDecimal totalSupplierCost;   // sensitive — not in BookingSummaryDTO
+
+    // customerAmount − vendorCost − totalVendorCosts − totalInternalCosts. The four terms above are
+    // all exposed so the UI can SHOW that subtraction rather than present an unexplained number.
     private BigDecimal netProfit;       // sensitive — not in BookingSummaryDTO
 
     // Gross amount actually refunded to the customer (money OUT), accrued by the refund flow.

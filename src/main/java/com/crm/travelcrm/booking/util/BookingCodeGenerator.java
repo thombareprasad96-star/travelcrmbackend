@@ -5,7 +5,6 @@ import com.crm.travelcrm.booking.repository.BookingSequenceRepository;
 import lombok.RequiredArgsConstructor;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
 
 import java.time.Year;
@@ -33,6 +32,7 @@ public class BookingCodeGenerator {
     private static final String PREFIX = "BKG";
 
     private final BookingSequenceRepository sequenceRepository;
+    private final BookingSequenceProvisioner provisioner;
 
     /**
      * Reserve and return the next reference for {@code tenantId}. The counter row is
@@ -40,8 +40,14 @@ public class BookingCodeGenerator {
      * atomic per tenant.
      */
     public String generate(Long tenantId) {
+        // Provision FIRST, in its own transaction, so a lost create-race cannot poison this one —
+        // and before the lock below, so the two never contend. See BookingSequenceProvisioner.
+        provisioner.ensureExists(tenantId);
+
         BookingSequence seq = sequenceRepository.findByTenantId(tenantId)
-                .orElseGet(() -> createInitial(tenantId));
+                .orElseThrow(() -> new IllegalStateException(
+                        "Booking counter row missing for tenant " + tenantId + " immediately after "
+                        + "provisioning — the row was deleted concurrently."));
 
         long next = seq.getLastValue() + 1;
         seq.setLastValue(next);
@@ -52,19 +58,4 @@ public class BookingCodeGenerator {
         return code;
     }
 
-    /**
-     * Lazily create the tenant's counter row on first use. Under a concurrent first-ever
-     * booking two threads could both miss the row and try to insert; the UNIQUE constraint
-     * on {@code tenant_id} lets exactly one win, and the loser re-reads it under the lock.
-     */
-    private BookingSequence createInitial(Long tenantId) {
-        try {
-            return sequenceRepository.saveAndFlush(
-                    BookingSequence.builder().tenantId(tenantId).lastValue(0L).build());
-        } catch (DataIntegrityViolationException raceLost) {
-            log.debug("Booking sequence row for tenant {} created concurrently — re-reading", tenantId);
-            return sequenceRepository.findByTenantId(tenantId)
-                    .orElseThrow(() -> raceLost);
-        }
-    }
 }

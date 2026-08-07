@@ -35,7 +35,10 @@ import java.util.UUID;
  * actions that change what every tenant on the platform can buy.</p>
  */
 @RestController
-@RequestMapping("/api/super-admin/hotel-catalog")
+// Under `marketplace/` with the booking queue and the earning ledger, not beside them: one feature,
+// one prefix. It sat at /api/super-admin/hotel-catalog while everything else in the module lived at
+// /api/super-admin/marketplace/**, which was the code drifting from itself rather than a decision.
+@RequestMapping("/api/super-admin/marketplace")
 @PreAuthorize("hasRole('SUPER_ADMIN')")
 @RequiredArgsConstructor
 public class PlatformHotelCatalogAdminController {

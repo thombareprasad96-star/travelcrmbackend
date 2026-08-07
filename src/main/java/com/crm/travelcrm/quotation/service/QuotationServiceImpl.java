@@ -11,6 +11,8 @@ import com.crm.travelcrm.lead.entity.LeadItinerary;
 import com.crm.travelcrm.lead.service.LeadAccessGuard;
 import com.crm.travelcrm.master.geography.entity.Destination;
 import com.crm.travelcrm.master.geography.repository.DestinationRepository;
+import com.crm.travelcrm.quotation.analytics.QuotationWeblinkViewRepository;
+import com.crm.travelcrm.quotation.analytics.ViewerType;
 import com.crm.travelcrm.quotation.dto.QuotationEmailRequestDto;
 import com.crm.travelcrm.quotation.dto.QuotationWhatsAppRequestDto;
 import com.crm.travelcrm.quotation.dto.QuotationPdfResource;
@@ -47,6 +49,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -72,6 +75,8 @@ public class QuotationServiceImpl implements QuotationService {
     private final WhatsAppMessagingService whatsAppMessaging;
     private final SubAgentScope subAgentScope;
     private final DestinationRepository destinationRepository;
+    /** Weblink view tallies for the lead-list ref — batched, never per row. */
+    private final QuotationWeblinkViewRepository weblinkViewRepository;
 
     @Value("${app.public-base-url:http://localhost:8080}")
     private String publicBaseUrl;
@@ -249,7 +254,30 @@ public class QuotationServiceImpl implements QuotationService {
                                     row.getCruiseAmount(), row.getVehicleAmount(), row.getAddonAmount(),
                                     row.getDiscount(), row.getDiscountType(), row.getTax(), row.getMarkup(),
                                     null).getGrandTotal())
+                            .version(row.getVersion())
+                            .templateStyle(row.getTemplateStyle())
+                            // Raw column, not the computed markup amount: computeTotals nulls-to-zero,
+                            // and "no markup entered" has to stay absent so the lead list can show a
+                            // dash instead of a page of ₹0.00.
+                            .margin(row.getMarkup())
                             .build());
+        }
+
+        // View tallies in ONE extra query for the whole page — never one per row. Only for the
+        // quotations that actually survived the latest-per-lead reduction above.
+        if (!result.isEmpty()) {
+            Set<UUID> chosen = result.values().stream()
+                    .map(QuotationRefDto::getPublicId)
+                    .collect(Collectors.toSet());
+            Map<UUID, Long> views = weblinkViewRepository
+                    .tallyViews(chosen, tenantId, ViewerType.EXTERNAL)
+                    .stream()
+                    .collect(Collectors.toMap(
+                            QuotationWeblinkViewRepository.QuotationViewTally::getQuotationPublicId,
+                            QuotationWeblinkViewRepository.QuotationViewTally::getViews));
+            // Explicit 0 rather than null: "nobody has opened it" is an answer the agent needs,
+            // and it must not read as "we don't know".
+            result.values().forEach(ref -> ref.setViewCount(views.getOrDefault(ref.getPublicId(), 0L)));
         }
         return result;
     }
@@ -836,6 +864,11 @@ public class QuotationServiceImpl implements QuotationService {
         c.setDiscountType(src.getDiscountType());
         c.setTax(src.getTax());
         c.setMarkup(src.getMarkup());
+
+        // Provenance travels with the family. Same manual-copy hazard as allowedServices/templateStyle
+        // above: omit it and every duplicate/new-version silently detaches from the package it came
+        // from, which is exactly what would make a per-template conversion rate under-count.
+        c.setSourceTemplatePublicId(src.getSourceTemplatePublicId());
         return c;
     }
 

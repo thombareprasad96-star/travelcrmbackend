@@ -44,4 +44,20 @@ public class UpdateTaskRequest {
     private String notes;
 
     private UUID leadPublicId;
+
+    /** Re-links the task to a booking / trip. Omitting it leaves the existing link untouched. */
+    private UUID bookingPublicId;
+
+    /**
+     * Explicitly REMOVE the booking / trip link (and the display snapshots that came with it).
+     *
+     * <p>Needed because {@code null} cannot mean "clear" on a partial update — a body that simply
+     * omits {@code bookingPublicId} must leave the existing link alone, which is what every other
+     * reference on this DTO does. Without a separate signal the UI's "remove trip" control would
+     * silently no-op and the user would only find out after a reload.
+     *
+     * <p>Applied BEFORE {@code bookingPublicId}, so sending both re-links to the new trip rather
+     * than leaving the outcome dependent on field order.
+     */
+    private Boolean clearBookingLink;
 }

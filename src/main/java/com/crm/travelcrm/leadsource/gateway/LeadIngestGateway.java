@@ -253,14 +253,31 @@ public class LeadIngestGateway {
 
         LeadIngestStatus worst = LeadIngestStatus.IGNORED;
         Long firstLeadId = null;
+        String firstError = null;
 
         for (NormalizedLead normalized : leads) {
-            // ── 8. SCOPE ── cross-bean into a method-level @Transactional writer, with the tenant set
-            // BEFORE the transaction opens. Inlining this call would defeat both the proxy and the
-            // filter.
-            LeadIngestOutcome outcome = TenantScope.call(row.tenantId(), () ->
-                    ingestService.ingest(row.tenantId(), channel, row.integrationId(), row.label(),
-                            eventId, normalized));
+            LeadIngestOutcome outcome;
+            try {
+                // ── 8. SCOPE ── cross-bean into a method-level @Transactional writer, with the tenant
+                // set BEFORE the transaction opens. Inlining this call would defeat both the proxy and
+                // the filter.
+                outcome = TenantScope.call(row.tenantId(), () ->
+                        ingestService.ingest(row.tenantId(), channel, row.integrationId(), row.label(),
+                                eventId, normalized));
+            } catch (Exception e) {
+                // PER-LEAD, not per-delivery. Meta sends several leads in one POST, and each one has
+                // its own transaction; letting the first casualty out of this loop discarded every
+                // lead BEHIND it in the batch — leads that had nothing wrong with them and that the
+                // provider, holding a 200, would never send again. One bad lead costs one lead.
+                log.error("Ingest FAILED for one lead of a {}-lead delivery; continuing with the rest "
+                                + "| tenant: {} | channel: {} | integration: {} | event: {}",
+                        leads.size(), row.tenantId(), channel.slug(), row.integrationId(), eventId, e);
+                worst = moreSignificant(worst, LeadIngestStatus.FAILED);
+                if (firstError == null) {
+                    firstError = e.toString();
+                }
+                continue;
+            }
 
             // ── 10. PUBLISH ── AFTER commit, from this non-transactional thread. Never inside the
             // transaction — see LeadIngestOutcome for the real (non-folklore) reason.
@@ -277,7 +294,7 @@ public class LeadIngestGateway {
             }
         }
 
-        finish(row, eventId, worst, firstLeadId, null);
+        finish(row, eventId, worst, firstLeadId, firstError);
         return IngestResponse.accepted();
     }
 
@@ -292,13 +309,17 @@ public class LeadIngestGateway {
         return rank(b) > rank(a) ? b : a;
     }
 
+    /**
+     * Every quarantine shares rank 4: they differ in WHY nothing was created, not in how consequential
+     * that is. A batch that created one lead and quarantined another must not read as a clean success.
+     */
     private int rank(LeadIngestStatus s) {
         return switch (s) {
             case IGNORED, DUPLICATE -> 0;
             case DEFERRED -> 1;
             case APPENDED -> 2;
             case PROCESSED -> 3;
-            case QUARANTINED_QUOTA -> 4;
+            case QUARANTINED_QUOTA, QUARANTINED_DUPLICATE, QUARANTINED_TRASHED -> 4;
             case RECEIVED, FAILED -> 5;
         };
     }

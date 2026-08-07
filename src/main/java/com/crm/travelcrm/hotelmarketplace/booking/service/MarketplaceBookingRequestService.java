@@ -21,6 +21,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.UUID;
 
 /**
@@ -45,6 +46,8 @@ public class MarketplaceBookingRequestService {
     private final CurrentUserProvider currentUserProvider;
     private final PlatformAuditRecorder auditRecorder;
     private final MarketplaceNotifier notifier;
+    /** For the shared post-cancellation tail. No cycle: the orchestrator does not know this class. */
+    private final MarketplaceApprovalOrchestrator orchestrator;
 
     /**
      * Submit a booking request.
@@ -132,6 +135,55 @@ public class MarketplaceBookingRequestService {
 
         withdrawCrmLineQuietly(row, row.getRejectionReason());
         return toDto(row);
+    }
+
+    // ── Answering a cancellation quote (design §9 clauses 1-3) ─────────────
+
+    /**
+     * Accept the cancellation charge. This acceptance <b>is</b> the cancellation.
+     *
+     * <p>Settled from the stored quote, so there is no later step in which the figure could change
+     * after consent was given — the number the tenant agreed to is the number that binds.</p>
+     */
+    public MarketplaceBookingTenantDto acceptCancellationQuote(UUID publicId) {
+        Long tenantId = requireTenantId();
+        BigDecimal retained = retainedEarningOn(publicId, tenantId);
+
+        PlatformHotelBooking row = platformWriter.acceptCancellationQuote(publicId, tenantId);
+
+        auditRecorder.safeRecord(PlatformAuditAction.MARKETPLACE_CANCELLATION_QUOTE_ACCEPTED, true,
+                tenantId, row.getTenantCode(), "MARKETPLACE_BOOKING", row.getPublicId(),
+                "Tenant accepted the cancellation charge " + row.getCancellationCharge()
+                        + "; refund " + row.getTenantRefundAmount());
+
+        // Identical consequences to a SuperAdmin-settled cancellation, so identical code path.
+        orchestrator.finalizeCancellation(row, retained, row.getCancellationReason());
+        return toDto(row);
+    }
+
+    /** Look at the charge and keep the booking. */
+    public MarketplaceBookingTenantDto declineCancellationQuote(UUID publicId, String reason) {
+        Long tenantId = requireTenantId();
+        PlatformHotelBooking row = platformWriter.declineCancellationQuote(publicId, tenantId, reason);
+
+        auditRecorder.safeRecord(PlatformAuditAction.MARKETPLACE_CANCELLATION_QUOTE_DECLINED, true,
+                tenantId, row.getTenantCode(), "MARKETPLACE_BOOKING", row.getPublicId(),
+                "Tenant declined the cancellation charge; the booking stands"
+                        + (reason == null ? "" : " — " + reason));
+
+        return toDto(row);
+    }
+
+    /**
+     * Read the platform's retained-earning figure off the quote BEFORE acceptance clears it.
+     *
+     * <p>It is SuperAdmin-only and never reaches a tenant DTO, but the ledger reversal needs it —
+     * and by the time the acceptance has committed, the quote fields are gone.</p>
+     */
+    private BigDecimal retainedEarningOn(UUID publicId, Long tenantId) {
+        return repository.findByPublicIdAndTenantIdAndDeletedAtIsNull(publicId, tenantId)
+                .map(PlatformHotelBooking::getQuotedRetainedEarning)
+                .orElse(BigDecimal.ZERO);
     }
 
     // ── Cancellation (design §9) ────────────────────────────────────────────

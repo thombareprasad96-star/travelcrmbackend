@@ -62,14 +62,15 @@ public class TenantHotelBookingHistoryService {
      * exists to prevent.</p>
      */
     @Transactional(readOnly = true)
-    public byte[] voucherPdf(UUID publicId) {
+    public MarketplaceVoucherService.VoucherDocument voucherDocument(UUID publicId) {
         PlatformHotelBooking row = require(publicId);
         if (row.getVoucherStatus() == null || !row.getVoucherStatus().isDownloadable()) {
             throw new ResourceNotFoundException(
                     "No voucher has been issued for booking " + row.getBookingCode() + ".");
         }
         log.info("Tenant voucher download for marketplace booking {}", row.getBookingCode());
-        return voucherService.renderPdf(row);
+        // The hotel's own document when there is one — that is what the desk recognises.
+        return voucherService.download(row);
     }
 
     // ── internals ───────────────────────────────────────────────────────────

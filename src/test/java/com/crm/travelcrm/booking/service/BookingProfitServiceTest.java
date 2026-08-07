@@ -69,6 +69,7 @@ class BookingProfitServiceTest {
         b.setCustomerAmount(new BigDecimal(customerAmount));
         b.setVendorCost(new BigDecimal(vendorCost));
         b.setTotalInternalCosts(BigDecimal.ZERO);
+        b.setTotalVendorCosts(BigDecimal.ZERO);
         b.setNetProfit(BigDecimal.ZERO);
         return b;
     }
@@ -78,6 +79,11 @@ class BookingProfitServiceTest {
         when(expenseRepository.sumInternalCosts(BOOKING_PK)).thenReturn(new BigDecimal(amount));
     }
 
+    /** What the VENDOR-only ledger sum returns (marketplace payables already excluded in SQL). */
+    private void vendorCostsAre(String amount) {
+        when(expenseRepository.sumVendorCosts(BOOKING_PK)).thenReturn(new BigDecimal(amount));
+    }
+
     private static BigDecimal bd(String s) { return new BigDecimal(s); }
 
     @Nested
@@ -85,36 +91,70 @@ class BookingProfitServiceTest {
     class Formula {
 
         @Test
-        @DisplayName("netProfit = customerAmount − vendorCost − totalInternalCosts")
-        void subtractsBothCostTerms() {
-            Booking b = booking("100000.00", "70000.00");
+        @DisplayName("netProfit = customerAmount − vendorCost − totalVendorCosts − totalInternalCosts")
+        void subtractsEveryCostTerm() {
+            Booking b = booking("100000.00", "20000.00");
+            vendorCostsAre("50000.00");
             internalCostsAre("8000.00");
 
             assertThat(service.apply(b)).isTrue();
 
+            assertThat(b.getTotalVendorCosts()).isEqualByComparingTo(bd("50000.00"));
             assertThat(b.getTotalInternalCosts()).isEqualByComparingTo(bd("8000.00"));
             assertThat(b.getNetProfit()).isEqualByComparingTo(bd("22000.00"));
             verify(bookingRepository).save(b);
         }
 
         @Test
-        @DisplayName("with no internal cost rows it is exactly the old customerAmount − vendorCost")
-        void zeroInternalCostsPreservesLegacyMargin() {
-            // The zero-regression guarantee: every pre-existing row is VENDOR-typed, so the ledger
-            // sum is 0 and the stored margin must not move by a paisa on deploy.
-            Booking b = booking("100000.00", "70000.00");
+        @DisplayName("REGRESSION: an itemised ledger with the vendorCost field left blank still reduces profit")
+        void ledgerAloneDrivesTheMargin() {
+            // The defect this formula was changed to fix. `Vendor Cost` is OPTIONAL on the booking
+            // form and agencies itemise through the expense ledger instead, where every row defaults
+            // to VENDOR. Those rows fed nothing, so a ₹1,00,000 booking carrying ₹75,940 of real
+            // supplier spend reported the ENTIRE ₹1,00,000 as profit.
+            Booking b = booking("100000.00", "0");
+            vendorCostsAre("75940.00");
             internalCostsAre("0");
 
             service.apply(b);
 
+            assertThat(b.getNetProfit()).isEqualByComparingTo(bd("24060.00"));
+        }
+
+        @Test
+        @DisplayName("the typed field and the ledger are ADDITIVE, not two spellings of one number")
+        void typedAndItemisedBothCount() {
+            // The owner's explicit call: ₹20,000 declared up front plus ₹75,940 itemised afterwards
+            // is ₹95,940 of cost, not ₹75,940. Anything that took only the larger of the two would
+            // silently discard the typed figure.
+            Booking b = booking("100000.00", "20000.00");
+            vendorCostsAre("75940.00");
+            internalCostsAre("0");
+
+            service.apply(b);
+
+            assertThat(b.getNetProfit()).isEqualByComparingTo(bd("4060.00"));
+        }
+
+        @Test
+        @DisplayName("with an empty ledger it is exactly the old customerAmount − vendorCost")
+        void emptyLedgerPreservesLegacyMargin() {
+            Booking b = booking("100000.00", "70000.00");
+            vendorCostsAre("0");
+            internalCostsAre("0");
+
+            service.apply(b);
+
+            assertThat(b.getTotalVendorCosts()).isEqualByComparingTo(BigDecimal.ZERO);
             assertThat(b.getTotalInternalCosts()).isEqualByComparingTo(BigDecimal.ZERO);
             assertThat(b.getNetProfit()).isEqualByComparingTo(bd("30000.00"));
         }
 
         @Test
-        @DisplayName("internal costs can push a thin booking into a loss, and that is reported")
+        @DisplayName("costs can push a thin booking into a loss, and that is reported")
         void negativeProfitIsNotFloored() {
             Booking b = booking("100000.00", "97000.00");
+            vendorCostsAre("0");
             internalCostsAre("5000.00");
 
             service.apply(b);
@@ -129,13 +169,15 @@ class BookingProfitServiceTest {
             // legitimately post "100000" (scale 0). The stored value must still match what the
             // numeric(12,2) column reads back.
             Booking b = booking("100000", "70000");
+            vendorCostsAre("2");
             internalCostsAre("1");
 
             service.apply(b);
 
             assertThat(b.getNetProfit().scale()).isEqualTo(2);
             assertThat(b.getTotalInternalCosts().scale()).isEqualTo(2);
-            assertThat(b.getNetProfit()).isEqualByComparingTo(bd("29999.00"));
+            assertThat(b.getTotalVendorCosts().scale()).isEqualTo(2);
+            assertThat(b.getNetProfit()).isEqualByComparingTo(bd("29997.00"));
         }
 
         @Test
@@ -144,10 +186,25 @@ class BookingProfitServiceTest {
             Booking b = new Booking();
             b.setId(BOOKING_PK);
             b.setBookingCode("BKG-26-0002");
+            vendorCostsAre("0");
             internalCostsAre("0");
 
-            assertThat(service.apply(b)).isFalse();   // 0 − 0 − 0 == the ZERO defaults ⇒ no change
+            assertThat(service.apply(b)).isFalse();   // 0 − 0 − 0 − 0 == the ZERO defaults ⇒ no change
             assertThat(b.getNetProfit()).isEqualByComparingTo(BigDecimal.ZERO);
+        }
+
+        @Test
+        @DisplayName("a null ledger sum is treated as zero — an empty SUM must not NPE the formula")
+        void toleratesNullLedgerSums() {
+            // COALESCE keeps the real query at 0, but nothing in the type system says so, and a
+            // booking's profit is not a place to find out.
+            Booking b = booking("100000.00", "70000.00");
+            when(expenseRepository.sumVendorCosts(BOOKING_PK)).thenReturn(null);
+            when(expenseRepository.sumInternalCosts(BOOKING_PK)).thenReturn(null);
+
+            service.apply(b);
+
+            assertThat(b.getNetProfit()).isEqualByComparingTo(bd("30000.00"));
         }
     }
 
@@ -159,6 +216,7 @@ class BookingProfitServiceTest {
         @DisplayName("calling it twice for one event produces the same figure, never a doubled one")
         void recomputesFromSourceInsteadOfAccumulating() {
             Booking b = booking("100000.00", "70000.00");
+            vendorCostsAre("0");
             internalCostsAre("8000.00");
 
             service.apply(b);
@@ -173,6 +231,7 @@ class BookingProfitServiceTest {
         @DisplayName("a second call with nothing changed does not save — no Envers revision, no version bump")
         void noOpsWhenNothingMoved() {
             Booking b = booking("100000.00", "70000.00");
+            vendorCostsAre("0");
             internalCostsAre("8000.00");
 
             assertThat(service.apply(b)).isTrue();
@@ -185,11 +244,13 @@ class BookingProfitServiceTest {
         @DisplayName("0 vs 0.00 is not a change — the guard compares by value, not by scale")
         void scaleDifferenceIsNotAChange() {
             // The trap: BigDecimal.equals() is scale-sensitive, so a guard written with equals()
-            // would dirty an audited row on every single call for a booking with no internal costs
+            // would dirty an audited row on every single call for a booking with no ledger rows
             // — which is most of them.
             Booking b = booking("100000.00", "70000.00");
             b.setTotalInternalCosts(BigDecimal.ZERO);           // scale 0
+            b.setTotalVendorCosts(BigDecimal.ZERO);             // scale 0
             b.setNetProfit(bd("30000"));                        // scale 0
+            vendorCostsAre("0.00");                             // scale 2
             internalCostsAre("0.00");                           // scale 2
 
             assertThat(service.apply(b)).isFalse();
@@ -197,18 +258,43 @@ class BookingProfitServiceTest {
         }
 
         @Test
-        @DisplayName("reclassifying a line VENDOR→INTERNAL moves the margin on the next apply")
-        void picksUpALedgerReclassification() {
+        @DisplayName("a new VENDOR expense line alone is enough to dirty the row")
+        void vendorLedgerMovementIsAChange() {
+            // The guard must watch totalVendorCosts too. Watching only netProfit would be subtly
+            // wrong on a cancelled booking, where netProfit is driven by the frozen record and would
+            // not move even though the stored cost breakdown did.
             Booking b = booking("100000.00", "70000.00");
+            vendorCostsAre("0");
+            internalCostsAre("0");
+            assertThat(service.apply(b)).isTrue();
+
+            when(expenseRepository.sumVendorCosts(BOOKING_PK)).thenReturn(bd("2500.00"));
+
+            assertThat(service.apply(b)).isTrue();
+            assertThat(b.getTotalVendorCosts()).isEqualByComparingTo(bd("2500.00"));
+            assertThat(b.getNetProfit()).isEqualByComparingTo(bd("27500.00"));
+        }
+
+        @Test
+        @DisplayName("reclassifying a line VENDOR→INTERNAL keeps the margin put — both terms are subtracted")
+        void reclassificationIsMarginNeutral() {
+            // Before, this MOVED the margin: only INTERNAL rows counted, so flipping the toggle was
+            // how a cost entered the calculation at all. Now both classes are subtracted, so the
+            // toggle only decides WHICH bucket reports it — supplier cost or agency overhead.
+            Booking b = booking("100000.00", "70000.00");
+            vendorCostsAre("5000.00");
             internalCostsAre("0");
             service.apply(b);
-            assertThat(b.getNetProfit()).isEqualByComparingTo(bd("30000.00"));
+            assertThat(b.getNetProfit()).isEqualByComparingTo(bd("25000.00"));
 
-            // The user flips a ₹5,000 "Commission" line from Vendor to Internal.
+            // The user flips that ₹5,000 "Commission" line from Vendor to Internal.
+            when(expenseRepository.sumVendorCosts(BOOKING_PK)).thenReturn(bd("0"));
             when(expenseRepository.sumInternalCosts(BOOKING_PK)).thenReturn(bd("5000.00"));
 
             assertThat(service.apply(b)).isTrue();
             assertThat(b.getNetProfit()).isEqualByComparingTo(bd("25000.00"));
+            assertThat(b.getTotalVendorCosts()).isEqualByComparingTo(BigDecimal.ZERO);
+            assertThat(b.getTotalInternalCosts()).isEqualByComparingTo(bd("5000.00"));
         }
     }
 
@@ -236,10 +322,11 @@ class BookingProfitServiceTest {
         @DisplayName("REGRESSION: an expense edit after cancellation must not reinstate the active formula")
         void usesRetainedChargeMinusSunkCosts() {
             // The trip never happened, so customerAmount was never earned. Applying
-            // customerAmount − vendorCost − internal here would report ₹22,000 of profit on a
-            // booking that actually LOST money.
+            // customerAmount − costs here would report ₹22,000 of profit on a booking that actually
+            // LOST money.
             Booking b = booking("100000.00", "70000.00");
             isCancelled(cancellationRecord());
+            vendorCostsAre("0");
             internalCostsAre("8000.00");
 
             assertThat(service.apply(b)).isTrue();
@@ -255,6 +342,7 @@ class BookingProfitServiceTest {
             Booking b = booking("100000.00", "70000.00");
             BookingCancellation record = cancellationRecord();
             isCancelled(record);
+            vendorCostsAre("0");
             internalCostsAre("8000.00");
 
             service.apply(b);
@@ -270,6 +358,7 @@ class BookingProfitServiceTest {
             Booking b = booking("100000.00", "70000.00");
             BookingCancellation record = cancellationRecord();
             isCancelled(record);
+            vendorCostsAre("0");
             internalCostsAre("1000.00");
 
             service.apply(b);
@@ -286,27 +375,40 @@ class BookingProfitServiceTest {
     class InMemory {
 
         @Test
-        @DisplayName("sets both figures without touching the repository")
-        void doesNotSave() {
-            // On create the row has no id yet, so it can have no expense lines and must not be
-            // saved from here — the caller persists it once, itself.
+        @DisplayName("an unsaved booking skips both ledger queries and is never saved")
+        void doesNotSaveOrQueryOnCreate() {
+            // On create the row has no id yet, so it can have no expense lines — querying for them
+            // would be two pointless round trips against id 0 — and it must not be saved from here,
+            // because the caller persists it once, itself.
             Booking b = booking("50000.00", "30000.00");
+            b.setId(0L);
 
-            service.applyInMemory(b, BigDecimal.ZERO);
+            service.applyInMemory(b);
 
             assertThat(b.getNetProfit()).isEqualByComparingTo(bd("20000.00"));
             assertThat(b.getTotalInternalCosts()).isEqualByComparingTo(BigDecimal.ZERO);
+            assertThat(b.getTotalVendorCosts()).isEqualByComparingTo(BigDecimal.ZERO);
+            verify(expenseRepository, never()).sumVendorCosts(any());
+            verify(expenseRepository, never()).sumInternalCosts(any());
             verify(bookingRepository, never()).save(any(Booking.class));
         }
 
         @Test
-        @DisplayName("a null cost term is treated as zero")
-        void toleratesNullCosts() {
-            Booking b = booking("50000.00", "30000.00");
+        @DisplayName("on an EDIT it re-reads both ledger terms itself")
+        void readsBothTermsOnEdit() {
+            // The reason the cost terms are no longer parameters. The caller used to fetch the
+            // internal sum and hand it in; with two terms, a caller that fetched one and forgot the
+            // other would silently zero a booking's itemised supplier cost and overstate its profit.
+            Booking b = booking("100000.00", "20000.00");
+            vendorCostsAre("50000.00");
+            internalCostsAre("8000.00");
 
-            service.applyInMemory(b, null);
+            service.applyInMemory(b);
 
-            assertThat(b.getNetProfit()).isEqualByComparingTo(bd("20000.00"));
+            assertThat(b.getTotalVendorCosts()).isEqualByComparingTo(bd("50000.00"));
+            assertThat(b.getTotalInternalCosts()).isEqualByComparingTo(bd("8000.00"));
+            assertThat(b.getNetProfit()).isEqualByComparingTo(bd("22000.00"));
+            verify(bookingRepository, never()).save(any(Booking.class));
         }
     }
 }

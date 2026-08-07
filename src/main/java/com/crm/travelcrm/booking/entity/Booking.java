@@ -11,6 +11,7 @@ import org.hibernate.envers.Audited;
 import org.hibernate.envers.NotAudited;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -160,6 +161,24 @@ public class Booking extends BaseTenantEntity implements Ownable {
     @Column(name = "vendor_cost", nullable = false, precision = 12, scale = 2)
     private BigDecimal vendorCost = BigDecimal.ZERO;
 
+    // Which supplier the vendorCost above is owed to. Until now the booking carried the amount with
+    // no payee at all, so "₹20,000 vendor cost" was a number nobody could attribute; the Create
+    // Booking form now gates the amount behind a vendor picked from the master.
+    //
+    // publicId + name SNAPSHOT, the same shape as customerPublicId + customerNameSnapshot on this
+    // entity: the UUID is the durable link, the name is what lists and PDFs render without joining,
+    // and the pair keeps reading correctly after the vendor is renamed or soft-deleted. Not a JPA
+    // association and not a DB foreign key — vendors are soft-deleted, and a constraint would either
+    // block that or orphan the booking.
+    //
+    // Both nullable: vendorCost is optional now that the expense ledger carries itemised supplier
+    // spend, so "no vendor chosen" is the ordinary case, not a defect.
+    @Column(name = "vendor_public_id")
+    private java.util.UUID vendorPublicId;
+
+    @Column(name = "vendor_name", length = 200)
+    private String vendorName;
+
     // Whether this booking is an overseas tour programme package. Drives TCS when the tenant's
     // policy is OVERSEAS_ONLY — the setting that matches the statute for an agency selling both
     // domestic and outbound, since TCS under s.206C(1G)/394 does not reach domestic packages.
@@ -201,24 +220,62 @@ public class Booking extends BaseTenantEntity implements Ownable {
 
     // Sum of the ACTIVE, INTERNAL-typed rows of this booking's expense ledger — the agency's own
     // cost of doing the booking (staff commission, marketing, gateway fees, courier), over and above
-    // what it paid suppliers. VENDOR-typed expense rows are deliberately excluded: they would
-    // double-count against the vendorCost typed above. See ExpenseCostType.
+    // what it paid suppliers. See ExpenseCostType.
     //
-    // Denormalised on purpose. It is the third term of netProfit, and storing it means the stored
-    // margin is explainable without re-reading the ledger, every report reads one row instead of
-    // joining, and a historic profit figure can still be reconciled after rows are edited. The
-    // ledger remains the source of truth; BookingProfitService is the only writer and recomputes
-    // both fields together, so the two can never disagree.
+    // Denormalised on purpose. It is a term of netProfit, and storing it means the stored margin is
+    // explainable without re-reading the ledger, every report reads one row instead of joining, and
+    // a historic profit figure can still be reconciled after rows are edited. The ledger remains the
+    // source of truth; BookingProfitService is the only writer and recomputes every field together,
+    // so they can never disagree.
     @Builder.Default
     @Column(name = "total_internal_costs", nullable = false, precision = 12, scale = 2)
     private BigDecimal totalInternalCosts = BigDecimal.ZERO;
 
-    // customerAmount − vendorCost − totalInternalCosts. Stored, never computed at read time, so
-    // dashboards and reports all read one agreed figure instead of each re-deriving it.
-    // BookingProfitService owns every write.
+    // Sum of the ACTIVE, VENDOR-typed rows of this booking's expense ledger, EXCLUDING marketplace
+    // payables — the supplier spend the agency itemised through the ledger rather than typing into
+    // vendorCost above.
+    //
+    // These rows used to feed nothing at all. The reasoning was that vendorCost "already represents
+    // everything paid to suppliers", so summing them too would double-count. That held only while
+    // the field was actually filled in — it is optional on the booking form, and agencies itemise
+    // through the ledger instead, which left a ₹1,00,000 booking carrying ₹75,940 of ledger spend
+    // reporting ₹1,00,000 of profit. The typed field and the ledger are now ADDITIVE: vendorCost is
+    // what the agent declared up front, this is what was itemised afterwards, and netProfit nets off
+    // both.
+    //
+    // MARKETPLACE ROWS ARE EXCLUDED, and that is the one thing here that must not be "simplified".
+    // A hotel-marketplace payable is a VENDOR expense row that is SIMULTANEOUSLY folded into
+    // vendorCost — BookingServiceImpl enforces vendorCost >= sumMarketplacePayable as a floor.
+    // Counting it in both terms would subtract the same rupees twice, which is the exact defect this
+    // field exists to fix. Keeping the two disjoint is what makes the addition safe.
+    @Builder.Default
+    @Column(name = "total_vendor_costs", nullable = false, precision = 12, scale = 2)
+    private BigDecimal totalVendorCosts = BigDecimal.ZERO;
+
+    // customerAmount − vendorCost − totalVendorCosts − totalInternalCosts. Stored, never computed at
+    // read time, so dashboards and reports all read one agreed figure instead of each re-deriving
+    // it. BookingProfitService owns every write.
     @Builder.Default
     @Column(name = "net_profit", nullable = false, precision = 12, scale = 2)
     private BigDecimal netProfit = BigDecimal.ZERO;
+
+    /**
+     * Everything this booking cost in supplier money — the {@code vendorCost} the agent typed (which
+     * already includes any hotel-marketplace payable) plus the non-marketplace VENDOR lines itemised
+     * in the expense ledger. The two terms are disjoint by construction; see
+     * {@link #getTotalVendorCosts()}.
+     *
+     * <p>Read this rather than {@code vendorCost} anywhere a TOTAL supplier cost is meant —
+     * {@code netProfit} and {@code CancellationCalculator}'s sunk cost both do. Using the raw field
+     * understates the cost by whatever the agency itemised, and on a cancellation that understatement
+     * freezes into the credit note permanently.
+     */
+    @Transient
+    public BigDecimal getTotalSupplierCost() {
+        BigDecimal typed  = vendorCost != null ? vendorCost : BigDecimal.ZERO;
+        BigDecimal ledger = totalVendorCosts != null ? totalVendorCosts : BigDecimal.ZERO;
+        return typed.add(ledger);
+    }
 
     // ───────────────── Status ─────────────────
 
@@ -258,9 +315,35 @@ public class Booking extends BaseTenantEntity implements Ownable {
 
     // ───────────────── Derived Fields ─────────────────
 
+    /** Money is quoted to the paise everywhere; a bare {@code BigDecimal.ZERO} would read as "0". */
+    private static final BigDecimal ZERO_MONEY = BigDecimal.ZERO.setScale(2);
+
+    /**
+     * The LIVE receivable on this booking — what the customer still has to pay.
+     *
+     * <p><b>Zero once the booking is CANCELLED or REFUNDED, and that is the point.</b>
+     * {@code totalPayable} and {@code paidAmount} are both frozen at their pre-cancellation values
+     * (deliberately — they are the historical record of what was sold and what was received), so
+     * {@code totalPayable − paidAmount} on a cancelled booking is the unpaid balance of a trip that
+     * will never happen. Nobody owes it. Every reader of this getter — the response DTOs, the CSV
+     * export, the invoice/voucher model, the traveler portal, the calendar, the AI booking tool —
+     * would otherwise each have to know to special-case cancellation, and they did not agree:
+     * {@code PortalPaymentService} guarded it explicitly while the CSV export and the AI tool
+     * printed the fiction.
+     *
+     * <p>What a cancelled booking actually settles at is a different figure entirely, and it lives
+     * on the immutable {@code BookingCancellation} record ({@code totalRetained} / {@code refundDue}
+     * / {@code customerBalanceOwed}), served by the cancellation summary endpoint. It is
+     * document-backed (credit/debit note) and frozen; this denormalised getter has no access to it
+     * and must not guess at it.
+     *
+     * <p>Floored at zero and scaled to the paise, matching {@code previewFinancials} — an invoice
+     * must never print a negative "balance due".
+     */
     @Transient
     public BigDecimal getPendingAmount() {
-        if (totalPayable == null || paidAmount == null) return BigDecimal.ZERO;
-        return totalPayable.subtract(paidAmount);
+        if (status == BookingStatus.CANCELLED || status == BookingStatus.REFUNDED) return ZERO_MONEY;
+        if (totalPayable == null || paidAmount == null) return ZERO_MONEY;
+        return totalPayable.subtract(paidAmount).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
     }
 }

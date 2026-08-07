@@ -4,6 +4,7 @@ import com.crm.travelcrm.common.exception.BusinessException;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.hotelmarketplace.booking.dto.ApproveMarketplaceBookingRequest;
 import com.crm.travelcrm.hotelmarketplace.booking.dto.CancelMarketplaceBookingRequest;
+import com.crm.travelcrm.hotelmarketplace.booking.dto.QuoteCancellationRequest;
 import com.crm.travelcrm.hotelmarketplace.booking.dto.ReviseMarketplaceBookingRequest;
 import com.crm.travelcrm.hotelmarketplace.booking.entity.PlatformHotelBooking;
 import com.crm.travelcrm.hotelmarketplace.booking.enums.MarketplaceBookingStatus;
@@ -319,6 +320,119 @@ class MarketplaceBookingStateMachineTest {
         }
     }
 
+    // ── Cancellation consent (design §9 clauses 1-3) ───────────────────────
+
+    @Nested
+    @DisplayName("Cancellation consent")
+    class CancellationConsent {
+
+        @Test
+        @DisplayName("the quote lands beside the settled figures, never on top of them")
+        void quoteDoesNotSettle() {
+            row.setStatus(MarketplaceBookingStatus.CANCEL_REQUESTED);
+            row.setTenantPayable(new BigDecimal("4400.00"));
+
+            PlatformHotelBooking result = writer.quoteCancellation(publicId, quote("1000", "200"), 1L, 24);
+
+            assertThat(result.getStatus()).isEqualTo(MarketplaceBookingStatus.CANCELLATION_QUOTED);
+            assertThat(result.getQuotedCancellationCharge()).isEqualByComparingTo("1000.00");
+            // Not settled: nobody has agreed to anything yet.
+            assertThat(result.getCancellationCharge()).isNull();
+            assertThat(result.getTenantRefundAmount()).isNull();
+            assertThat(result.getCancelledAt()).isNull();
+            assertThat(result.getCancellationQuoteExpiresAt()).isAfter(LocalDateTime.now());
+        }
+
+        @Test
+        @DisplayName("a quote above the payable is refused at QUOTE time, not only at settle time")
+        void quoteValidatesTheSameAsSettle() {
+            row.setStatus(MarketplaceBookingStatus.CANCEL_REQUESTED);
+            row.setTenantPayable(new BigDecimal("4400.00"));
+
+            assertThatThrownBy(() -> writer.quoteCancellation(publicId, quote("5000", "0"), 1L, 24))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining("exceeds what the tenant owes");
+
+            assertThatThrownBy(() -> writer.quoteCancellation(publicId, quote("500", "800"), 1L, 24))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining("out of the tenant's refund");
+        }
+
+        @Test
+        @DisplayName("acceptance settles at the QUOTED figure — not at anything the caller supplies")
+        void acceptanceSettlesAtTheQuotedFigure() {
+            givenOpenCancellationQuote("1000");
+
+            PlatformHotelBooking result = writer.acceptCancellationQuote(publicId, TENANT);
+
+            assertThat(result.getStatus()).isEqualTo(MarketplaceBookingStatus.CANCELLED);
+            assertThat(result.getCancellationCharge()).isEqualByComparingTo("1000.00");
+            assertThat(result.getTenantRefundAmount()).isEqualByComparingTo("3400.00");
+            assertThat(result.getCancelledAt()).isNotNull();
+        }
+
+        @Test
+        @DisplayName("an expired quote cannot be accepted — the hotel's waiver has lapsed")
+        void expiredQuoteIsRefused() {
+            givenOpenCancellationQuote("1000");
+            row.setCancellationQuoteExpiresAt(LocalDateTime.now().minusHours(1));
+
+            assertThatThrownBy(() -> writer.acceptCancellationQuote(publicId, TENANT))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining("expired");
+        }
+
+        @Test
+        @DisplayName("declining keeps the booking — the room was never released")
+        void declineKeepsTheBooking() {
+            givenOpenCancellationQuote("1000");
+
+            PlatformHotelBooking result = writer.declineCancellationQuote(publicId, TENANT, "Too expensive");
+
+            assertThat(result.getStatus()).isEqualTo(MarketplaceBookingStatus.CONFIRMED);
+            assertThat(result.getCancelledAt()).isNull();
+            assertThat(result.getCancellationCharge()).isNull();
+            assertThat(result.getQuotedCancellationCharge()).isNull();
+        }
+
+        @Test
+        @DisplayName("expiry clears the stale charge and returns it to the platform queue")
+        void expiryReturnsToQueue() {
+            givenOpenCancellationQuote("1000");
+
+            PlatformHotelBooking result = writer.expireCancellationQuote(publicId);
+
+            assertThat(result.getStatus()).isEqualTo(MarketplaceBookingStatus.CANCEL_REQUESTED);
+            assertThat(result.getQuotedCancellationCharge()).isNull();
+            assertThat(result.getCancellationQuoteExpiresAt()).isNull();
+            // Crucially NOT cancelled: being slow to reply must never cost the tenant a booking.
+            assertThat(result.getCancelledAt()).isNull();
+        }
+
+        @Test
+        @DisplayName("a cancellation quote cannot be accepted as though it were a price revision")
+        void quoteIsNotARevision() {
+            givenOpenCancellationQuote("1000");
+
+            assertThatThrownBy(() -> writer.acceptRevision(publicId, TENANT))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining("no open price revision");
+        }
+
+        @Test
+        @DisplayName("the SuperAdmin override still works, and clears any open quote behind it")
+        void adminOverrideStillWorks() {
+            givenOpenCancellationQuote("1000");
+
+            PlatformHotelBooking result = writer.settleCancellation(publicId, cancel("750", "0"), 1L);
+
+            assertThat(result.getStatus()).isEqualTo(MarketplaceBookingStatus.CANCELLED);
+            assertThat(result.getCancellationCharge()).isEqualByComparingTo("750.00");
+            assertThat(result.getQuotedCancellationCharge()).isNull();
+            assertThat(result.getCancelledBySuperAdminId()).isEqualTo(1L);
+        }
+    }
+
     // ── Tenant isolation ────────────────────────────────────────────────────
 
     @Nested
@@ -385,6 +499,24 @@ class MarketplaceBookingStateMachineTest {
         cmd.setRevisedSupplierTotal(new BigDecimal(supplier));
         cmd.setRevisedTenantPayable(new BigDecimal(payable));
         cmd.setReason("The hotel raised its rate for these dates");
+        return cmd;
+    }
+
+    private void givenOpenCancellationQuote(String charge) {
+        row.setStatus(MarketplaceBookingStatus.CANCELLATION_QUOTED);
+        row.setTenantPayable(new BigDecimal("4400.00"));
+        row.setQuotedCancellationCharge(new BigDecimal(charge));
+        row.setQuotedRetainedEarning(BigDecimal.ZERO);
+        row.setCancellationQuoteNote("Inside the hotel's 48-hour window; they retain one night.");
+        row.setCancellationQuotedAt(LocalDateTime.now().minusHours(1));
+        row.setCancellationQuoteExpiresAt(LocalDateTime.now().plusHours(23));
+    }
+
+    private static QuoteCancellationRequest quote(String charge, String retained) {
+        QuoteCancellationRequest cmd = new QuoteCancellationRequest();
+        cmd.setCancellationCharge(new BigDecimal(charge));
+        cmd.setRetainedPlatformEarning(new BigDecimal(retained));
+        cmd.setNote("Inside the hotel's 48-hour window; they retain one night.");
         return cmd;
     }
 

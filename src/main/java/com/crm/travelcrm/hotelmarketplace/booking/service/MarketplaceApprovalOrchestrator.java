@@ -6,12 +6,15 @@ import com.crm.travelcrm.common.context.TenantScope;
 import com.crm.travelcrm.hotelmarketplace.booking.dto.ApproveMarketplaceBookingRequest;
 import com.crm.travelcrm.hotelmarketplace.booking.dto.CancelMarketplaceBookingRequest;
 import com.crm.travelcrm.hotelmarketplace.booking.dto.MarketplaceBookingAdminDto;
+import com.crm.travelcrm.hotelmarketplace.booking.dto.QuoteCancellationRequest;
 import com.crm.travelcrm.hotelmarketplace.booking.dto.ReviseMarketplaceBookingRequest;
 import com.crm.travelcrm.hotelmarketplace.booking.entity.PlatformHotelBooking;
 import com.crm.travelcrm.hotelmarketplace.booking.enums.CrmSyncState;
 import com.crm.travelcrm.hotelmarketplace.booking.mapper.MarketplaceBookingMapper;
+import com.crm.travelcrm.hotelmarketplace.catalog.repository.PlatformHotelRepository;
 import com.crm.travelcrm.hotelmarketplace.commission.service.PlatformCommissionService;
 import com.crm.travelcrm.hotelmarketplace.notification.MarketplaceNotifier;
+import com.crm.travelcrm.hotelmarketplace.sync.HotelMasterProjectionService;
 import com.crm.travelcrm.platform.audit.PlatformAuditRecorder;
 import com.crm.travelcrm.platform.audit.entity.PlatformAuditAction;
 import lombok.RequiredArgsConstructor;
@@ -53,6 +56,8 @@ public class MarketplaceApprovalOrchestrator
     private final PlatformAuditRecorder auditRecorder;
     private final PlatformCommissionService commissionService;
     private final MarketplaceNotifier notifier;
+    private final PlatformHotelRepository hotelRepository;
+    private final HotelMasterProjectionService projectionService;
 
     /**
      * How long a revised price stays acceptable when the operator does not say. Short by default —
@@ -60,6 +65,13 @@ public class MarketplaceApprovalOrchestrator
      */
     @Value("${app.marketplace.revision.default-valid-hours:48}")
     private int defaultRevisionValidHours;
+
+    /**
+     * How long a cancellation quote stands. Shorter than a price revision by default: a hotel's
+     * goodwill on a waiver is a shorter-lived thing than a rate.
+     */
+    @Value("${app.marketplace.cancellation-quote.default-valid-hours:24}")
+    private int defaultCancellationQuoteValidHours;
 
     public MarketplaceBookingAdminDto approve(UUID publicId, ApproveMarketplaceBookingRequest cmd,
                                               Long superAdminId) {
@@ -110,6 +122,40 @@ public class MarketplaceApprovalOrchestrator
      * the supplier has already been told — unwinding it because a CRM row would not write is the one
      * outcome worse than a lagging projection.</p>
      */
+    /**
+     * Create or refresh the tenant's Hotel Master row for the hotel they just booked.
+     *
+     * <p>Design §6.1 lists four sync triggers, and this is the second: <i>"tenant creates a price
+     * hold/booking and the platform hotel is not linked yet"</i>. Without it a tenant who books a
+     * catalog hotel <b>without importing it first</b> ends up with a confirmed stay and no Hotel
+     * Master row — so the hotel is missing from the quotation builder, the hotel dropdown and the
+     * itinerary, which is the entire purpose of the Layer C projection. §17 makes it an acceptance
+     * criterion: "a platform hotel import/booking creates or reuses one linked tenant Hotel Master
+     * projection".</p>
+     *
+     * <p><b>Best-effort, and last.</b> {@code importOrSync} refuses a FIRST import whose geography it
+     * cannot resolve — {@code Hotel.city} is a NOT NULL foreign key and §6.5 forbids guessing one —
+     * so this can legitimately fail for a hotel in a city the tenant has no geography for. A
+     * convenience projection must never be able to undo a confirmation the supplier has already been
+     * given, nor disturb {@code crmSyncState}, which tracks the payable: that is the row that
+     * carries money.</p>
+     *
+     * <p>Idempotent by {@code catalogVersion}, so the compensating scheduler replaying this path
+     * costs a version comparison and nothing else. Resolved by plain publicId rather than
+     * {@code findSellableByPublicId}: a hotel unpublished after the booking was confirmed still owes
+     * that tenant a master row, because the confirmed booking references it.</p>
+     */
+    private void projectHotelMaster(PlatformHotelBooking row) {
+        try {
+            hotelRepository.findByPublicIdAndDeletedAtIsNull(row.getPlatformHotelPublicId())
+                    .ifPresent(hotel -> TenantScope.run(row.getTenantId(),
+                            () -> projectionService.importOrSync(hotel, row.getTenantId())));
+        } catch (RuntimeException e) {
+            log.warn("Confirmed {} but could not project {} into tenant {}'s hotel master: {}",
+                    row.getBookingCode(), row.getHotelNameSnapshot(), row.getTenantId(), e.getMessage());
+        }
+    }
+
     /**
      * Write the earning accrual without letting a ledger failure undo a confirmation.
      *
@@ -213,14 +259,55 @@ public class MarketplaceApprovalOrchestrator
                 "Cancelled " + row.getHotelNameSnapshot() + " — charge " + row.getCancellationCharge()
                         + ", refund " + row.getTenantRefundAmount() + " (" + cmd.getReason() + ")");
 
-        // Reverse down to what the platform actually keeps. A REVERSAL is a new signed row, never an
-        // edit of the accrual: recomputing history is exactly what an append-only ledger exists to
-        // prevent (design §9 clause 8).
-        reverseQuietly(row, cmd.getRetainedPlatformEarning(), cmd.getReason());
-
-        withdrawCrmLine(row, "Cancelled: " + cmd.getReason());
-        notifier.bookingCancelled(row);
+        finalizeCancellation(row, cmd.getRetainedPlatformEarning(), cmd.getReason());
         return mapper.toAdminDto(row);
+    }
+
+    /**
+     * Put the cancellation charge to the tenant instead of imposing it (design §9 clauses 1-3).
+     *
+     * <p>The normal path, and the one that should be used. {@link #cancel} remains for the
+     * cancellations that are not the tenant's decision — the hotel closes, the supplier cancels on
+     * us — but a charge the tenant will be billed for belongs to the tenant to accept, exactly as a
+     * price increase does two methods up.</p>
+     */
+    public MarketplaceBookingAdminDto quoteCancellation(UUID publicId, QuoteCancellationRequest cmd,
+                                                        Long superAdminId) {
+        PlatformHotelBooking row = platformWriter.quoteCancellation(
+                publicId, cmd, superAdminId, defaultCancellationQuoteValidHours);
+
+        auditRecorder.safeRecord(PlatformAuditAction.MARKETPLACE_CANCELLATION_QUOTED, true,
+                row.getTenantId(), row.getTenantCode(), "MARKETPLACE_BOOKING", row.getPublicId(),
+                "Cancellation quoted at " + row.getQuotedCancellationCharge() + " ("
+                        + cmd.getNote() + "), valid until " + row.getCancellationQuoteExpiresAt());
+
+        notifier.cancellationQuoted(row);
+        return mapper.toAdminDto(row);
+    }
+
+    /** A quote nobody answered. Driven by {@link MarketplaceRevisionExpiryScheduler}. */
+    public void expireCancellationQuote(UUID publicId) {
+        PlatformHotelBooking row = platformWriter.expireCancellationQuote(publicId);
+        auditRecorder.safeRecord(PlatformAuditAction.MARKETPLACE_CANCELLATION_QUOTE_EXPIRED, true,
+                row.getTenantId(), row.getTenantCode(), "MARKETPLACE_BOOKING", row.getPublicId(),
+                "Cancellation quote expired unanswered; back in the queue.");
+    }
+
+    /**
+     * Everything that has to happen once a booking is actually cancelled, whoever ended it.
+     *
+     * <p>Shared by the SuperAdmin override and the tenant's acceptance of a quote, because the
+     * consequences are identical and two copies of "reverse the accrual, withdraw the line, tell
+     * them" is two things to keep in step. Public so the tenant-thread caller can reach it — every
+     * step inside is individually guarded, so none of them can undo a cancellation that has already
+     * committed.</p>
+     */
+    public void finalizeCancellation(PlatformHotelBooking row, BigDecimal retainedEarning, String reason) {
+        // A REVERSAL is a new signed row, never an edit of the accrual: recomputing history is
+        // exactly what an append-only ledger exists to prevent (design §9 clause 8).
+        reverseQuietly(row, retainedEarning, reason);
+        withdrawCrmLine(row, "Cancelled: " + reason);
+        notifier.bookingCancelled(row);
     }
 
     public MarketplaceBookingAdminDto takeUnderReview(UUID publicId) {
@@ -284,6 +371,8 @@ public class MarketplaceApprovalOrchestrator
 
             platformWriter.recordCrmSync(row.getPublicId(), CrmSyncState.SYNCED, null,
                     projection.serviceItemPublicId(), projection.expensePublicId());
+
+            projectHotelMaster(row);
 
         } catch (RuntimeException e) {
             // Confirmed on the platform, not yet in the CRM. Recorded and retried, never rolled back:

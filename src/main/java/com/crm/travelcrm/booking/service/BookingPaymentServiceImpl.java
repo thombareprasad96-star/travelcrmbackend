@@ -5,6 +5,7 @@ import com.crm.travelcrm.booking.dto.response.BookingPaymentResponse;
 import com.crm.travelcrm.booking.entity.Booking;
 import com.crm.travelcrm.booking.entity.BookingPayment;
 import com.crm.travelcrm.booking.entity.BookingServiceItem;
+import com.crm.travelcrm.booking.enums.BookingStatus;
 import com.crm.travelcrm.booking.enums.PaymentStatus;
 import com.crm.travelcrm.booking.exception.BookingNotFoundException;
 import com.crm.travelcrm.booking.repository.BookingPaymentRepository;
@@ -59,6 +60,7 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
     @Transactional
     public BookingPaymentResponse addPayment(UUID bookingPublicId, CreateBookingPaymentRequest request) {
         Booking booking = findActiveBooking(bookingPublicId);
+        assertLedgerMutable(booking);
 
         BigDecimal newPaid = booking.getPaidAmount().add(request.getAmount());
         if (newPaid.compareTo(booking.getTotalPayable()) > 0) {
@@ -109,6 +111,7 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
     @Transactional
     public void deletePayment(UUID bookingPublicId, UUID paymentPublicId) {
         Booking booking = findActiveBooking(bookingPublicId);
+        assertLedgerMutable(booking);
 
         BookingPayment payment = paymentRepository
                 .findByPublicIdAndBookingIdAndDeletedAtIsNull(paymentPublicId, booking.getId())
@@ -151,6 +154,34 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
                 .orElseThrow(() -> new BookingNotFoundException(bookingPublicId));
         subAgentScope.assertVisible(booking, bookingPublicId);
         return booking;
+    }
+
+    /**
+     * A cancelled booking's receipts are frozen — the same rule {@code assertEditableBooking} applies
+     * to the booking's own amounts, which this path was missing.
+     *
+     * <p><b>Why this is a money guard, not a tidiness one.</b> Cancelling freezes a settlement onto
+     * the {@code BookingCancellation} record: {@code refundDue = paidAmount − totalRetained},
+     * computed once from the {@code paidAmount} standing at that instant, then published as a
+     * numbered credit or debit note. {@code BookingRefundService} pays out against that frozen
+     * {@code refundDue} and nothing re-derives it. So deleting a ₹1,00,000 receipt after a
+     * cancellation that retained ₹20,000 left {@code paidAmount} at 0 while {@code refundDue} still
+     * read ₹80,000 — and the agency could then disburse ₹80,000 it had never received. Adding a
+     * receipt failed the other way, understating what the customer was owed. Either way the issued
+     * note stops describing the money.
+     *
+     * <p>Correcting a mis-keyed receipt after cancellation is therefore not an edit: it is a new
+     * transaction, and the honest answer is to refuse here rather than retroactively rewrite what a
+     * document already states.
+     */
+    private static void assertLedgerMutable(Booking booking) {
+        if (booking.getStatus() == BookingStatus.CANCELLED
+                || booking.getStatus() == BookingStatus.REFUNDED) {
+            throw new BusinessException(
+                    "A " + booking.getStatus() + " booking's payment ledger is closed — its refund "
+                            + "settlement is already frozen on the cancellation note.",
+                    HttpStatus.CONFLICT);
+        }
     }
 
     /** Resolve the attributed service line's publicId (for the response), or null. */

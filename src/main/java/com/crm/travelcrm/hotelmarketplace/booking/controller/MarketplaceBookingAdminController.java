@@ -9,6 +9,7 @@ import com.crm.travelcrm.common.util.ClientIp;
 import com.crm.travelcrm.hotelmarketplace.booking.dto.ApproveMarketplaceBookingRequest;
 import com.crm.travelcrm.hotelmarketplace.booking.dto.CancelMarketplaceBookingRequest;
 import com.crm.travelcrm.hotelmarketplace.booking.dto.MarketplaceBookingAdminDto;
+import com.crm.travelcrm.hotelmarketplace.booking.dto.QuoteCancellationRequest;
 import com.crm.travelcrm.hotelmarketplace.booking.dto.ReviseMarketplaceBookingRequest;
 import com.crm.travelcrm.hotelmarketplace.booking.entity.PlatformHotelBooking;
 import com.crm.travelcrm.hotelmarketplace.booking.enums.MarketplaceBookingStatus;
@@ -113,7 +114,30 @@ public class MarketplaceBookingAdminController {
     }
 
     /**
-     * Settle a cancellation. Step-up MFA required — it decides what the tenant is refunded.
+     * Put the cancellation charge to the tenant (design §9 clauses 1-3). <b>The normal path.</b>
+     *
+     * <p>No step-up MFA, for the same reason {@code request-revision} has none: it commits nobody to
+     * anything. The tenant's acceptance is what ends the booking, and the figure they accept is the
+     * figure that binds — there is no later step in which it can change.</p>
+     */
+    @PostMapping("/{publicId}/quote-cancellation")
+    public ResponseEntity<ApiResponse<MarketplaceBookingAdminDto>> quoteCancellation(
+            @PathVariable UUID publicId,
+            @Valid @RequestBody QuoteCancellationRequest request,
+            @AuthenticationPrincipal SuperAdmin superAdmin) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Cancellation quote sent to the tenant",
+                orchestrator.quoteCancellation(publicId, request,
+                        superAdmin == null ? null : superAdmin.getId())));
+    }
+
+    /**
+     * Cancel WITHOUT the tenant accepting a quote. The override, not the normal path.
+     *
+     * <p>Step-up MFA required: it ends a booking and decides what the tenant is refunded, with no
+     * consent step in front of it. Reach for {@code quote-cancellation} unless the cancellation is
+     * genuinely not the tenant's decision — the hotel closed, the supplier cancelled on us, a
+     * booking has to be unwound for fraud.</p>
      */
     @PostMapping("/{publicId}/cancel")
     public ResponseEntity<ApiResponse<MarketplaceBookingAdminDto>> cancel(

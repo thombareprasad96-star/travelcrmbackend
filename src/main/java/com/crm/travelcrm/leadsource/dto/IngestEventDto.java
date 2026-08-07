@@ -12,7 +12,7 @@ import java.util.UUID;
  * tenant can read, rather than the silence that made dropped enquiries invisible before.
  *
  * @param leadPublicId  the lead this delivery produced, or null — either because it produced none
- *                      (IGNORED / DUPLICATE / FAILED / QUARANTINED_QUOTA) or because the lead has since
+ *                      (IGNORED / DUPLICATE / FAILED / any QUARANTINED_*) or because the lead has since
  *                      been trashed. An ingest event deliberately outlives its lead, so this link is
  *                      genuinely optional; a null here is history, not an error.
  * @param rawPayload    the delivery body, secret-fields already redacted at write time. <b>Null in the

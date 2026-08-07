@@ -1,5 +1,6 @@
 package com.crm.travelcrm.auth.mfa;
 
+import com.crm.travelcrm.auth.dev.DevSuperAdminLoginMode;
 import com.crm.travelcrm.auth.repository.SuperAdminRepository;
 import com.crm.travelcrm.common.entity.SuperAdmin;
 import com.crm.travelcrm.common.exception.BusinessException;
@@ -21,12 +22,27 @@ public class SuperAdminStepUpService {
     private final SuperAdminRepository superAdminRepository;
     private final SuperAdminMfaService mfaService;
     private final PlatformAuditRecorder platformAuditRecorder;
+    private final DevSuperAdminLoginMode devLoginMode;
 
     @Transactional
     public void requireCode(SuperAdmin principal, String code, String action,
                             String clientIp, String userAgent) {
         if (principal == null) {
             throw new BusinessException("Not a platform session.", HttpStatus.FORBIDDEN);
+        }
+
+        // Local development only. This is the single gate every high-consequence console action
+        // funnels through (tenant delete, plan change, marketplace approve/cancel, hotel publish,
+        // sub-agent licensing). With MFA never enrolled on a local database it rejects all of them
+        // outright — "MFA is required for this action" — which makes the console untestable.
+        // Non-prod only, and the audit row below still records the action; see DevSuperAdminLoginMode.
+        if (devLoginMode.isEnabled()) {
+            platformAuditRecorder.safeRecord(
+                    PlatformAuditAction.MFA_VERIFY, true,
+                    principal.getId(), principal.getEmail(),
+                    null, null, "SUPER_ADMIN", principal.getPublicId(),
+                    "DEV — step-up MFA bypassed for " + action, clientIp, userAgent);
+            return;
         }
 
         SuperAdmin admin = superAdminRepository.findByIdAndDeletedAtIsNull(principal.getId())

@@ -69,6 +69,13 @@ public class QuotationRequestDto {
      */
     private UUID cancellationPolicyPublicId;
 
+    /**
+     * Optional publicId of the {@code QuotationTemplate} this quotation was cloned from. Set only by
+     * the template apply flow — the builder never sends it. Like {@link #cancellationPolicyPublicId}
+     * it MERGES rather than replaces, so an ordinary update that omits it cannot erase the link.
+     */
+    private UUID sourceTemplatePublicId;
+
     @Valid private Pricing pricing;
 
     // ── Flight ────────────────────────────────────────────────────────────────

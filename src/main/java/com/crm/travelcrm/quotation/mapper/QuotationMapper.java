@@ -67,6 +67,12 @@ public class QuotationMapper {
             q.setCancellationPolicyPublicId(req.getCancellationPolicyPublicId());
         }
 
+        // Same merge-not-replace rule, same reason: only the template apply flow ever sends this, and
+        // the builder's next save must not wipe the provenance link just by not knowing about it.
+        if (req.getSourceTemplatePublicId() != null) {
+            q.setSourceTemplatePublicId(req.getSourceTemplatePublicId());
+        }
+
         QuotationRequestDto.Pricing p = req.getPricing();
         if (p != null) {
             q.setDiscount(p.getDiscount());
@@ -615,11 +621,23 @@ public class QuotationMapper {
         return dayCount > 0 ? dayCount : null;
     }
 
-    /** Total rooms summed across all hotels. */
+    /**
+     * Rooms for the trip, read off the FIRST hotel row.
+     *
+     * <p>The name and the old javadoc both said "summed across all hotels", which it has never done —
+     * and summing now would restate the {@code rooms} figure on every multi-hotel quotation already
+     * sent as a PDF or a share link, so the behaviour is left as it is and documented honestly
+     * instead. Rooms are a property of the party, not of each hotel, so first-row is a defensible
+     * reading; a multi-hotel quotation whose rows disagree has no single right answer here.
+     *
+     * <p>{@code getRooms()} is a nullable {@code Integer} and this used to unbox it straight into an
+     * {@code int} — so a first hotel row with no room count entered (entirely ordinary) threw an NPE
+     * out of every read path: getById, the list, the PDF and the public weblink.
+     */
     private Integer computeRooms(Quotation q) {
         if (q.getHotels() == null || q.getHotels().isEmpty()) return null;
-        int rooms = q.getHotels().getFirst().getRooms();
-        return rooms > 0 ? rooms : null;
+        Integer rooms = q.getHotels().getFirst().getRooms();
+        return rooms != null && rooms > 0 ? rooms : null;
     }
 
     private static int nightsBetween(String checkIn, String checkOut) {
