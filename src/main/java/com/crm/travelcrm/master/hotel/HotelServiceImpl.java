@@ -201,6 +201,22 @@ public class HotelServiceImpl implements HotelService {
 
     @Override
     @Transactional
+    public RoomTypeDto updateRoomBaseRate(
+            Long hotelId,
+            Long roomTypeId,
+            UpdateRoomBaseRateRequest request) {
+        findOrThrow(hotelId);
+        RoomType roomType = roomTypeRepository.findByIdAndHotelId(roomTypeId, hotelId)
+                .orElseThrow(() -> new ResourceNotFoundException("Room type not found: " + roomTypeId));
+
+        // The catalog owns the room description, not the tenant's selling rate. Projection sync
+        // deliberately never writes baseRate, so this narrow update is safe for either row origin.
+        roomType.setBaseRate(request.getBaseRate());
+        return hotelMapper.toRoomTypeDto(roomTypeRepository.save(roomType));
+    }
+
+    @Override
+    @Transactional
     public void deleteRoomType(Long hotelId, Long roomTypeId) {
         findOrThrow(hotelId);
         RoomType roomType = roomTypeRepository.findByIdAndHotelId(roomTypeId, hotelId)
@@ -282,6 +298,7 @@ public class HotelServiceImpl implements HotelService {
     // silence is the whole problem, and it is why these throw rather than quietly no-op.
     //
     // What stays the tenant's, and is deliberately still writable:
+    //   RoomType   - baseRate through the narrow rate endpoint (syncRooms() never writes it)
     //   Hotel      — contactPerson, isDefault  (§6.4; sync() explicitly does not copy either)
     //   MealPlan   — price                     (their selling price; syncMealPlans() never writes it)
     //   delete()   — the only un-import path there is (see the note on that method)

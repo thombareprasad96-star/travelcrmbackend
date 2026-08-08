@@ -14,10 +14,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
-/**
- * City master endpoints. Collection routes are nested under a destination; item
- * routes are flat ({@code /cities/{id}}) per the spec.
- */
 @Slf4j
 @RestController
 @RequiredArgsConstructor
@@ -25,146 +21,123 @@ public class CityController {
 
     private final CityService cityService;
 
-    // ── Flat endpoints (/api/cities) — used by the frontend City master page ──
+    // ------------------------------------------------------------------------
+    // Flat City APIs
+    // ------------------------------------------------------------------------
 
-    @GetMapping("/api/cities")
+    @GetMapping({"/api/cities", "/api/v1/cities"})
     @PreAuthorize("isAuthenticated()")
-    public ResponseEntity<PagedApiResponse<CityDto>> getAll(
-            @RequestParam(defaultValue = "0")         int page,
-            @RequestParam(defaultValue = "100")       int size,
+    public ResponseEntity<PagedApiResponse> getAll(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "100") int size,
             @RequestParam(defaultValue = "createdAt") String sortBy,
-            @RequestParam(defaultValue = "desc")      String sortDir) {
+            @RequestParam(defaultValue = "desc") String sortDir) {
+
         return ResponseEntity.ok(cityService.getAll(page, size, sortBy, sortDir));
     }
 
-    @PostMapping("/api/cities")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
-    public ResponseEntity<ApiResponse<CityDto>> createFlat(
+    @PostMapping({"/api/cities", "/api/v1/cities"})
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN','MASTER_MANAGE')")
+    public ResponseEntity<ApiResponse> create(
             @Valid @RequestBody CreateCityRequest request) {
+
         CityDto created = cityService.createFlat(request);
+
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.success("City created successfully", created, 201));
     }
 
-    @PutMapping("/api/cities/{cityId}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
-    public ResponseEntity<ApiResponse<CityDto>> updateFlat(
-            @PathVariable Long cityId,
-            @Valid @RequestBody UpdateCityRequest request) {
+    @GetMapping({"/api/cities/{cityId}", "/api/v1/cities/{cityId}"})
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<ApiResponse> getById(@PathVariable Long cityId) {
+
         return ResponseEntity.ok(
-                ApiResponse.success("City updated successfully", cityService.update(cityId, request)));
+                ApiResponse.success("City fetched", cityService.getById(cityId)));
     }
 
-    @DeleteMapping("/api/cities/{cityId}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
-    public ResponseEntity<Void> deleteFlat(@PathVariable Long cityId) {
+    @PutMapping({"/api/cities/{cityId}", "/api/v1/cities/{cityId}"})
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN','MASTER_MANAGE')")
+    public ResponseEntity<ApiResponse> update(
+            @PathVariable Long cityId,
+            @Valid @RequestBody UpdateCityRequest request) {
+
+        return ResponseEntity.ok(
+                ApiResponse.success(
+                        "City updated successfully",
+                        cityService.update(cityId, request)));
+    }
+
+    @DeleteMapping({"/api/cities/{cityId}", "/api/v1/cities/{cityId}"})
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN','MASTER_MANAGE')")
+    public ResponseEntity<Void> delete(@PathVariable Long cityId) {
+
         cityService.delete(cityId);
         return ResponseEntity.noContent().build();
     }
 
-    @GetMapping("/api/cities/{cityId}")
+    // ------------------------------------------------------------------------
+    // Filter APIs
+    // ------------------------------------------------------------------------
+
+    @GetMapping({
+            "/api/cities/country/{countryId}",
+            "/api/v1/countries/{countryId}/cities"
+    })
     @PreAuthorize("isAuthenticated()")
-    public ResponseEntity<ApiResponse<CityDto>> getByIdFlat(@PathVariable Long cityId) {
-        return ResponseEntity.ok(ApiResponse.success("City fetched", cityService.getById(cityId)));
+    public ResponseEntity<PagedApiResponse> getByCountry(
+            @PathVariable Long countryId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "100") int size,
+            @RequestParam(defaultValue = "createdAt") String sortBy,
+            @RequestParam(defaultValue = "desc") String sortDir) {
+
+        return ResponseEntity.ok(
+                cityService.getByCountry(countryId, page, size, sortBy, sortDir));
     }
 
-    // Flat filter routes the frontend's CityService already calls
-    // (cityService.getCitiesByDestination / getCitiesByCountry). They delegate to the same
-    // service methods as the /api/v1 nested routes below — two paths, one behaviour.
-    // Two path segments, so neither collides with /api/cities/{cityId}.
-
-    @GetMapping("/api/cities/destination/{destinationId}")
+    @GetMapping({
+            "/api/cities/destination/{destinationId}",
+            "/api/v1/destinations/{destinationId}/cities"
+    })
     @PreAuthorize("isAuthenticated()")
-    public ResponseEntity<PagedApiResponse<CityDto>> getByDestinationFlat(
+    public ResponseEntity<PagedApiResponse> getByDestination(
             @PathVariable Long destinationId,
-            @RequestParam(defaultValue = "0")         int page,
-            @RequestParam(defaultValue = "100")       int size,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "100") int size,
             @RequestParam(defaultValue = "createdAt") String sortBy,
-            @RequestParam(defaultValue = "desc")      String sortDir) {
+            @RequestParam(defaultValue = "desc") String sortDir) {
+
         return ResponseEntity.ok(
                 cityService.getByDestination(destinationId, page, size, sortBy, sortDir));
     }
 
-    @GetMapping("/api/cities/country/{countryId}")
-    @PreAuthorize("isAuthenticated()")
-    public ResponseEntity<PagedApiResponse<CityDto>> getByCountryFlat(
-            @PathVariable Long countryId,
-            @RequestParam(defaultValue = "0")         int page,
-            @RequestParam(defaultValue = "100")       int size,
-            @RequestParam(defaultValue = "createdAt") String sortBy,
-            @RequestParam(defaultValue = "desc")      String sortDir) {
-        return ResponseEntity.ok(
-                cityService.getByCountry(countryId, page, size, sortBy, sortDir));
-    }
-
-    // ── Nested endpoints by country (/api/v1/countries/{id}/cities) ───────────
-
-    @GetMapping("/api/v1/countries/{countryId}/cities")
-    @PreAuthorize("isAuthenticated()")
-    public ResponseEntity<PagedApiResponse<CityDto>> getByCountry(
-            @PathVariable Long countryId,
-            @RequestParam(defaultValue = "0")         int page,
-            @RequestParam(defaultValue = "20")        int size,
-            @RequestParam(defaultValue = "createdAt") String sortBy,
-            @RequestParam(defaultValue = "desc")      String sortDir) {
-        return ResponseEntity.ok(
-                cityService.getByCountry(countryId, page, size, sortBy, sortDir));
-    }
+    // ------------------------------------------------------------------------
+    // Nested Create APIs
+    // ------------------------------------------------------------------------
 
     @PostMapping("/api/v1/countries/{countryId}/cities")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
-    public ResponseEntity<ApiResponse<CityDto>> createUnderCountry(
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN','MASTER_MANAGE')")
+    public ResponseEntity<ApiResponse> createUnderCountry(
             @PathVariable Long countryId,
             @Valid @RequestBody CreateCityRequest request) {
-        request.setCountryId(countryId);   // path wins over body
+
+        request.setCountryId(countryId);
+
         CityDto created = cityService.createFlat(request);
+
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.success("City created successfully", created, 201));
-    }
-
-    // ── Nested endpoints by destination (/api/v1/destinations/{id}/cities) ────
-
-    @GetMapping("/api/v1/destinations/{destinationId}/cities")
-    @PreAuthorize("isAuthenticated()")
-    public ResponseEntity<PagedApiResponse<CityDto>> getByDestination(
-            @PathVariable Long destinationId,
-            @RequestParam(defaultValue = "0")         int page,
-            @RequestParam(defaultValue = "20")        int size,
-            @RequestParam(defaultValue = "createdAt") String sortBy,
-            @RequestParam(defaultValue = "desc")      String sortDir) {
-        return ResponseEntity.ok(
-                cityService.getByDestination(destinationId, page, size, sortBy, sortDir));
     }
 
     @PostMapping("/api/v1/destinations/{destinationId}/cities")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
-    public ResponseEntity<ApiResponse<CityDto>> create(
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN','MASTER_MANAGE')")
+    public ResponseEntity<ApiResponse> createUnderDestination(
             @PathVariable Long destinationId,
             @Valid @RequestBody CreateCityRequest request) {
+
         CityDto created = cityService.create(destinationId, request);
+
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.success("City created successfully", created, 201));
-    }
-
-    @GetMapping("/api/v1/cities/{cityId}")
-    @PreAuthorize("isAuthenticated()")
-    public ResponseEntity<ApiResponse<CityDto>> getById(@PathVariable Long cityId) {
-        return ResponseEntity.ok(ApiResponse.success("City fetched", cityService.getById(cityId)));
-    }
-
-    @PutMapping("/api/v1/cities/{cityId}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
-    public ResponseEntity<ApiResponse<CityDto>> update(
-            @PathVariable Long cityId,
-            @Valid @RequestBody UpdateCityRequest request) {
-        return ResponseEntity.ok(
-                ApiResponse.success("City updated successfully", cityService.update(cityId, request)));
-    }
-
-    @DeleteMapping("/api/v1/cities/{cityId}")
-    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
-    public ResponseEntity<Void> delete(@PathVariable Long cityId) {
-        cityService.delete(cityId);
-        return ResponseEntity.noContent().build();
     }
 }

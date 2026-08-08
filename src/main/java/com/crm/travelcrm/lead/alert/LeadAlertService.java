@@ -4,6 +4,7 @@ import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.context.TenantTimeZone;
 import com.crm.travelcrm.lead.alert.dto.LeadAlertDto;
 import com.crm.travelcrm.lead.alert.dto.LeadAlertStatsDto;
+import com.crm.travelcrm.lead.enums.LeadOriginGroups;
 import com.crm.travelcrm.lead.enums.LeadStageGroups;
 import com.crm.travelcrm.lead.repository.LeadRepository;
 import com.crm.travelcrm.lead.sla.LeadSlaPolicy;
@@ -49,7 +50,8 @@ public class LeadAlertService {
     public List<LeadAlertDto> openToClaim() {
         Long tenantId = requireTenantId();
         List<LeadAlertDto> feed = leadRepository
-                .findOpenToClaim(tenantId, LeadStageGroups.TERMINAL_STAGES,
+                .findOpenToClaim(tenantId, LeadOriginGroups.INBOUND_ORIGINS,
+                        LeadStageGroups.TERMINAL_STAGES,
                         PageRequest.of(0, MAX_OPEN_FEED))
                 .stream()
                 .map(assembler::toAlert)
@@ -79,18 +81,21 @@ public class LeadAlertService {
 
         int target = slaPolicy.targetSecondsForNewLead(tenantId);
 
-        Double avg = leadRepository.avgFirstResponseSeconds(tenantId, dayStart, dayEnd);
+        Double avg = leadRepository.avgFirstResponseSeconds(
+                tenantId, LeadOriginGroups.INBOUND_ORIGINS, dayStart, dayEnd);
 
         return LeadAlertStatsDto.builder()
-                .newToday(leadRepository.countCreatedBetween(tenantId, dayStart, dayEnd))
+                .newToday(leadRepository.countInboundCreatedBetween(
+                        tenantId, LeadOriginGroups.INBOUND_ORIGINS, dayStart, dayEnd))
                 .openToClaim(leadRepository.countOpenToClaim(
-                        tenantId, LeadStageGroups.TERMINAL_STAGES))
+                        tenantId, LeadOriginGroups.INBOUND_ORIGINS, LeadStageGroups.TERMINAL_STAGES))
                 // Null stays null all the way to the client: "nobody contacted yet" and "answered
                 // instantly" are opposite facts and must not both render as 0.
                 .avgFirstResponseSeconds(avg == null ? null : Math.round(avg))
                 .slaTargetSeconds(target)
                 .slaBreaches(leadRepository.countSlaBreaches(
-                        tenantId, dayStart, dayEnd, now, target, LeadStageGroups.TERMINAL_STAGES))
+                        tenantId, LeadOriginGroups.INBOUND_ORIGINS,
+                        dayStart, dayEnd, now, target, LeadStageGroups.TERMINAL_STAGES))
                 .build();
     }
 

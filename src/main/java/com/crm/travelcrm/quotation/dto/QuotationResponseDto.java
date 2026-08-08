@@ -174,12 +174,26 @@ public class QuotationResponseDto {
     @Data
     @Builder
     public static class HotelItem {
+        private UUID hotelMasterPublicId;
+        private UUID roomTypeMasterPublicId;
+        private UUID mealPlanMasterPublicId;
+        private UUID platformHotelPublicId;
+        private UUID platformRoomPublicId;
+        private UUID platformMealPlanPublicId;
         private String name;
         private String city;
         private String checkIn;
         private String checkOut;
         private String roomType;
         private String mealPlan;
+        private String bedType;
+        private Integer occupancy;
+        private Integer adults;
+        private Integer children;
+        private Integer infants;
+        private Integer extraBeds;
+        private List<Integer> childAges;
+        private String rateSource;
         private Boolean refundable;
         private Integer stars;
         private BigDecimal pricePerRoom;

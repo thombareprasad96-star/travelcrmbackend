@@ -4,6 +4,7 @@ import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.common.exception.ResourceNotFoundException;
 import com.crm.travelcrm.lead.entity.Lead;
+import com.crm.travelcrm.lead.enums.LeadOriginGroups;
 import com.crm.travelcrm.lead.enums.LeadStageGroups;
 import com.crm.travelcrm.lead.repository.LeadRepository;
 import com.crm.travelcrm.permission.service.ScopeResolver;
@@ -67,6 +68,9 @@ public class LeadAccessGuard {
      *   <li><b>In stage</b> — a lead that reached CONVERTED or LOST is not open, whatever its
      *       contact stamp says. Without this a lead binned as LOST before anyone called would stay
      *       tenant-visible forever.</li>
+     *   <li><b>In origin</b> — only a machine-made lead is claimable. A lead a colleague typed into
+     *       the CRM already has the owner they chose, so widening it to the tenant would expose a
+     *       private enquiry and let anyone take it. See {@link LeadOriginGroups}.</li>
      *   <li><b>By tenant</b> — the fetch is still tenant-scoped. This never crosses tenants, and the
      *       caller still needs the permission the endpoint gates on.</li>
      * </ul>
@@ -89,12 +93,20 @@ public class LeadAccessGuard {
     }
 
     /**
-     * True while the lead's claim window is open: nobody has made first contact AND it has not
-     * reached a terminal stage. The single definition of "open", so the guard, the service and the
-     * SQL predicates cannot drift.
+     * True while the lead's claim window is open: it arrived from a machine, nobody has made first
+     * contact, AND it has not reached a terminal stage. The single definition of "open", so the
+     * guard, the service, the alert payload and the SQL predicates cannot drift.
+     *
+     * <p>The origin term is what keeps a manually created lead out of the claim queue: its creator
+     * (or the manager who picked an assignee) already owns it, so there is nothing to claim and
+     * nothing to broadcast. Any SQL that reproduces this predicate must carry
+     * {@code origin IN :inboundOrigins} too — {@code LeadRepository.findOpenToClaim} and its
+     * count/SLA siblings do.
      */
     public static boolean isOpenToClaim(Lead lead) {
-        return lead.getFirstContactedAt() == null && LeadStageGroups.isActive(lead.getLeadStage());
+        return LeadOriginGroups.isInbound(lead.getOrigin())
+                && lead.getFirstContactedAt() == null
+                && LeadStageGroups.isActive(lead.getLeadStage());
     }
 
     /**

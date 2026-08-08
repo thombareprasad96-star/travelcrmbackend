@@ -25,11 +25,15 @@ public interface HotelMapper {
 
     @Mapping(target = "roomTypeId",    source = "id")
     @Mapping(target = "hotelId",       source = "hotel.id")
+    @Mapping(target = "active",        source = "active")
+    @Mapping(target = "platformSourcePublicId", source = "platformSourcePublicId")
     @Mapping(target = "platformOwned", source = "platformOwned")
     RoomTypeDto toRoomTypeDto(RoomType roomType);
 
     @Mapping(target = "mealPlanId",    source = "id")
     @Mapping(target = "hotelId",       source = "hotel.id")
+    @Mapping(target = "active",        source = "active")
+    @Mapping(target = "platformSourcePublicId", source = "platformSourcePublicId")
     @Mapping(target = "platformOwned", source = "platformOwned")
     MealPlanDto toMealPlanDto(MealPlan mealPlan);
 

@@ -1,6 +1,7 @@
 package com.crm.travelcrm.notification.infrastructure.sse;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -47,6 +48,31 @@ public class SseEmitterRegistry {
     private final Map<Long, Set<SseEmitter>> byTenant = new ConcurrentHashMap<>();
 
     /**
+     * emitter → the userId it belongs to.
+     *
+     * <p>{@link #byTenant} answers "who is connected to this tenant" but not "who is this
+     * connection", and a filtered broadcast needs the second question: an audience is a set of
+     * userIds, and without this map the only way back from an emitter to its user is a scan of
+     * {@link #byUser}. Maintained in the same three places as the other two indexes.
+     */
+    private final Map<SseEmitter, Long> emitterOwner = new ConcurrentHashMap<>();
+
+    /**
+     * How long a connection may stay open before the server ends it and the client must reconnect.
+     *
+     * <p>This is an authorization control, not a resource one. A JWT is validated exactly once — at
+     * connect time — so an emitter with no timeout keeps streaming to a user who has since been
+     * deactivated, locked or had their permissions revoked, for as long as the tab stays open. The
+     * reconnect re-runs {@code TokenAuthenticator}, which re-checks the principal, so a finite
+     * lifetime is what makes revocation eventually take effect. 30 minutes by default: short enough
+     * that a terminated user loses the feed promptly, long enough that reconnect churn is trivial.
+     * The browser reconnects on its own, and the frontend rebuilds the stream with a fresh token
+     * when the old one has expired, so this is invisible to the user.
+     */
+    @Value("${app.sse.emitter-timeout-ms:1800000}")
+    private long emitterTimeoutMs;
+
+    /**
      * Register a connection.
      *
      * @param tenantId the subscriber's tenant. May be null for a principal with no tenant, in which
@@ -54,10 +80,13 @@ public class SseEmitterRegistry {
      *                 filed under some default tenant, which would leak every broadcast to it.
      */
     public SseEmitter register(Long tenantId, Long userId) {
-        SseEmitter emitter = new SseEmitter(0L); // no server-side timeout
+        SseEmitter emitter = new SseEmitter(emitterTimeoutMs);
         byUser.computeIfAbsent(userId, k -> new CopyOnWriteArraySet<>()).add(emitter);
         if (tenantId != null) {
             byTenant.computeIfAbsent(tenantId, k -> new CopyOnWriteArraySet<>()).add(emitter);
+        }
+        if (userId != null) {
+            emitterOwner.put(emitter, userId);
         }
 
         Runnable cleanup = () -> deregister(tenantId, userId, emitter);
@@ -76,6 +105,33 @@ public class SseEmitterRegistry {
     public void deregister(Long tenantId, Long userId, SseEmitter emitter) {
         removeFrom(byUser, userId, emitter);
         removeFrom(byTenant, tenantId, emitter);
+        emitterOwner.remove(emitter);
+    }
+
+    /**
+     * End every open connection of one user, now.
+     *
+     * <p>The companion to the emitter timeout: deactivation, a permission change or a forced logout
+     * should not have to wait out the timeout window before the user's tabs stop receiving pushes.
+     * {@code complete()} fires the emitter's own completion callback, which deregisters it, so both
+     * indexes are cleaned by the existing path rather than a second one.
+     */
+    public int deregisterUser(Long userId) {
+        if (userId == null) {
+            return 0;
+        }
+        Set<SseEmitter> emitters = byUser.getOrDefault(userId, Set.of());
+        int closed = 0;
+        for (SseEmitter emitter : emitters) {
+            try {
+                emitter.complete();
+            } catch (Exception e) {
+                // Already dead. Prune directly — its completion callback will not fire again.
+                dropEverywhere(emitter);
+            }
+            closed++;
+        }
+        return closed;
     }
 
     private void removeFrom(Map<Long, Set<SseEmitter>> index, Long key, SseEmitter emitter) {

@@ -363,7 +363,7 @@ class HotelProjectionReadOnlyTest {
         }
 
         @Test
-        @DisplayName("a catalog room type cannot be edited, deleted or given images")
+        @DisplayName("a catalog room type cannot have descriptive fields edited, be deleted or be given images")
         void catalogRoomTypeIsLocked() {
             RoomType fromCatalog = roomType(UUID.randomUUID());
             when(roomTypeRepository.findByIdAndHotelId(300L, HOTEL_ID)).thenReturn(Optional.of(fromCatalog));
@@ -382,6 +382,29 @@ class HotelProjectionReadOnlyTest {
                     .isInstanceOf(BusinessException.class).hasMessageContaining("Marketplace");
             verify(cloudinaryService, never()).uploadImage(any(), any());
             verify(roomTypeRepository, never()).delete(any(RoomType.class));
+        }
+
+        @Test
+        @DisplayName("a catalog room type accepts a tenant selling-rate change without unlocking its description")
+        void catalogRoomTypeAcceptsTenantBaseRate() {
+            RoomType fromCatalog = roomType(UUID.randomUUID());
+            fromCatalog.setBaseRate(null);
+            when(roomTypeRepository.findByIdAndHotelId(300L, HOTEL_ID)).thenReturn(Optional.of(fromCatalog));
+
+            UpdateRoomBaseRateRequest rateOnly = new UpdateRoomBaseRateRequest();
+            rateOnly.setBaseRate(new BigDecimal("8750.00"));
+
+            RoomTypeDto dto = service.updateRoomBaseRate(HOTEL_ID, 300L, rateOnly);
+
+            assertThat(dto.getBaseRate()).isEqualByComparingTo("8750.00");
+            assertThat(dto.isPlatformOwned()).isTrue();
+            assertThat(dto.getName()).isEqualTo("Ocean Deluxe");
+            verify(roomTypeRepository).save(fromCatalog);
+
+            UpdateRoomTypeRequest rename = new UpdateRoomTypeRequest();
+            rename.setName("Ocean Deluxe (ours)");
+            assertThatThrownBy(() -> service.updateRoomType(HOTEL_ID, 300L, rename))
+                    .isInstanceOf(BusinessException.class).hasMessageContaining("Marketplace");
         }
 
         @Test

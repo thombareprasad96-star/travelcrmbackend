@@ -97,6 +97,7 @@ public class LeadResponseDto {
     private List<String> services;
     private String notes;
     private List<ItineraryItem> itinerary;
+    private List<RoomAllocationItem> roomAllocations;
     private LocalDateTime createdAt;
 
     // ── Existing-customer link ───────────────────────────────────────────────
@@ -161,5 +162,19 @@ public class LeadResponseDto {
         // a destination and a city, and re-saving the lead loses the linkage entirely.
         private Long destinationId;
         private Long cityId;
+    }
+
+    @Data
+    @Builder
+    public static class RoomAllocationItem {
+        private UUID id;
+        private Integer roomNumber;
+        private String roomCategoryPreference;
+        private String bedPreference;
+        private Integer adults;
+        private Integer children;
+        private Integer infants;
+        private Integer extraBeds;
+        private List<Integer> childAges;
     }
 }

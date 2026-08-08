@@ -7,6 +7,7 @@ import com.crm.travelcrm.lead.dto.CreateLeadRequestDto;
 import com.crm.travelcrm.lead.dto.LeadResponseDto;
 import com.crm.travelcrm.lead.entity.Lead;
 import com.crm.travelcrm.lead.entity.LeadItinerary;
+import com.crm.travelcrm.lead.entity.LeadRoomAllocation;
 import com.crm.travelcrm.lead.enums.DepartureMode;
 import com.crm.travelcrm.lead.ingest.LeadActor;
 import com.crm.travelcrm.lead.service.LeadAccessGuard;
@@ -130,6 +131,21 @@ public class LeadMapper {
             });
         }
 
+        if (request.getRoomAllocations() != null) {
+            request.getRoomAllocations().forEach(roomReq -> lead.addRoomAllocation(
+                    LeadRoomAllocation.builder()
+                            .roomNumber(roomReq.getRoomNumber())
+                            .roomCategoryPreference(roomReq.getRoomCategoryPreference())
+                            .bedPreference(roomReq.getBedPreference())
+                            .adults(roomReq.getAdults())
+                            .children(roomReq.getChildren())
+                            .infants(roomReq.getInfants())
+                            .extraBeds(roomReq.getExtraBeds())
+                            .childAges(roomReq.getChildAges() == null
+                                    ? new ArrayList<>() : new ArrayList<>(roomReq.getChildAges()))
+                            .build()));
+        }
+
         return lead;
     }
 
@@ -148,6 +164,24 @@ public class LeadMapper {
                                     .cityId(i.getCityId())
                                     .build())
                           .collect(Collectors.toList());
+
+        List<LeadResponseDto.RoomAllocationItem> roomAllocationItems =
+                lead.getRoomAllocations() == null
+                        ? Collections.emptyList()
+                        : lead.getRoomAllocations().stream()
+                        .map(room -> LeadResponseDto.RoomAllocationItem.builder()
+                                .id(room.getPublicId())
+                                .roomNumber(room.getRoomNumber())
+                                .roomCategoryPreference(room.getRoomCategoryPreference())
+                                .bedPreference(room.getBedPreference())
+                                .adults(room.getAdults())
+                                .children(room.getChildren())
+                                .infants(room.getInfants())
+                                .extraBeds(room.getExtraBeds())
+                                .childAges(room.getChildAges() == null
+                                        ? Collections.emptyList() : new ArrayList<>(room.getChildAges()))
+                                .build())
+                        .collect(Collectors.toList());
 
         return LeadResponseDto.builder()
                 .id(lead.getPublicId())                // ← was lead.getId()
@@ -204,6 +238,7 @@ public class LeadMapper {
                         : new ArrayList<>(lead.getServices()))
                 .notes(lead.getNotes())
                 .itinerary(itineraryItems)
+                .roomAllocations(roomAllocationItems)
                 .createdAt(lead.getCreatedAt())
                 .customerId(lead.getCustomerPublicId())
                 .convertedAt(lead.getConvertedAt())

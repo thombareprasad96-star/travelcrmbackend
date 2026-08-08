@@ -5,6 +5,8 @@ import com.crm.travelcrm.auth.enums.Role;
 import com.crm.travelcrm.auth.repository.UserRepository;
 import com.crm.travelcrm.common.context.TenantContext;
 import com.crm.travelcrm.lead.entity.Lead;
+import com.crm.travelcrm.lead.enums.LeadOrigin;
+import com.crm.travelcrm.lead.enums.LeadOriginGroups;
 import com.crm.travelcrm.lead.enums.LeadSource;
 import com.crm.travelcrm.lead.enums.LeadStage;
 import com.crm.travelcrm.lead.enums.LeadStageGroups;
@@ -108,7 +110,7 @@ class LeadClaimConcurrencyIT {
                     startLine.await(10, TimeUnit.SECONDS);   // release all threads together
                     return newTx().execute(status -> leadRepository.claimLead(
                             lead.getId(), tenantId, claimer, expectedVersion,
-                            LeadStageGroups.TERMINAL_STAGES));
+                            LeadOriginGroups.INBOUND_ORIGINS, LeadStageGroups.TERMINAL_STAGES));
                 });
             }
 
@@ -146,17 +148,20 @@ class LeadClaimConcurrencyIT {
         Lead lead = createOpenLead(contenders.get(0));
 
         int first = newTx().execute(s -> leadRepository.claimLead(
-                lead.getId(), tenantId, contenders.get(1), 0, LeadStageGroups.TERMINAL_STAGES));
+                lead.getId(), tenantId, contenders.get(1), 0,
+                LeadOriginGroups.INBOUND_ORIGINS, LeadStageGroups.TERMINAL_STAGES));
         assertThat(first).isEqualTo(1);
 
         // Version is now 1. A client that still believes it is 0 — a tab left open — must lose,
         // even though the lead is genuinely still open to claim.
         int stale = newTx().execute(s -> leadRepository.claimLead(
-                lead.getId(), tenantId, contenders.get(0), 0, LeadStageGroups.TERMINAL_STAGES));
+                lead.getId(), tenantId, contenders.get(0), 0,
+                LeadOriginGroups.INBOUND_ORIGINS, LeadStageGroups.TERMINAL_STAGES));
         assertThat(stale).isZero();
 
         int current = newTx().execute(s -> leadRepository.claimLead(
-                lead.getId(), tenantId, contenders.get(0), 1, LeadStageGroups.TERMINAL_STAGES));
+                lead.getId(), tenantId, contenders.get(0), 1,
+                LeadOriginGroups.INBOUND_ORIGINS, LeadStageGroups.TERMINAL_STAGES));
         assertThat(current)
                 .as("re-submitting with the fresh version is how the loser retries")
                 .isEqualTo(1);
@@ -247,6 +252,7 @@ class LeadClaimConcurrencyIT {
                 // A phone that cannot collide with a real contact under uq_leads_phone_tenant_open.
                 lead.setPhone("+0000" + (System.nanoTime() % 1_000_000));
                 lead.setLeadSource(LeadSource.OTHER);
+                lead.setOrigin(LeadOrigin.INTEGRATION);
                 lead.setLeadType(LeadType.values()[0]);
                 lead.setLeadStage(LeadStage.NEW_LEAD);
                 lead.setAssignedUser(initialOwner);

@@ -374,10 +374,21 @@ public class Lead extends BaseTenantEntity {
     @Builder.Default
     private List<LeadItinerary> itinerary = new ArrayList<>();
 
+    @OneToMany(mappedBy = "lead", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    @BatchSize(size = 50)
+    @OrderBy("roomNumber ASC")
+    @Builder.Default
+    private List<LeadRoomAllocation> roomAllocations = new ArrayList<>();
+
 
     // Convenience method to wire up bi-directional relationship
     public void addItinerary(LeadItinerary item) {
         item.setLead(this);
         this.itinerary.add(item);
+    }
+
+    public void addRoomAllocation(LeadRoomAllocation allocation) {
+        allocation.setLead(this);
+        this.roomAllocations.add(allocation);
     }
 }

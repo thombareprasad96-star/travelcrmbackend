@@ -43,6 +43,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -138,11 +139,20 @@ public class QuotationServiceImpl implements QuotationService {
         log.debug("Re-mapped quotation {} | pdfUrl cleared (will re-render on next /pdf) | sections: hotels={} segments={} sightseeingDays={} cruises={} vehicles={} addons={}",
                 publicId, q.getHotels().size(), q.getFlightSegments().size(), q.getSightseeingDays().size(),
                 q.getCruises().size(), q.getVehicles().size(), q.getAddons().size());
-        // Re-link the lead only if the client sent one (keeps the existing snapshot otherwise)
+        // A quotation is a point-in-time snapshot. Link and snapshot once for legacy records that
+        // have no lead yet, but never refresh or move an existing quotation during a content edit.
         Lead lead = null;
 
         if (request.getLeadId() != null) {
-            lead = linkLeadAndSnapshot(q, request.getLeadId());
+            if (q.getLeadPublicId() == null) {
+                lead = linkLeadAndSnapshot(q, request.getLeadId());
+            } else if (!q.getLeadPublicId().equals(request.getLeadId())) {
+                throw new BusinessException(
+                        "An existing quotation cannot be moved to a different lead.",
+                        HttpStatus.CONFLICT);
+            } else {
+                log.debug("Preserving the original lead snapshot for quotation {}", publicId);
+            }
         }
         applyDestinationCoverImage(
                 q,
@@ -783,8 +793,20 @@ public class QuotationServiceImpl implements QuotationService {
         c.setHotelNotes(src.getHotelNotes());
         for (QuotationHotel h : src.getHotels()) {
             c.addHotel(QuotationHotel.builder()
+                    .hotelMasterPublicId(h.getHotelMasterPublicId())
+                    .roomTypeMasterPublicId(h.getRoomTypeMasterPublicId())
+                    .mealPlanMasterPublicId(h.getMealPlanMasterPublicId())
+                    .platformHotelPublicId(h.getPlatformHotelPublicId())
+                    .platformRoomPublicId(h.getPlatformRoomPublicId())
+                    .platformMealPlanPublicId(h.getPlatformMealPlanPublicId())
                     .name(h.getName()).city(h.getCity()).checkIn(h.getCheckIn()).checkOut(h.getCheckOut())
                     .roomType(h.getRoomType()).mealPlan(h.getMealPlan()).refundable(h.getRefundable())
+                    .bedType(h.getBedType()).occupancy(h.getOccupancy())
+                    .adults(h.getAdults()).children(h.getChildren()).infants(h.getInfants())
+                    .extraBeds(h.getExtraBeds())
+                    .childAges(h.getChildAges() == null
+                            ? new ArrayList<>() : new ArrayList<>(h.getChildAges()))
+                    .rateSource(h.getRateSource())
                     .stars(h.getStars())
                     .pricePerRoom(h.getPricePerRoom()).rooms(h.getRooms()).imagePath(h.getImagePath())
                     .build());

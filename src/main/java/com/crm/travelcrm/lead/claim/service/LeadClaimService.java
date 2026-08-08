@@ -16,6 +16,7 @@ import com.crm.travelcrm.lead.claim.dto.LeadAssignmentEventDto;
 import com.crm.travelcrm.lead.claim.dto.LeadClaimResultDto;
 import com.crm.travelcrm.lead.claim.dto.ReassignLeadRequestDto;
 import com.crm.travelcrm.lead.entity.Lead;
+import com.crm.travelcrm.lead.enums.LeadOriginGroups;
 import com.crm.travelcrm.lead.enums.LeadStage;
 import com.crm.travelcrm.lead.enums.LeadStageGroups;
 import com.crm.travelcrm.lead.exception.LeadClaimLostException;
@@ -99,6 +100,12 @@ public class LeadClaimService {
         // Open leads bypass row-scope by design — see LeadAccessGuard.requireVisibleOrClaimable.
         Lead lead = leadAccessGuard.requireVisibleOrClaimable(leadPublicId, READ_SCOPE_KEY);
 
+        if (!LeadOriginGroups.isInbound(lead.getOrigin())) {
+            throw new BusinessException(
+                    "Only inbound leads can be claimed; manually created leads already have an owner.",
+                    HttpStatus.CONFLICT);
+        }
+
         // Holding LEAD_CLAIM is not enough to OWN a lead: the eligible-owner rule is
         // AssignableUserResolver's (active, unlocked, holds LEAD_READ, never a SUB_AGENT), and it is
         // the same rule the auto-assignment engine uses. Re-deriving it here is how the two drift —
@@ -117,7 +124,7 @@ public class LeadClaimService {
 
         int updated = leadRepository.claimLead(
                 lead.getId(), tenantId, actor, request.getExpectedClaimVersion(),
-                LeadStageGroups.TERMINAL_STAGES);
+                LeadOriginGroups.INBOUND_ORIGINS, LeadStageGroups.TERMINAL_STAGES);
 
         if (updated == 0) {
             throw diagnoseLostRace(leadPublicId, tenantId, false);
@@ -284,6 +291,12 @@ public class LeadClaimService {
         User actor = currentUser();
 
         Lead lead = leadAccessGuard.requireVisible(leadPublicId, WRITE_SCOPE_KEY);
+
+        if (!LeadOriginGroups.isInbound(lead.getOrigin())) {
+            throw new BusinessException(
+                    "Only inbound leads have a claim window that can be reopened.",
+                    HttpStatus.CONFLICT);
+        }
 
         if (LeadAccessGuard.isOpenToClaim(lead)) {
             throw new BusinessException("This lead is already open to claim.", HttpStatus.CONFLICT);

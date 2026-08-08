@@ -167,6 +167,10 @@ public class CreateLeadRequestDto {
 
     @Valid
     private List<LeadItineraryRequestDto> itinerary;
+
+    @Valid
+    @Size(max = 20, message = "A lead cannot contain more than 20 room allocations")
+    private List<LeadRoomAllocationRequestDto> roomAllocations;
 }
 
 
