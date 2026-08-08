@@ -1,6 +1,7 @@
 package com.crm.travelcrm.lead.sla;
 
 import com.crm.travelcrm.lead.entity.Lead;
+import com.crm.travelcrm.lead.enums.LeadOriginGroups;
 import com.crm.travelcrm.lead.enums.LeadStageGroups;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -81,6 +82,9 @@ public class LeadSlaPolicy {
      * without a call is correct handling, not a missed SLA.
      */
     public boolean isBreached(Lead lead, LocalDateTime now) {
+        if (!LeadOriginGroups.isInbound(lead.getOrigin())) {
+            return false;
+        }
         int target = effectiveTargetSeconds(lead);
 
         Long answeredIn = lead.getFirstResponseSeconds();
@@ -107,7 +111,9 @@ public class LeadSlaPolicy {
      * countdown, and a caller that treats null as zero would show every closed lead as breaching.
      */
     public Long secondsRemaining(Lead lead, LocalDateTime now) {
-        if (lead.getFirstContactedAt() != null || !LeadStageGroups.isActive(lead.getLeadStage())) {
+        if (!LeadOriginGroups.isInbound(lead.getOrigin())
+                || lead.getFirstContactedAt() != null
+                || !LeadStageGroups.isActive(lead.getLeadStage())) {
             return null;
         }
         LocalDateTime createdAt = lead.getCreatedAt();

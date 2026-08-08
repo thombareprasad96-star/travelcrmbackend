@@ -1,6 +1,7 @@
 package com.crm.travelcrm.lead.sla;
 
 import com.crm.travelcrm.lead.entity.Lead;
+import com.crm.travelcrm.lead.enums.LeadOrigin;
 import com.crm.travelcrm.lead.enums.LeadStage;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -111,6 +112,16 @@ class LeadSlaPolicyTest {
     }
 
     @Test
+    @DisplayName("a manually created lead has no tenant-wide first-response SLA clock")
+    void manualLeadHasNoClaimSla() {
+        Lead lead = openLead();
+        lead.setOrigin(LeadOrigin.MANUAL);
+
+        assertThat(policy.isBreached(lead, CREATED.plusDays(1))).isFalse();
+        assertThat(policy.secondsRemaining(lead, CREATED.plusSeconds(30))).isNull();
+    }
+
+    @Test
     @DisplayName("a contacted lead with no measurement (legacy row) is not judged")
     void contactedButUnmeasuredIsNotABreach() {
         Lead lead = openLead();
@@ -146,6 +157,7 @@ class LeadSlaPolicyTest {
     private static Lead openLead() {
         Lead lead = new Lead();
         lead.setCreatedAt(CREATED);
+        lead.setOrigin(LeadOrigin.INTEGRATION);
         lead.setLeadStage(LeadStage.NEW_LEAD);
         lead.setSlaTargetSeconds(300);
         return lead;

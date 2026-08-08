@@ -8,6 +8,7 @@ import lombok.experimental.SuperBuilder;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.math.BigDecimal;
 
 @Entity
 @Table(name = "hotel_room_types",
@@ -35,6 +36,10 @@ public class RoomType extends BaseEntity {
 
     @Column(name = "bed_type", length = 100)
     private String bedType;
+
+    /** Tenant selling rate per room per night. Null means the master has no rate yet. */
+    @Column(name = "base_rate", precision = 15, scale = 2)
+    private BigDecimal baseRate;
 
     @Column(columnDefinition = "TEXT")
     private String description;

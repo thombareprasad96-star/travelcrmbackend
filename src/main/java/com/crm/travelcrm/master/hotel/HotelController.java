@@ -127,6 +127,17 @@ public class HotelController {
         return ResponseEntity.ok(ApiResponse.success("Room type updated", hotelService.updateRoomType(hotelId, roomTypeId, request)));
     }
 
+    @PatchMapping("/{hotelId}/room-types/{roomTypeId}/base-rate")
+    @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
+    public ResponseEntity<ApiResponse<RoomTypeDto>> updateRoomBaseRate(
+            @PathVariable Long hotelId,
+            @PathVariable Long roomTypeId,
+            @Valid @RequestBody UpdateRoomBaseRateRequest request) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Room base rate updated",
+                hotelService.updateRoomBaseRate(hotelId, roomTypeId, request)));
+    }
+
     @DeleteMapping("/{hotelId}/room-types/{roomTypeId}")
     @PreAuthorize("hasAnyAuthority('PLATFORM_ADMIN', 'MASTER_MANAGE')")
     public ResponseEntity<Void> deleteRoomType(

@@ -18,6 +18,8 @@ public class MealPlanDto {
     String name;
     String description;
     BigDecimal price;
+    boolean active;
+    UUID platformSourcePublicId;
 
     /**
      * True when the marketplace catalog owns this row's name and description. {@code price} stays

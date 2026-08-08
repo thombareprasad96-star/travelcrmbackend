@@ -10,12 +10,14 @@ import com.crm.travelcrm.lead.dto.LeadLogResponseDto;
 import com.crm.travelcrm.lead.dto.LeadLogStatsDto;
 import com.crm.travelcrm.lead.dto.LeadLogSummaryResponseDto;
 import com.crm.travelcrm.lead.dto.LeadResponseDto;
+import com.crm.travelcrm.lead.dto.QuickQuoteContactResponseDto;
 import com.crm.travelcrm.lead.dto.LeadStatsSummaryDto;
 import com.crm.travelcrm.lead.dto.UpdateLeadStageRequestDto;
 import com.crm.travelcrm.lead.dto.UserLeadStageCountDto;
 import com.crm.travelcrm.lead.dto.UserWorkloadDto;
 import com.crm.travelcrm.lead.service.LeadLogService;
 import com.crm.travelcrm.lead.service.LeadService;
+import com.crm.travelcrm.lead.service.QuickQuoteLookupService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -42,6 +44,7 @@ public class LeadController {
 
     private final LeadService leadService;
     private final LeadLogService leadLogService;
+    private final QuickQuoteLookupService quickQuoteLookupService;
 
     @PostMapping
     @PreAuthorize("hasAuthority('LEAD_CREATE')")
@@ -66,6 +69,21 @@ public class LeadController {
 
         LeadResponseDto response = leadService.searchLead(keyword);
         return ResponseEntity.ok(ApiResponse.success("Lead found", response));
+    }
+
+    /**
+     * Combined contact probe for Quick Quote intake. Both permissions are explicit because the
+     * payload can contain customer history as well as a lead; method-level security replaces the
+     * class default rather than stacking with it.
+     */
+    @GetMapping("/quick-quote/contact")
+    @PreAuthorize("hasAuthority('LEAD_READ') and hasAuthority('CUSTOMER_READ')")
+    public ResponseEntity<ApiResponse<QuickQuoteContactResponseDto>> quickQuoteContact(
+            @RequestParam(required = false) String phone,
+            @RequestParam(required = false) String email) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Quick Quote contact lookup completed",
+                quickQuoteLookupService.lookup(phone, email)));
     }
 
     /** Fetch a single lead by its publicId (UUID). */

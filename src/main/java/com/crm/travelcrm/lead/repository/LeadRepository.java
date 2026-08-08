@@ -4,6 +4,7 @@ import com.crm.travelcrm.auth.entity.User;
 import com.crm.travelcrm.lead.dto.UserLeadStageCountDto;
 import com.crm.travelcrm.lead.dto.UserWorkloadDto;
 import com.crm.travelcrm.lead.entity.Lead;
+import com.crm.travelcrm.lead.enums.LeadOrigin;
 import com.crm.travelcrm.lead.enums.LeadStage;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -117,6 +118,10 @@ public interface LeadRepository extends JpaRepository<Lead, Long>, JpaSpecificat
     boolean existsByEmailAndTenantIdAndDeletedAtIsNullAndLeadStageNotIn(
             String email, Long tenantId, Collection<LeadStage> excludedStages);
 
+    @EntityGraph(attributePaths = "assignedUser")
+    Optional<Lead> findFirstByEmailAndTenantIdAndDeletedAtIsNullAndLeadStageNotInOrderByCreatedAtDesc(
+            String email, Long tenantId, Collection<LeadStage> excludedStages);
+
     /**
      * The append-on-repeat target (owner decision 1): the tenant's most recent OPEN lead for a
      * canonical phone.
@@ -136,6 +141,10 @@ public interface LeadRepository extends JpaRepository<Lead, Long>, JpaSpecificat
     @EntityGraph(attributePaths = "assignedUser")
     Optional<Lead> findFirstByPhoneNormalizedAndTenantIdAndDeletedAtIsNullAndLeadStageNotInOrderByCreatedAtDesc(
             String phoneNormalized, Long tenantId, Collection<LeadStage> excludedStages);
+
+    @EntityGraph(attributePaths = "assignedUser")
+    Optional<Lead> findFirstByPhoneAndTenantIdAndDeletedAtIsNullAndLeadStageNotInOrderByCreatedAtDesc(
+            String phone, Long tenantId, Collection<LeadStage> excludedStages);
 
     boolean existsByPhoneAndTenantIdAndDeletedAtIsNullAndLeadStageNotIn(
             String phone, Long tenantId, Collection<LeadStage> excludedStages);
@@ -188,11 +197,13 @@ public interface LeadRepository extends JpaRepository<Lead, Long>, JpaSpecificat
             FROM Lead l
             WHERE l.tenantId = :tenantId
               AND l.deletedAt IS NULL
+              AND l.origin IN :inboundOrigins
               AND l.firstContactedAt IS NULL
               AND l.leadStage NOT IN :terminalStages
             ORDER BY l.createdAt DESC
             """)
     List<Lead> findOpenToClaim(@Param("tenantId") Long tenantId,
+                               @Param("inboundOrigins") Collection<LeadOrigin> inboundOrigins,
                                @Param("terminalStages") Collection<LeadStage> terminalStages,
                                Pageable pageable);
 
@@ -202,10 +213,12 @@ public interface LeadRepository extends JpaRepository<Lead, Long>, JpaSpecificat
             FROM Lead l
             WHERE l.tenantId = :tenantId
               AND l.deletedAt IS NULL
+              AND l.origin IN :inboundOrigins
               AND l.firstContactedAt IS NULL
               AND l.leadStage NOT IN :terminalStages
             """)
     long countOpenToClaim(@Param("tenantId") Long tenantId,
+                          @Param("inboundOrigins") Collection<LeadOrigin> inboundOrigins,
                           @Param("terminalStages") Collection<LeadStage> terminalStages);
 
     /** Tile 1 — leads created inside the tenant's local day. */
@@ -220,6 +233,20 @@ public interface LeadRepository extends JpaRepository<Lead, Long>, JpaSpecificat
                              @Param("from") LocalDateTime from,
                              @Param("to") LocalDateTime to);
 
+    /** Tile 1 on the incoming-leads screen: machine-created leads received today. */
+    @Query("""
+            SELECT COUNT(l)
+            FROM Lead l
+            WHERE l.tenantId = :tenantId
+              AND l.deletedAt IS NULL
+              AND l.origin IN :inboundOrigins
+              AND l.createdAt >= :from AND l.createdAt < :to
+            """)
+    long countInboundCreatedBetween(@Param("tenantId") Long tenantId,
+                                    @Param("inboundOrigins") Collection<LeadOrigin> inboundOrigins,
+                                    @Param("from") LocalDateTime from,
+                                    @Param("to") LocalDateTime to);
+
     /**
      * Tile 3 — mean first-response seconds over leads CONTACTED in the window.
      *
@@ -231,10 +258,12 @@ public interface LeadRepository extends JpaRepository<Lead, Long>, JpaSpecificat
             FROM Lead l
             WHERE l.tenantId = :tenantId
               AND l.deletedAt IS NULL
+              AND l.origin IN :inboundOrigins
               AND l.firstResponseSeconds IS NOT NULL
               AND l.firstContactedAt >= :from AND l.firstContactedAt < :to
             """)
     Double avgFirstResponseSeconds(@Param("tenantId") Long tenantId,
+                                   @Param("inboundOrigins") Collection<LeadOrigin> inboundOrigins,
                                    @Param("from") LocalDateTime from,
                                    @Param("to") LocalDateTime to);
 
@@ -261,6 +290,7 @@ public interface LeadRepository extends JpaRepository<Lead, Long>, JpaSpecificat
             FROM Lead l
             WHERE l.tenantId = :tenantId
               AND l.deletedAt IS NULL
+              AND l.origin IN :inboundOrigins
               AND l.createdAt >= :from AND l.createdAt < :to
               AND (
                     (l.firstResponseSeconds IS NOT NULL
@@ -272,6 +302,7 @@ public interface LeadRepository extends JpaRepository<Lead, Long>, JpaSpecificat
               )
             """)
     long countSlaBreaches(@Param("tenantId") Long tenantId,
+                          @Param("inboundOrigins") Collection<LeadOrigin> inboundOrigins,
                           @Param("from") LocalDateTime from,
                           @Param("to") LocalDateTime to,
                           @Param("now") LocalDateTime now,
@@ -315,6 +346,7 @@ public interface LeadRepository extends JpaRepository<Lead, Long>, JpaSpecificat
              WHERE l.id              = :leadId
                AND l.tenantId        = :tenantId
                AND l.deletedAt      IS NULL
+               AND l.origin          IN :inboundOrigins
                AND l.firstContactedAt IS NULL
                AND l.leadStage   NOT IN :terminalStages
                AND COALESCE(l.claimVersion, 0) = :expectedVersion
@@ -323,6 +355,7 @@ public interface LeadRepository extends JpaRepository<Lead, Long>, JpaSpecificat
                   @Param("tenantId") Long tenantId,
                   @Param("newOwner") User newOwner,
                   @Param("expectedVersion") int expectedVersion,
+                  @Param("inboundOrigins") Collection<LeadOrigin> inboundOrigins,
                   @Param("terminalStages") Collection<LeadStage> terminalStages);
 
     /**

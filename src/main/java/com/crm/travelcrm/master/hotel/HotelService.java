@@ -29,6 +29,8 @@ public interface HotelService {
 
     RoomTypeDto updateRoomType(Long hotelId, Long roomTypeId, UpdateRoomTypeRequest request);
 
+    RoomTypeDto updateRoomBaseRate(Long hotelId, Long roomTypeId, UpdateRoomBaseRateRequest request);
+
     void deleteRoomType(Long hotelId, Long roomTypeId);
 
     ApiResponse<String> uploadRoomImages(Long hotelId, Long roomTypeId, MultipartFile[] files);

@@ -205,12 +205,6 @@ public class BookingServiceImpl implements BookingService {
         if (sourceLead != null) {
             booking.setLeadId(sourceLead.getId());
             booking.setSourceLeadPublicId(sourceLead.getPublicId());
-            // …and point the LEAD back at the customer it just became. linkExistingCustomer only
-            // runs at lead creation, when this customer usually does not exist yet — so without
-            // this the commonest journey in the product (enquiry becomes a customer through its
-            // own booking) leaves the lead's customer link empty forever.
-            backLinkCustomerToLead(sourceLead, customer);
-            leadRepository.save(sourceLead);
         }
 
         // Traveller / departure / itinerary detail. Attached before save so the cascade persists it
@@ -231,6 +225,13 @@ public class BookingServiceImpl implements BookingService {
         pinCancellationPolicy(booking, null, tenantId);
 
         Booking saved = bookingRepository.save(booking);
+        if (sourceLead != null) {
+            sourceLead.setLeadStage(LeadStage.CONVERTED);
+            sourceLead.setConvertedAt(LocalDateTime.now());
+            sourceLead.setConvertedBookingPublicId(saved.getPublicId());
+            backLinkCustomerToLead(sourceLead, customer);
+            leadRepository.save(sourceLead);
+        }
         // An initial payment entered on the create form must appear in the ledger too, or the invoice
         // would show "Paid ₹X" over an empty Payments-Received table (paidAmount vs ledger divergence).
         if (initialPaid.signum() > 0) {

@@ -13,6 +13,7 @@ import org.springframework.data.domain.Page;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 public interface LeadService {
@@ -50,6 +51,8 @@ public interface LeadService {
                                       Boolean activeOnly, LocalDate followUpDueBy);
     LeadResponseDto getLeadById(UUID publicId);                                // ← UUID
     LeadResponseDto searchLead(String keyword);
+    /** Most recent visible, non-terminal lead matching the Quick Quote contact probe. */
+    Optional<LeadResponseDto> findOpenLeadForQuickQuote(String phone, String email);
     LeadResponseDto updateLead(UUID publicId, CreateLeadRequestDto request);  // ← UUID
     void deleteLead(UUID publicId);                                            // ← UUID
 

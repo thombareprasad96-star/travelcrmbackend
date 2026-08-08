@@ -28,6 +28,7 @@ import com.crm.travelcrm.lead.claim.service.LeadClaimService;
 import com.crm.travelcrm.lead.sla.LeadSlaPolicy;
 import com.crm.travelcrm.lead.entity.Lead;
 import com.crm.travelcrm.lead.entity.LeadItinerary;
+import com.crm.travelcrm.lead.entity.LeadRoomAllocation;
 import com.crm.travelcrm.lead.enums.LeadStage;
 import com.crm.travelcrm.lead.enums.LeadType;
 import com.crm.travelcrm.lead.ingest.IngestPolicy;
@@ -168,6 +169,7 @@ public class LeadServiceImpl implements LeadService {
         // actually needs to trace this; the lead code is logged on the success line below.
         log.info("Creating lead | tenantId: {} | actor: {}", tenantId, actor);
 
+        validateRoomAllocations(request);
         validateNoDuplicates(request, tenantId, null);
         // Active duplicates errored above; a match that lives ONLY in Trash becomes a
         // structured "restore available" response instead of a dead "already exists".
@@ -233,7 +235,9 @@ public class LeadServiceImpl implements LeadService {
         // can never leave every browser in the tenant showing a lead that does not exist.
         // Registered BEFORE the publish below for the same reason the audit is: publishing clears
         // TenantContext on this thread, and anything after it runs without a tenant.
-        alertBroadcaster.broadcastNewLead(tenantId, alertAssembler.toAlert(savedLead));
+        if (LeadAccessGuard.isOpenToClaim(savedLead)) {
+            alertBroadcaster.broadcastNewLead(tenantId, alertAssembler.toAlert(savedLead));
+        }
 
         publishLeadCreatedNotification(savedLead, tenantId);
 
@@ -514,9 +518,55 @@ public class LeadServiceImpl implements LeadService {
     // ── Update ────────────────────────────────────────────────────────────────
 
     @Override
+    @Transactional(readOnly = true)
+    public Optional<LeadResponseDto> findOpenLeadForQuickQuote(String phone, String email) {
+        Long tenantId = currentTenantId();
+        Optional<Lead> match = Optional.empty();
+
+        if (phone != null && !phone.isBlank()) {
+            String canonical = leadMapper.canonicalPhone(phone);
+            if (canonical != null) {
+                match = leadRepository
+                        .findFirstByPhoneNormalizedAndTenantIdAndDeletedAtIsNullAndLeadStageNotInOrderByCreatedAtDesc(
+                                canonical, tenantId, TERMINAL_STAGES);
+            }
+
+            // The shadow column can legitimately be null on legacy/unparseable data. Fall back to
+            // the representation the web form submits after removing ordinary typing separators.
+            if (match.isEmpty()) {
+                String submittedPhone = phone.trim().replaceAll("[\\s().\\p{Pd}]", "");
+                if (!submittedPhone.isBlank()) {
+                    match = leadRepository
+                            .findFirstByPhoneAndTenantIdAndDeletedAtIsNullAndLeadStageNotInOrderByCreatedAtDesc(
+                                    submittedPhone, tenantId, TERMINAL_STAGES);
+                }
+            }
+        }
+
+        match = match.filter(lead -> scopeResolver.canSee(
+                currentUser(), "LEAD_READ", ownerId(lead)));
+
+        if (match.isEmpty() && email != null && !email.isBlank()) {
+            match = leadRepository
+                    .findFirstByEmailAndTenantIdAndDeletedAtIsNullAndLeadStageNotInOrderByCreatedAtDesc(
+                            email.trim().toLowerCase(), tenantId, TERMINAL_STAGES)
+                    .filter(lead -> scopeResolver.canSee(
+                            currentUser(), "LEAD_READ", ownerId(lead)));
+        }
+
+        if (match.isEmpty()) return Optional.empty();
+        Lead found = match.get();
+        LeadResponseDto dto = leadMapper.toResponse(found);
+        enrichWithLogCounts(List.of(dto), List.of(found));
+        return Optional.of(dto);
+    }
+
+    @Override
     @Transactional
     public LeadResponseDto updateLead(UUID publicId, CreateLeadRequestDto request) {
         Long tenantId = currentTenantId();
+
+        validateRoomAllocations(request);
 
         // Tenant + row-level scope (LEAD_UPDATE) enforced centrally before any mutation.
         Lead lead = leadAccessGuard.requireVisible(publicId, "LEAD_UPDATE");
@@ -613,6 +663,23 @@ public class LeadServiceImpl implements LeadService {
                 itinerary.setCityId(item.getCityId());
                 itinerary.setLead(lead);
                 lead.getItinerary().add(itinerary);
+            });
+        }
+
+        if (request.getRoomAllocations() != null) {
+            lead.getRoomAllocations().clear();
+            request.getRoomAllocations().forEach(item -> {
+                LeadRoomAllocation room = new LeadRoomAllocation();
+                room.setRoomNumber(item.getRoomNumber());
+                room.setRoomCategoryPreference(item.getRoomCategoryPreference());
+                room.setBedPreference(item.getBedPreference());
+                room.setAdults(item.getAdults());
+                room.setChildren(item.getChildren());
+                room.setInfants(item.getInfants());
+                room.setExtraBeds(item.getExtraBeds());
+                room.setChildAges(item.getChildAges() == null
+                        ? new ArrayList<>() : new ArrayList<>(item.getChildAges()));
+                lead.addRoomAllocation(room);
             });
         }
 
@@ -1203,6 +1270,57 @@ public class LeadServiceImpl implements LeadService {
      * @param excludePublicId pass null on create, pass lead's publicId on update
      *                        so a lead doesn't conflict with itself
      */
+    private void validateRoomAllocations(CreateLeadRequestDto request) {
+        if (request.getRoomAllocations() == null || request.getRoomAllocations().isEmpty()) return;
+
+        var allocations = request.getRoomAllocations();
+        int requestedRooms = request.getRooms() == null ? allocations.size() : request.getRooms();
+        if (allocations.size() != requestedRooms) {
+            throw new BusinessException(
+                    "Room-wise allocation must contain exactly " + requestedRooms + " room(s).",
+                    HttpStatus.BAD_REQUEST);
+        }
+
+        int adults = 0;
+        int children = 0;
+        int infants = 0;
+        int extraBeds = 0;
+        for (int index = 0; index < allocations.size(); index++) {
+            var room = allocations.get(index);
+            if (!Objects.equals(room.getRoomNumber(), index + 1)) {
+                throw new BusinessException("Room allocations must be numbered consecutively from 1.",
+                        HttpStatus.BAD_REQUEST);
+            }
+            int roomAdults = Objects.requireNonNullElse(room.getAdults(), 0);
+            int roomChildren = Objects.requireNonNullElse(room.getChildren(), 0);
+            int roomInfants = Objects.requireNonNullElse(room.getInfants(), 0);
+            int roomExtraBeds = Objects.requireNonNullElse(room.getExtraBeds(), 0);
+            if (roomAdults + roomChildren + roomInfants == 0) {
+                throw new BusinessException("Room " + (index + 1) + " must contain at least one traveller.",
+                        HttpStatus.BAD_REQUEST);
+            }
+            if (room.getChildAges() != null && !room.getChildAges().isEmpty()
+                    && room.getChildAges().size() != roomChildren) {
+                throw new BusinessException(
+                        "Room " + (index + 1) + " must have one age for each child, or no ages yet.",
+                        HttpStatus.BAD_REQUEST);
+            }
+            adults += roomAdults;
+            children += roomChildren;
+            infants += roomInfants;
+            extraBeds += roomExtraBeds;
+        }
+
+        if (adults != Objects.requireNonNullElse(leadMapper.resolveAdults(request), 0)
+                || children != Objects.requireNonNullElse(request.getChildren(), 0)
+                || infants != Objects.requireNonNullElse(request.getInfants(), 0)
+                || extraBeds != Objects.requireNonNullElse(request.getExtraBeds(), 0)) {
+            throw new BusinessException(
+                    "Room-wise adults, children, infants and extra beds must match the traveller totals.",
+                    HttpStatus.BAD_REQUEST);
+        }
+    }
+
     private void validateNoDuplicates(CreateLeadRequestDto request,
                                       Long tenantId,
                                       UUID excludePublicId) {

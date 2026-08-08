@@ -15,6 +15,8 @@ import com.crm.travelcrm.lead.claim.dto.ClaimLeadRequestDto;
 import com.crm.travelcrm.lead.claim.dto.LeadClaimResultDto;
 import com.crm.travelcrm.lead.claim.dto.ReassignLeadRequestDto;
 import com.crm.travelcrm.lead.entity.Lead;
+import com.crm.travelcrm.lead.enums.LeadOrigin;
+import com.crm.travelcrm.lead.enums.LeadOriginGroups;
 import com.crm.travelcrm.lead.enums.LeadStage;
 import com.crm.travelcrm.lead.exception.LeadClaimLostException;
 import com.crm.travelcrm.lead.repository.LeadRepository;
@@ -125,7 +127,8 @@ class LeadClaimServiceTest {
         afterClaim.setAssignedUser(arjun);
 
         when(leadAccessGuard.requireVisibleOrClaimable(any(), any())).thenReturn(open);
-        when(leadRepository.claimLead(anyLong(), eq(TENANT), eq(arjun), eq(7), any())).thenReturn(1);
+        when(leadRepository.claimLead(anyLong(), eq(TENANT), eq(arjun), eq(7),
+                eq(LeadOriginGroups.INBOUND_ORIGINS), any())).thenReturn(1);
         when(leadRepository.findByPublicIdAndTenantIdAndDeletedAtIsNull(any(), eq(TENANT)))
                 .thenReturn(Optional.of(afterClaim));
 
@@ -133,7 +136,8 @@ class LeadClaimServiceTest {
 
         // Re-reading the current version and submitting THAT would turn the compare-and-swap into a
         // blind overwrite that always wins — the exact bug the version exists to prevent.
-        verify(leadRepository).claimLead(anyLong(), eq(TENANT), eq(arjun), eq(7), any());
+        verify(leadRepository).claimLead(anyLong(), eq(TENANT), eq(arjun), eq(7),
+                eq(LeadOriginGroups.INBOUND_ORIGINS), any());
         assertThat(result.getOwnerName()).isEqualTo("Arjun Sharma");
         assertThat(result.getClaimVersion()).isEqualTo(8);
         assertThat(result.isOpenToClaim()).isTrue();
@@ -148,7 +152,8 @@ class LeadClaimServiceTest {
         afterClaim.setAssignedUser(arjun);
 
         when(leadAccessGuard.requireVisibleOrClaimable(any(), any())).thenReturn(open);
-        when(leadRepository.claimLead(anyLong(), eq(TENANT), any(), anyInt(), any())).thenReturn(1);
+        when(leadRepository.claimLead(anyLong(), eq(TENANT), any(), anyInt(),
+                eq(LeadOriginGroups.INBOUND_ORIGINS), any())).thenReturn(1);
         when(leadRepository.findByPublicIdAndTenantIdAndDeletedAtIsNull(any(), eq(TENANT)))
                 .thenReturn(Optional.of(afterClaim));
 
@@ -177,7 +182,8 @@ class LeadClaimServiceTest {
         afterClaim.setAssignedUser(arjun);
 
         when(leadAccessGuard.requireVisibleOrClaimable(any(), any())).thenReturn(open);
-        when(leadRepository.claimLead(anyLong(), eq(TENANT), any(), anyInt(), any())).thenReturn(1);
+        when(leadRepository.claimLead(anyLong(), eq(TENANT), any(), anyInt(),
+                eq(LeadOriginGroups.INBOUND_ORIGINS), any())).thenReturn(1);
         when(leadRepository.findByPublicIdAndTenantIdAndDeletedAtIsNull(any(), eq(TENANT)))
                 .thenReturn(Optional.of(afterClaim));
 
@@ -234,7 +240,8 @@ class LeadClaimServiceTest {
         nowOwnedByPriya.setAssignedUser(priya);
 
         when(leadAccessGuard.requireVisibleOrClaimable(any(), any())).thenReturn(open);
-        when(leadRepository.claimLead(anyLong(), eq(TENANT), any(), eq(3), any())).thenReturn(0);
+        when(leadRepository.claimLead(anyLong(), eq(TENANT), any(), eq(3),
+                eq(LeadOriginGroups.INBOUND_ORIGINS), any())).thenReturn(0);
         when(leadRepository.findByPublicIdAndTenantIdAndDeletedAtIsNull(any(), eq(TENANT)))
                 .thenReturn(Optional.of(nowOwnedByPriya));
 
@@ -276,7 +283,8 @@ class LeadClaimServiceTest {
         nowOwnedByPriya.setAssignedUser(priya);
 
         when(leadAccessGuard.requireVisibleOrClaimable(any(), any())).thenReturn(open);
-        when(leadRepository.claimLead(anyLong(), eq(TENANT), any(), eq(3), any())).thenReturn(0);
+        when(leadRepository.claimLead(anyLong(), eq(TENANT), any(), eq(3),
+                eq(LeadOriginGroups.INBOUND_ORIGINS), any())).thenReturn(0);
         when(leadRepository.findByPublicIdAndTenantIdAndDeletedAtIsNull(any(), eq(TENANT)))
                 .thenReturn(Optional.of(nowOwnedByPriya));
 
@@ -299,7 +307,8 @@ class LeadClaimServiceTest {
         locked.setLeadStage(LeadStage.CONTACTED);
 
         when(leadAccessGuard.requireVisibleOrClaimable(any(), any())).thenReturn(open);
-        when(leadRepository.claimLead(anyLong(), eq(TENANT), any(), anyInt(), any())).thenReturn(0);
+        when(leadRepository.claimLead(anyLong(), eq(TENANT), any(), anyInt(),
+                eq(LeadOriginGroups.INBOUND_ORIGINS), any())).thenReturn(0);
         when(leadRepository.findByPublicIdAndTenantIdAndDeletedAtIsNull(any(), eq(TENANT)))
                 .thenReturn(Optional.of(locked));
 
@@ -319,7 +328,8 @@ class LeadClaimServiceTest {
         lost.setLeadStage(LeadStage.LOST);
 
         when(leadAccessGuard.requireVisibleOrClaimable(any(), any())).thenReturn(open);
-        when(leadRepository.claimLead(anyLong(), eq(TENANT), any(), anyInt(), any())).thenReturn(0);
+        when(leadRepository.claimLead(anyLong(), eq(TENANT), any(), anyInt(),
+                eq(LeadOriginGroups.INBOUND_ORIGINS), any())).thenReturn(0);
         when(leadRepository.findByPublicIdAndTenantIdAndDeletedAtIsNull(any(), eq(TENANT)))
                 .thenReturn(Optional.of(lost));
 
@@ -342,10 +352,27 @@ class LeadClaimServiceTest {
 
         // Bumping the version here would invalidate every OTHER client's button for no change of
         // state — two of your own tabs would fight each other.
-        verify(leadRepository, never()).claimLead(anyLong(), any(), any(), anyInt(), any());
+        verify(leadRepository, never()).claimLead(anyLong(), any(), any(), anyInt(), any(), any());
         verifyNoInteractions(eventRepository);
         assertThat(result.getOwnerName()).isEqualTo("Arjun Sharma");
         assertThat(result.getClaimVersion()).isEqualTo(5);
+    }
+
+    @Test
+    @DisplayName("a manually created lead cannot enter the tenant-wide claim race")
+    void manualLeadCannotBeClaimed() {
+        Lead manual = openLead(1);
+        manual.setOrigin(LeadOrigin.MANUAL);
+        manual.setAssignedUser(priya);
+        when(leadAccessGuard.requireVisibleOrClaimable(any(), any())).thenReturn(manual);
+
+        assertThatThrownBy(() -> service.claim(manual.getPublicId(), claimAt(1)))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Only inbound leads can be claimed")
+                .extracting(e -> ((BusinessException) e).getStatus())
+                .isEqualTo(HttpStatus.CONFLICT);
+
+        verify(leadRepository, never()).claimLead(anyLong(), any(), any(), anyInt(), any(), any());
     }
 
     @Test
@@ -362,7 +389,7 @@ class LeadClaimServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("cannot be assigned leads");
 
-        verify(leadRepository, never()).claimLead(anyLong(), any(), any(), anyInt(), any());
+        verify(leadRepository, never()).claimLead(anyLong(), any(), any(), anyInt(), any(), any());
     }
 
     // ── Contact: the lock and the SLA ────────────────────────────────────────
@@ -572,6 +599,22 @@ class LeadClaimServiceTest {
         assertThat(captor.getValue().getNote()).isEqualTo("mis-click");
     }
 
+    @Test
+    @DisplayName("a manually created lead has no claim window to reopen")
+    void manualLeadCannotBeReopened() {
+        Lead manual = lockedLead(9);
+        manual.setOrigin(LeadOrigin.MANUAL);
+        when(leadAccessGuard.requireVisible(any(), any())).thenReturn(manual);
+
+        assertThatThrownBy(() -> service.reopenClaimWindow(manual.getPublicId(), "mis-click"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Only inbound leads have a claim window")
+                .extracting(e -> ((BusinessException) e).getStatus())
+                .isEqualTo(HttpStatus.CONFLICT);
+
+        verify(leadRepository, never()).reopenClaimWindow(anyLong(), any(), any(), any());
+    }
+
     // ── Fixtures ─────────────────────────────────────────────────────────────
 
     private static ClaimLeadRequestDto claimAt(int version) {
@@ -594,6 +637,7 @@ class LeadClaimServiceTest {
         lead.setLeadCode("LD-26-0042");
         lead.setCustomerName("Rohit Verma");
         lead.setCreatedAt(LocalDateTime.now().minusMinutes(AGE_MINUTES));
+        lead.setOrigin(LeadOrigin.INTEGRATION);
         lead.setLeadStage(LeadStage.NEW_LEAD);
         lead.setClaimVersion(claimVersion);
         lead.setSlaTargetSeconds(300);
